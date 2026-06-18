@@ -10,6 +10,7 @@ dependencies = [
     "cmake>=3.29",
     "pybind11>=2.13",
     "setuptools>=71",
+    "python-dotenv==1.2.2"
 ]
 
 [build-system]
@@ -24,3 +25,17 @@ include = ["src/dexumi"]
 
 [tool.uv]
 no-build-isolation-package = ["xrobotoolkit-sdk"]
+
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+stubPath = "typings"
+extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
+reportMissingModuleSource = false
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+stubPath = "typings"
+extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
+reportMissingModuleSource = false

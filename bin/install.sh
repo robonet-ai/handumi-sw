@@ -66,7 +66,23 @@ ensure_xrobotoolkit_native_lib() {
 
   if [[ "$ARCH" == "x86_64" ]]; then
     echo "==> Building PXREARobotSDK for x86_64"
-    bash "$XROBO_DIR/setup_ubuntu.sh"
+    XRT_TMP="$XROBO_DIR/tmp"
+    mkdir -p "$XRT_TMP"
+    if [[ ! -d "$XRT_TMP/XRoboToolkit-PC-Service" ]]; then
+      git clone https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git "$XRT_TMP/XRoboToolkit-PC-Service"
+    fi
+    pushd "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK" >/dev/null
+    bash build.sh
+    popd >/dev/null
+    mkdir -p "$XROBO_DIR/lib" "$XROBO_DIR/include"
+    cp "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/PXREARobotSDK.h" \
+      "$XROBO_DIR/include/"
+    cp -r "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/nlohmann" \
+      "$XROBO_DIR/include/nlohmann/"
+    cp "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/build/libPXREARobotSDK.so" \
+      "$XROBO_DIR/lib/"
+    rm -rf "$XRT_TMP"
+    echo "==> PXREARobotSDK x86_64 native library built and installed"
     return 0
   fi
 
@@ -88,6 +104,7 @@ ensure_xrobotoolkit_native_lib() {
     cp "$XRT_TMP/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/build/libPXREARobotSDK.so" \
       "$XROBO_DIR/lib/aarch64/"
     rm -rf "$XRT_TMP"
+    echo "==> PXREARobotSDK aarch64 native library built and installed"
     return 0
   fi
 
@@ -138,3 +155,17 @@ ensure_xrobotoolkit_python_package
 
 echo "==> Installation complete"
 echo "Activate the environment with: source $VENV_DIR/bin/activate"
+echo ""
+
+# ── Runtime note: XRoboToolkit service ───────────────────────────────────────
+SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
+if [[ -f "$SERVICE_SCRIPT" ]]; then
+  echo "NOTE: XRoboToolkit PC service found at $SERVICE_SCRIPT"
+  echo "      Start it before running any xrobotoolkit_sdk scripts:"
+  echo "        bash $SERVICE_SCRIPT"
+else
+  echo "WARNING: XRoboToolkit PC service not found at $SERVICE_SCRIPT"
+  echo "         xrt.init() will crash (core dump) if the service is not running."
+  echo "         Install the XRoboToolkit PC service from:"
+  echo "           https://github.com/XR-Robotics/XRoboToolkit-PC-Service"
+fi
