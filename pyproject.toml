@@ -21,6 +21,8 @@ dependencies = [
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     "matplotlib>=3.11.0",
     "scipy>=1.17.1",
+    # MuJoCo URDF viewer (test/test_ik_axol.py)
+    "mujoco>=3.9.0",
 ]
 
 [build-system]
