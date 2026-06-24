@@ -1,6 +1,6 @@
 # PICO Retargeting
 
-Ultima modificacion: 2026-06-23 22:56:30 -05 -0500
+Ultima modificacion: 2026-06-23 23:07:06 -05 -0500
 
 ## Modos de grabacion
 
@@ -24,7 +24,8 @@ uv run python test/read_pico_cameras_motors.py \
   --task "pico object tracking wrists" \
   --num-episodes 1 \
   --episode-time-s 30 \
-  --fps 30
+  --fps 30 \
+  --start-button A
 ```
 
 Ejemplo para grabar solo mandos:

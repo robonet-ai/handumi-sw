@@ -73,6 +73,19 @@ MOTOR_NAMES = [
 ]
 
 MAX_MOTION_TRACKERS = 2
+START_BUTTON_CHOICES = [
+    "enter",
+    "A",
+    "B",
+    "X",
+    "Y",
+    "left_menu",
+    "right_menu",
+    "left_trigger",
+    "right_trigger",
+    "left_grip",
+    "right_grip",
+]
 
 # ── PICO / XRoboToolkit helpers ────────────────────────────────────────────────
 
@@ -234,6 +247,50 @@ def _safe_call_array(fn, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray
     except Exception:  # noqa: BLE001 - disconnected XR streams become zeros.
         return np.zeros(shape, dtype=dtype)
     return _safe_array(value, shape, dtype=dtype)
+
+
+def _read_start_button_value(xrt, button: str) -> float:
+    """Return normalized pressed value for the configured start button."""
+
+    readers = {
+        "A": xrt.get_A_button,
+        "B": xrt.get_B_button,
+        "X": xrt.get_X_button,
+        "Y": xrt.get_Y_button,
+        "left_menu": xrt.get_left_menu_button,
+        "right_menu": xrt.get_right_menu_button,
+        "left_trigger": xrt.get_left_trigger,
+        "right_trigger": xrt.get_right_trigger,
+        "left_grip": xrt.get_left_grip,
+        "right_grip": xrt.get_right_grip,
+    }
+    try:
+        return float(readers[button]())
+    except Exception:  # noqa: BLE001 - XR stream may still be settling.
+        return 0.0
+
+
+def wait_for_start_button(
+    xrt,
+    *,
+    button: str,
+    threshold: float,
+    stop_event,
+) -> bool:
+    """Wait until the configured controller input starts an episode."""
+
+    log.info(f"  Press PICO '{button}' to start recording …")
+    while not stop_event.is_set():
+        if _read_start_button_value(xrt, button) >= threshold:
+            # Start after release so frame 0 is motion, not the trigger press.
+            while (
+                _read_start_button_value(xrt, button) >= threshold
+                and not stop_event.is_set()
+            ):
+                time.sleep(0.02)
+            return not stop_event.is_set()
+        time.sleep(0.02)
+    return False
 
 
 def _serial_hash(serial: object) -> np.int64:
@@ -652,6 +709,21 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--fps", type=int, default=30, help="Dataset recording FPS.")
     p.add_argument(
+        "--start-button",
+        choices=START_BUTTON_CHOICES,
+        default="enter",
+        help=(
+            "How to start each episode. Use 'enter' for keyboard, or a PICO "
+            "controller input such as A, B, X, Y, left_trigger, or right_trigger."
+        ),
+    )
+    p.add_argument(
+        "--start-threshold",
+        type=float,
+        default=0.75,
+        help="Analog threshold for trigger/grip start buttons.",
+    )
+    p.add_argument(
         "--no-video",
         action="store_true",
         help="Store camera frames as PNG images instead of video.",
@@ -883,7 +955,20 @@ def main() -> None:
         while recorded < args.num_episodes and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             log.info(f"\n── Episode {ep_num}/{args.num_episodes} ─────────────────────────────────")
-            input(f"  Press ENTER to start recording episode {ep_num} …")
+            if args.start_button == "enter":
+                input(f"  Press ENTER to start recording episode {ep_num} …")
+            else:
+                if xrt is None:
+                    raise RuntimeError(
+                        "--start-button requires PICO/XRoboToolkit; use 'enter' with --skip-pico."
+                    )
+                if not wait_for_start_button(
+                    xrt,
+                    button=args.start_button,
+                    threshold=args.start_threshold,
+                    stop_event=stop_event,
+                ):
+                    break
 
             log.info(f"  Recording for {args.episode_time_s}s …  (Ctrl+C to end early)")
             stop_event.clear()  # allow Ctrl+C to end only this episode
