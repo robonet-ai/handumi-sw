@@ -1,0 +1,443 @@
+<?xml version="1.0"?>
+<robot name="dual_piper_description">
+
+    <material name="deep_tech_blue">
+        <color rgba="0.792 0.820 0.933 1"/>
+    </material>
+    <material name="light_grey">
+        <color rgba="0.898 0.918 0.929 1"/>
+    </material>
+    <material name="dark_base">
+        <color rgba="0.1 0.1 0.1 1"/>
+    </material>
+
+    <link name="world"/>
+
+    <joint name="world_to_izq_base" type="fixed">
+        <parent link="world"/>
+        <child link="base_izquierdo"/>
+        <origin xyz="0 0.3 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="base_izquierdo">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/base_link.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint1" type="revolute">
+        <parent link="base_izquierdo"/>
+        <child link="izq_link1"/>
+        <origin xyz="0 0 0.123" rpy="0 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.618" upper="2.168" effort="20000" velocity="3.14"/>
+        <dynamics damping="300"/>
+    </joint>
+
+    <link name="izq_link1">
+        <inertial>
+            <origin xyz="0.000121505 0.000104632 -0.00438597" rpy="0 0 0"/> 
+            <mass value="0.215052"/>
+            <inertia ixx="0.000116369" ixy="0" ixz="0" iyy="0.00010964" iyz="0" izz="9.9555e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link1.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint2" type="revolute">
+        <parent link="izq_link1"/>
+        <child link="izq_link2"/>
+        <origin xyz="0 0 0" rpy="1.5708 -0.1009 3.14159"/> 
+        <axis xyz="0 0 1"/>
+        <limit lower="0" upper="3.14" effort="20000" velocity="3.14"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="izq_link2">
+        <inertial>
+            <origin xyz="0.198666 -0.0109269 0.00142122" rpy="0 0 0"/>
+            <mass value="0.463914"/>
+            <inertia ixx="0.00104423" ixy="0" ixz="0" iyy="0.0010069" iyz="0" izz="0.000207486"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link2.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint3" type="revolute">
+        <parent link="izq_link2"/>
+        <child link="izq_link3"/>
+        <origin xyz="0.28503 0 0" rpy="0 0 -1.7596"/> 
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.967" upper="0" effort="1000" velocity="3.14"/>
+        <dynamics damping="20"/>
+    </joint>
+
+    <link name="izq_link3">
+        <inertial>
+            <origin xyz="-0.0202738 -0.133915 -0.000458683" rpy="0 0 0"/>
+            <mass value="0.219942"/>
+            <inertia ixx="0.000201238" ixy="0" ixz="0" iyy="0.000190068" iyz="0" izz="7.08709e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link3.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint4" type="revolute">
+        <parent link="izq_link3"/>
+        <child link="izq_link4"/>
+        <origin xyz="-0.021984 -0.25075 0" rpy="1.5708 0 0"/> 
+        <axis xyz="0 0 1"/>
+        <limit lower="-1.745" upper="1.745" effort="70" velocity="3.14"/>
+        <dynamics damping="5"/>
+    </joint>
+
+    <link name="izq_link4">
+        <inertial>
+            <origin xyz="-9.66636e-05 0.000876064 -0.00496881" rpy="0 0 0"/>
+            <mass value="0.131814"/>
+            <inertia ixx="5.1333e-05" ixy="0" ixz="0" iyy="4.14831e-05" iyz="0" izz="3.96892e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link4.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint5" type="revolute">
+        <parent link="izq_link4"/>
+        <child link="izq_link5"/>
+        <origin xyz="0 0 0" rpy="-1.5708 0 0"/> 
+        <axis xyz="0 0 1"/>
+        <limit lower="-1.22" upper="1.22" effort="50" velocity="3.14"/>
+        <dynamics damping="2"/>
+    </joint>
+
+    <link name="izq_link5">
+        <inertial>
+            <origin xyz="-4.10554e-05 -0.0566487 -0.00372058" rpy="0 0 0"/>
+            <mass value="0.134101"/>
+            <inertia ixx="5.27778e-05" ixy="0" ixz="0" iyy="4.60364e-05" iyz="0" izz="4.10994e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link5.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint6" type="revolute">
+        <parent link="izq_link5"/>
+        <child link="izq_link6"/>
+        <origin xyz="8.8259e-05 -0.091 0" rpy="1.5708 0 0"/> 
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.0944" upper="2.0944" effort="6" velocity="3.14"/>
+        <dynamics damping="0.1"/>
+    </joint>
+
+    <link name="izq_link6">
+        <inertial>
+            <origin xyz="-0.000179422 7.72241e-05 0.0305765" rpy="0 0 0"/>
+            <mass value="0.152309"/>
+            <inertia ixx="0.000119759" ixy="0" ixz="0" iyy="0.000110059" iyz="0" izz="4.99704e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link6.STL"/>
+            </geometry>
+            <material name="light_grey"/>
+        </visual>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/gripper_base.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint7" type="prismatic">
+        <parent link="izq_link6"/>
+        <child link="izq_link7"/>
+        <origin xyz="0 0 0.1358" rpy="1.5708 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="0" upper="0.035" effort="100" velocity="0.5"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="izq_link7">
+        <inertial>
+            <origin xyz="0.000651232 -0.049193 0.00972259" rpy="0 0 0"/>
+            <mass value="0.0303535"/>
+            <inertia ixx="1.60353e-05" ixy="0" ixz="0" iyy="1.14217e-05" iyz="0" izz="5.97329e-06"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link7.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="izq_joint8" type="prismatic">
+        <parent link="izq_link6"/>
+        <child link="izq_link8"/>
+        <origin xyz="0 0 0.1358" rpy="1.5708 0 3.14159"/> 
+        <axis xyz="0 0 -1"/>
+        <limit lower="-0.035" upper="0" effort="100" velocity="0.5"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="izq_link8">
+        <inertial>
+            <origin xyz="0.000651232 -0.049193 0.00972259" rpy="0 0 0"/>
+            <mass value="0.0303535"/>
+            <inertia ixx="1.60353e-05" ixy="0" ixz="0" iyy="1.14217e-05" iyz="0" izz="5.97329e-06"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link8.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+
+    <joint name="world_to_der_base" type="fixed">
+        <parent link="world"/>
+        <child link="base_derecho"/>
+        <origin xyz="0 -0.3 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="base_derecho">
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/base_link.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint1" type="revolute">
+        <parent link="base_derecho"/>
+        <child link="der_link1"/>
+        <origin xyz="0 0 0.123" rpy="0 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.618" upper="2.168" effort="20000" velocity="3.14"/>
+        <dynamics damping="300"/>
+    </joint>
+
+    <link name="der_link1">
+        <inertial>
+            <origin xyz="0.000121505 0.000104632 -0.00438597" rpy="0 0 0"/>
+            <mass value="0.215052"/>
+            <inertia ixx="0.000116369" ixy="0" ixz="0" iyy="0.00010964" iyz="0" izz="9.9555e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link1.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint2" type="revolute">
+        <parent link="der_link1"/>
+        <child link="der_link2"/>
+        <origin xyz="0 0 0" rpy="1.5708 -0.1009 3.14159"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="0" upper="3.14" effort="20000" velocity="3.14"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="der_link2">
+        <inertial>
+            <origin xyz="0.198666 -0.0109269 0.00142122" rpy="0 0 0"/>
+            <mass value="0.463914"/>
+            <inertia ixx="0.00104423" ixy="0" ixz="0" iyy="0.0010069" iyz="0" izz="0.000207486"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link2.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint3" type="revolute">
+        <parent link="der_link2"/>
+        <child link="der_link3"/>
+        <origin xyz="0.28503 0 0" rpy="0 0 -1.7596"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.967" upper="0" effort="1000" velocity="3.14"/>
+        <dynamics damping="20"/>
+    </joint>
+
+    <link name="der_link3">
+        <inertial>
+            <origin xyz="-0.0202738 -0.133915 -0.000458683" rpy="0 0 0"/>
+            <mass value="0.219942"/>
+            <inertia ixx="0.000201238" ixy="0" ixz="0" iyy="0.000190068" iyz="0" izz="7.08709e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link3.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint4" type="revolute">
+        <parent link="der_link3"/>
+        <child link="der_link4"/>
+        <origin xyz="-0.021984 -0.25075 0" rpy="1.5708 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-1.745" upper="1.745" effort="70" velocity="3.14"/>
+        <dynamics damping="5"/>
+    </joint>
+
+    <link name="der_link4">
+        <inertial>
+            <origin xyz="-9.66636e-05 0.000876064 -0.00496881" rpy="0 0 0"/>
+            <mass value="0.131814"/>
+            <inertia ixx="5.1333e-05" ixy="0" ixz="0" iyy="4.14831e-05" iyz="0" izz="3.96892e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link4.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint5" type="revolute">
+        <parent link="der_link4"/>
+        <child link="der_link5"/>
+        <origin xyz="0 0 0" rpy="-1.5708 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-1.22" upper="1.22" effort="50" velocity="3.14"/>
+        <dynamics damping="2"/>
+    </joint>
+
+    <link name="der_link5">
+        <inertial>
+            <origin xyz="-4.10554e-05 -0.0566487 -0.00372058" rpy="0 0 0"/>
+            <mass value="0.134101"/>
+            <inertia ixx="5.27778e-05" ixy="0" ixz="0" iyy="4.60364e-05" iyz="0" izz="4.10994e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link5.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint6" type="revolute">
+        <parent link="der_link5"/>
+        <child link="der_link6"/>
+        <origin xyz="8.8259e-05 -0.091 0" rpy="1.5708 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-2.0944" upper="2.0944" effort="6" velocity="3.14"/>
+        <dynamics damping="0.1"/>
+    </joint>
+
+    <link name="der_link6">
+        <inertial>
+            <origin xyz="-0.000179422 7.72241e-05 0.0305765" rpy="0 0 0"/>
+            <mass value="0.152309"/>
+            <inertia ixx="0.000119759" ixy="0" ixz="0" iyy="0.000110059" iyz="0" izz="4.99704e-05"/>
+        </inertial>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link6.STL"/>
+            </geometry>
+            <material name="light_grey"/>
+        </visual>
+        <visual>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/gripper_base.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint7" type="prismatic">
+        <parent link="der_link6"/>
+        <child link="der_link7"/>
+        <origin xyz="0 0 0.1358" rpy="1.5708 0 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="0" upper="0.035" effort="100" velocity="0.5"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="der_link7">
+        <inertial>
+            <origin xyz="0.000651232 -0.049193 0.00972259" rpy="0 0 0"/>
+            <mass value="0.0303535"/>
+            <inertia ixx="1.60353e-05" ixy="0" ixz="0" iyy="1.14217e-05" iyz="0" izz="5.97329e-06"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link7.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+    <joint name="der_joint8" type="prismatic">
+        <parent link="der_link6"/>
+        <child link="der_link8"/>
+        <origin xyz="0 0 0.1358" rpy="1.5708 0 3.14159"/>
+        <axis xyz="0 0 -1"/>
+        <limit lower="-0.035" upper="0" effort="100" velocity="0.5"/>
+        <dynamics damping="100"/>
+    </joint>
+
+    <link name="der_link8">
+        <inertial>
+            <origin xyz="0.000651232 -0.049193 0.00972259" rpy="0 0 0"/>
+            <mass value="0.0303535"/>
+            <inertia ixx="1.60353e-05" ixy="0" ixz="0" iyy="1.14217e-05" iyz="0" izz="5.97329e-06"/>
+        </inertial>
+        <visual>
+            <geometry>
+                <mesh filename="package://tu_paquete/meshes/link8.STL"/>
+            </geometry>
+            <material name="deep_tech_blue"/>
+        </visual>
+    </link>
+
+</robot>
