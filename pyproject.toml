@@ -19,6 +19,7 @@ dependencies = [
     "yourdfpy",
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     "matplotlib>=3.11.0",
+    "pyvista>=0.43.0",
     "scipy>=1.17.1",
     # MuJoCo URDF viewer (test/test_ik_axol.py)
     "mujoco>=3.9.0",
@@ -56,4 +57,3 @@ venv = ".venv"
 stubPath = "typings"
 extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
 reportMissingModuleSource = false
-

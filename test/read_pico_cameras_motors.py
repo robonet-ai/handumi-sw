@@ -35,6 +35,7 @@ Usage
 """
 
 import argparse
+import hashlib
 import logging
 import signal
 import subprocess
@@ -69,6 +70,8 @@ MOTOR_NAMES = [
     "wrist_roll.pos",
     "gripper.pos",
 ]
+
+MAX_MOTION_TRACKERS = 2
 
 # ── ADB / PICO helpers ─────────────────────────────────────────────────────────
 
@@ -160,20 +163,150 @@ def init_xrt():
     return xrt
 
 
-def wait_for_body_data(xrt, timeout_s: float = 15.0) -> bool:
-    """Block until PICO body tracking data is available or timeout expires."""
-    log.info("Waiting for PICO body-tracking data …")
+def wait_for_pico_data(xrt, *, mode: str, timeout_s: float = 15.0) -> bool:
+    """Block until the requested PICO data stream is available or timeout expires."""
+    if mode == "whole-body":
+        log.info("Waiting for PICO body-tracking data …")
+    elif mode == "object":
+        log.info("Waiting for PICO motion tracker / object-tracking data …")
+    else:
+        log.info("Waiting for PICO controller data …")
+
     deadline = time.time() + timeout_s
-    while not xrt.is_body_data_available():
+    while True:
+        if mode == "whole-body" and xrt.is_body_data_available():
+            log.info("PICO body-tracking data is available.")
+            return True
+        if mode == "object":
+            try:
+                if xrt.num_motion_data_available() > 0:
+                    log.info("PICO motion tracker data is available.")
+                    return True
+            except AttributeError:
+                log.warning("xrobotoolkit_sdk does not expose motion tracker APIs.")
+                return False
+        if mode == "mandos":
+            try:
+                np.asarray(xrt.get_left_controller_pose(), dtype=np.float32)
+                np.asarray(xrt.get_right_controller_pose(), dtype=np.float32)
+                log.info("PICO controller data is available.")
+                return True
+            except Exception:  # noqa: BLE001 - SDK may raise while app connects.
+                pass
+
         if time.time() > deadline:
             return False
-        log.info("  … still waiting for body data")
+        log.info("  … still waiting for PICO data")
         time.sleep(1.0)
-    log.info("PICO body-tracking data is available.")
-    return True
 
 
-def read_pico_frame(xrt) -> dict:
+def _safe_array(value, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
+    try:
+        arr = np.asarray(value, dtype=dtype)
+    except Exception:  # noqa: BLE001 - SDK failures should not break fixed schema.
+        return np.zeros(shape, dtype=dtype)
+    if arr.shape != shape:
+        out = np.zeros(shape, dtype=dtype)
+        slices = tuple(slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=False))
+        try:
+            out[slices] = arr[slices]
+        except Exception:  # noqa: BLE001
+            return np.zeros(shape, dtype=dtype)
+        return out
+    return arr
+
+
+def _safe_call_array(fn, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
+    try:
+        value = fn()
+    except Exception:  # noqa: BLE001 - disconnected XR streams become zeros.
+        return np.zeros(shape, dtype=dtype)
+    return _safe_array(value, shape, dtype=dtype)
+
+
+def _serial_hash(serial: object) -> np.int64:
+    digest = hashlib.blake2b(str(serial).encode("utf-8"), digest_size=8).digest()
+    return np.int64(int.from_bytes(digest, "little", signed=False) & ((1 << 63) - 1))
+
+
+def read_motion_trackers(
+    xrt,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    poses = np.zeros((MAX_MOTION_TRACKERS, 7), dtype=np.float32)
+    velocities = np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32)
+    accelerations = np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32)
+    serial_hashes = np.zeros((MAX_MOTION_TRACKERS,), dtype=np.int64)
+    count = np.zeros((1,), dtype=np.int64)
+
+    try:
+        n_available = int(xrt.num_motion_data_available())
+    except AttributeError:
+        log.warning("xrobotoolkit_sdk does not expose motion tracker APIs.")
+        return poses, velocities, accelerations, count, serial_hashes
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Could not read motion tracker count: {exc}")
+        return poses, velocities, accelerations, count, serial_hashes
+
+    n = min(n_available, MAX_MOTION_TRACKERS)
+    count[0] = n_available
+    if n == 0:
+        return poses, velocities, accelerations, count, serial_hashes
+
+    try:
+        raw_poses = np.atleast_2d(
+            np.asarray(xrt.get_motion_tracker_pose(), dtype=np.float32)
+        )
+        raw_velocities = np.atleast_2d(
+            np.asarray(xrt.get_motion_tracker_velocity(), dtype=np.float32)
+        )
+        raw_accelerations = np.atleast_2d(
+            np.asarray(xrt.get_motion_tracker_acceleration(), dtype=np.float32)
+        )
+        raw_serials = list(xrt.get_motion_tracker_serial_numbers())
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"Could not read motion tracker data: {exc}")
+        return poses, velocities, accelerations, count, serial_hashes
+
+    poses[:n] = raw_poses[:n, :7]
+    velocities[:n] = raw_velocities[:n, :6]
+    accelerations[:n] = raw_accelerations[:n, :6]
+    for i, serial in enumerate(raw_serials[:n]):
+        serial_hashes[i] = _serial_hash(serial)
+    if raw_serials:
+        log.debug(f"Motion trackers: {raw_serials[:n]}")
+    return poses, velocities, accelerations, count, serial_hashes
+
+
+def empty_pico_frame() -> dict:
+    """Return a complete zero-filled PICO frame with the fixed dataset schema."""
+
+    return {
+        "observation.pico.timestamp_ns": np.zeros((1,), dtype=np.int64),
+        "observation.pico.headset_pose": np.zeros((7,), dtype=np.float32),
+        "observation.pico.left_controller_pose": np.zeros((7,), dtype=np.float32),
+        "observation.pico.right_controller_pose": np.zeros((7,), dtype=np.float32),
+        "observation.pico.body_joints_pose": np.zeros((24, 7), dtype=np.float32),
+        "observation.pico.body_joints_velocity": np.zeros((24, 6), dtype=np.float32),
+        "observation.pico.body_joints_accel": np.zeros((24, 6), dtype=np.float32),
+        "observation.pico.left_hand_pose": np.zeros((27, 7), dtype=np.float32),
+        "observation.pico.right_hand_pose": np.zeros((27, 7), dtype=np.float32),
+        "observation.pico.motion_tracker_pose": np.zeros(
+            (MAX_MOTION_TRACKERS, 7), dtype=np.float32
+        ),
+        "observation.pico.motion_tracker_velocity": np.zeros(
+            (MAX_MOTION_TRACKERS, 6), dtype=np.float32
+        ),
+        "observation.pico.motion_tracker_accel": np.zeros(
+            (MAX_MOTION_TRACKERS, 6), dtype=np.float32
+        ),
+        "observation.pico.motion_tracker_count": np.zeros((1,), dtype=np.int64),
+        "observation.pico.motion_tracker_serial_hash": np.zeros(
+            (MAX_MOTION_TRACKERS,), dtype=np.int64
+        ),
+    }
+
+
+def read_pico_frame(xrt, *, mode: str) -> dict:
     """
     Read one snapshot of all PICO sensors.
 
@@ -184,16 +317,19 @@ def read_pico_frame(xrt) -> dict:
         "observation.pico.timestamp_ns": np.array(
             [xrt.get_time_stamp_ns()], dtype=np.int64
         ),
-        "observation.pico.left_controller_pose": np.array(
-            xrt.get_left_controller_pose(), dtype=np.float32
+        "observation.pico.headset_pose": _safe_call_array(
+            xrt.get_headset_pose, (7,), dtype=np.float32
         ),
-        "observation.pico.right_controller_pose": np.array(
-            xrt.get_right_controller_pose(), dtype=np.float32
+        "observation.pico.left_controller_pose": _safe_call_array(
+            xrt.get_left_controller_pose, (7,), dtype=np.float32
+        ),
+        "observation.pico.right_controller_pose": _safe_call_array(
+            xrt.get_right_controller_pose, (7,), dtype=np.float32
         ),
     }
 
     # Body tracking
-    if xrt.is_body_data_available():
+    if mode == "whole-body" and xrt.is_body_data_available():
         frame["observation.pico.body_joints_pose"] = np.array(
             xrt.get_body_joints_pose(), dtype=np.float32
         )
@@ -221,6 +357,21 @@ def read_pico_frame(xrt) -> dict:
     )
     frame["observation.pico.left_hand_pose"] = lh
     frame["observation.pico.right_hand_pose"] = rh
+
+    tracker_pose, tracker_vel, tracker_accel, tracker_count, tracker_serial_hashes = (
+        read_motion_trackers(xrt) if mode == "object" else (
+            np.zeros((MAX_MOTION_TRACKERS, 7), dtype=np.float32),
+            np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
+            np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
+            np.zeros((1,), dtype=np.int64),
+            np.zeros((MAX_MOTION_TRACKERS,), dtype=np.int64),
+        )
+    )
+    frame["observation.pico.motion_tracker_pose"] = tracker_pose
+    frame["observation.pico.motion_tracker_velocity"] = tracker_vel
+    frame["observation.pico.motion_tracker_accel"] = tracker_accel
+    frame["observation.pico.motion_tracker_count"] = tracker_count
+    frame["observation.pico.motion_tracker_serial_hash"] = tracker_serial_hashes
 
     return frame
 
@@ -281,6 +432,11 @@ def build_features(
         "shape": (7,),
         "names": ["x", "y", "z", "qx", "qy", "qz", "qw"],
     }
+    features["observation.pico.headset_pose"] = {
+        "dtype": "float32",
+        "shape": (7,),
+        "names": ["x", "y", "z", "qx", "qy", "qz", "qw"],
+    }
     features["observation.pico.right_controller_pose"] = {
         "dtype": "float32",
         "shape": (7,),
@@ -301,6 +457,31 @@ def build_features(
         "shape": (1,),
         "names": None,
     }
+    features["observation.pico.motion_tracker_pose"] = {
+        "dtype": "float32",
+        "shape": (MAX_MOTION_TRACKERS, 7),
+        "names": None,
+    }
+    features["observation.pico.motion_tracker_velocity"] = {
+        "dtype": "float32",
+        "shape": (MAX_MOTION_TRACKERS, 6),
+        "names": None,
+    }
+    features["observation.pico.motion_tracker_accel"] = {
+        "dtype": "float32",
+        "shape": (MAX_MOTION_TRACKERS, 6),
+        "names": None,
+    }
+    features["observation.pico.motion_tracker_count"] = {
+        "dtype": "int64",
+        "shape": (1,),
+        "names": None,
+    }
+    features["observation.pico.motion_tracker_serial_hash"] = {
+        "dtype": "int64",
+        "shape": (MAX_MOTION_TRACKERS,),
+        "names": None,
+    }
 
     return features
 
@@ -319,6 +500,11 @@ def record_episode(
     fps: int,
     task: str,
     stop_event,
+    only_pico: bool,
+    pico_mode: str,
+    include_pico: bool,
+    cam_width: int,
+    cam_height: int,
 ) -> int:
     """
     Record one episode.  Returns the number of frames saved.
@@ -339,18 +525,32 @@ def record_episode(
         # ── Camera frames ──────────────────────────────────────────────────
         cam_frames: dict = {}
         for cam, name in zip(cameras, cam_names):
-            frame = cam.async_read()
+            frame = (
+                np.zeros((cam_height, cam_width, 3), dtype=np.uint8)
+                if only_pico
+                else cam.async_read()
+            )
             cam_frames[f"observation.images.{name}"] = frame  # HxWx3 uint8
 
         # ── Motor positions ────────────────────────────────────────────────
-        motor_action: dict = leader.get_action()
-        # get_action() → {"shoulder_pan.pos": float, …}
-        state_vec = np.array(
-            [motor_action[k] for k in MOTOR_NAMES], dtype=np.float32
-        )
+        if only_pico:
+            state_vec = np.zeros((len(MOTOR_NAMES),), dtype=np.float32)
+        else:
+            motor_action: dict = leader.get_action()
+            # get_action() → {"shoulder_pan.pos": float, …}
+            state_vec = np.array(
+                [motor_action[k] for k in MOTOR_NAMES], dtype=np.float32
+            )
 
         # ── PICO data ──────────────────────────────────────────────────────
-        pico_frame = read_pico_frame(xrt)
+        if not include_pico:
+            pico_frame = {}
+        else:
+            pico_frame = (
+                read_pico_frame(xrt, mode=pico_mode)
+                if xrt is not None
+                else empty_pico_frame()
+            )
 
         # ── Assemble and save frame ────────────────────────────────────────
         data_frame = {
@@ -461,6 +661,36 @@ def parse_args() -> argparse.Namespace:
         help="Disable PICO / XRoboToolkit (useful for dry-run without headset).",
     )
     p.add_argument(
+        "--only-pico",
+        action="store_true",
+        help=(
+            "Record only PICO/XR data. Camera images, observation.state, and action "
+            "stay in the schema but are filled with zeros."
+        ),
+    )
+    pico_mode = p.add_mutually_exclusive_group()
+    pico_mode.add_argument(
+        "--pico-mandos",
+        action="store_true",
+        help=(
+            "Record PICO headset/controllers/hands only; body joints and motion "
+            "trackers are zero-filled. Use this for controller-based arm inference."
+        ),
+    )
+    pico_mode.add_argument(
+        "--pico-object",
+        action="store_true",
+        help=(
+            "Record PICO motion tracker/object-tracking poses. Body joints are "
+            "zero-filled; headset/controller/hand poses are still recorded."
+        ),
+    )
+    pico_mode.add_argument(
+        "--pico-whole-body",
+        action="store_true",
+        help="Record the original PICO 24-joint body-tracking stream.",
+    )
+    p.add_argument(
         "--skip-adb-check",
         action="store_true",
         help="Skip the ADB device presence check (useful if ADB is unavailable).",
@@ -471,6 +701,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.skip_pico and args.only_pico:
+        raise SystemExit("--only-pico requires PICO; do not combine it with --skip-pico.")
+
+    if args.pico_object:
+        pico_mode = "object"
+    elif args.pico_mandos:
+        pico_mode = "mandos"
+    else:
+        pico_mode = "whole-body"
+
+    if args.only_pico:
+        log.info(
+            f"--only-pico set: cameras and SO100 leader will be zero-filled; "
+            f"PICO mode={pico_mode!r}."
+        )
 
     # ── 1. ADB / PICO initialisation ──────────────────────────────────────────
     xrt = None
@@ -491,46 +736,54 @@ def main() -> None:
         launch_xrt_service()
         xrt = init_xrt()
 
-        if not wait_for_body_data(xrt, timeout_s=15.0):
+        if not wait_for_pico_data(xrt, mode=pico_mode, timeout_s=15.0):
             log.warning(
-                "Body tracking data not available after 15 s. "
-                "PICO frames will be filled with zeros."
+                f"PICO {pico_mode!r} data not available after 15 s. "
+                "Missing streams will be filled with zeros."
             )
     else:
         log.info("--skip-pico set: PICO / XRoboToolkit disabled.")
 
     # ── 2. Camera initialisation ───────────────────────────────────────────────
     log.info("─── Camera setup ───────────────────────────────────────")
-    from lerobot.cameras.opencv import OpenCVCamera
-    from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
-
     cam_names = [f"cam_{i}" for i in range(len(args.cam_ids))]
-    cameras: list[OpenCVCamera] = []
-    for cam_id, name in zip(args.cam_ids, cam_names):
-        cfg = OpenCVCameraConfig(
-            index_or_path=cam_id,
-            fps=args.cam_fps,
-            width=args.cam_width,
-            height=args.cam_height,
-        )
-        cam = OpenCVCamera(cfg)
-        cam.connect()
-        cameras.append(cam)
-        log.info(f"Camera '{name}' (index {cam_id}) connected.")
+    cameras: list = []
+    if args.only_pico:
+        cameras = [None for _ in cam_names]
+        log.info(f"Only-PICO mode: {len(cam_names)} camera stream(s) will be zero-filled.")
+    else:
+        from lerobot.cameras.opencv import OpenCVCamera
+        from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
+
+        for cam_id, name in zip(args.cam_ids, cam_names):
+            cfg = OpenCVCameraConfig(
+                index_or_path=cam_id,
+                fps=args.cam_fps,
+                width=args.cam_width,
+                height=args.cam_height,
+            )
+            cam = OpenCVCamera(cfg)
+            cam.connect()
+            cameras.append(cam)
+            log.info(f"Camera '{name}' (index {cam_id}) connected.")
 
     # ── 3. SO100 leader initialisation ────────────────────────────────────────
     log.info("─── SO100 leader setup ─────────────────────────────────")
-    from lerobot.teleoperators.so_leader import SO100Leader
-    from lerobot.teleoperators.so_leader.config_so_leader import SOLeaderTeleopConfig
+    leader = None
+    if args.only_pico:
+        log.info("Only-PICO mode: observation.state and action will be zero-filled.")
+    else:
+        from lerobot.teleoperators.so_leader import SO100Leader
+        from lerobot.teleoperators.so_leader.config_so_leader import SOLeaderTeleopConfig
 
-    leader_cfg = SOLeaderTeleopConfig(
-        port=args.motor_port,
-        id=args.motor_id,
-        use_degrees=True,
-    )
-    leader = SO100Leader(leader_cfg)
-    leader.connect()
-    log.info(f"SO100 leader connected on {args.motor_port}.")
+        leader_cfg = SOLeaderTeleopConfig(
+            port=args.motor_port,
+            id=args.motor_id,
+            use_degrees=True,
+        )
+        leader = SO100Leader(leader_cfg)
+        leader.connect()
+        log.info(f"SO100 leader connected on {args.motor_port}.")
 
     # ── 4. Dataset creation ────────────────────────────────────────────────────
     log.info("─── Dataset setup ──────────────────────────────────────")
@@ -548,7 +801,7 @@ def main() -> None:
     if args.skip_pico:
         features = {k: v for k, v in features.items() if not k.startswith("observation.pico")}
 
-    n_cams = len(cameras)
+    n_cams = len(cam_names)
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
         fps=args.fps,
@@ -557,7 +810,7 @@ def main() -> None:
         features=features,
         use_videos=use_videos,
         image_writer_processes=0,
-        image_writer_threads=4 * n_cams,
+        image_writer_threads=max(1, 4 * n_cams),
         vcodec=args.vcodec,
     )
     log.info(f"Dataset created at: {dataset.root}")
@@ -599,6 +852,11 @@ def main() -> None:
                 fps=args.fps,
                 task=args.task,
                 stop_event=stop_event,
+                only_pico=args.only_pico,
+                pico_mode=pico_mode,
+                include_pico=not args.skip_pico,
+                cam_width=args.cam_width,
+                cam_height=args.cam_height,
             )
 
             if n_frames == 0:
@@ -629,7 +887,7 @@ def main() -> None:
             except Exception:
                 pass
 
-        if leader.is_connected:
+        if leader is not None and leader.is_connected:
             leader.disconnect()
 
         if xrt is not None:
