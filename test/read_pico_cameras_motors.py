@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Record data from SO100 leader arm, cameras, and PICO headset (via ADB / XRoboToolkit).
+Record data from SO100 leader arm, cameras, and PICO headset (via XRoboToolkit).
 
 What gets recorded per frame
 ─────────────────────────────
@@ -38,6 +38,7 @@ import argparse
 import hashlib
 import logging
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -73,7 +74,18 @@ MOTOR_NAMES = [
 
 MAX_MOTION_TRACKERS = 2
 
-# ── ADB / PICO helpers ─────────────────────────────────────────────────────────
+# ── PICO / XRoboToolkit helpers ────────────────────────────────────────────────
+
+
+def guess_lan_ip() -> str | None:
+    """Best-effort local LAN IP hint for XRoboToolkit WiFi mode."""
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        return None
 
 
 def verify_adb_connection(timeout_s: float = 15.0) -> bool:
@@ -690,10 +702,27 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Record the original PICO 24-joint body-tracking stream.",
     )
+    pico_transport = p.add_mutually_exclusive_group()
+    pico_transport.add_argument(
+        "--pico-adb",
+        action="store_true",
+        help=(
+            "Connect PICO through USB/ADB reverse tunnel. This is the default; "
+            "set PC-service IP to 127.0.0.1 in the PICO app."
+        ),
+    )
+    pico_transport.add_argument(
+        "--pico-wifi",
+        action="store_true",
+        help=(
+            "Connect PICO over WiFi/LAN. Skips ADB checks and adb reverse; set "
+            "the PC-service IP in the PICO app to this computer's LAN IP."
+        ),
+    )
     p.add_argument(
         "--skip-adb-check",
         action="store_true",
-        help="Skip the ADB device presence check (useful if ADB is unavailable).",
+        help="ADB mode only: skip the ADB device presence check.",
     )
 
     return p.parse_args()
@@ -710,28 +739,44 @@ def main() -> None:
         pico_mode = "mandos"
     else:
         pico_mode = "whole-body"
+    pico_transport = "wifi" if args.pico_wifi else "adb"
 
     if args.only_pico:
         log.info(
             f"--only-pico set: cameras and SO100 leader will be zero-filled; "
-            f"PICO mode={pico_mode!r}."
+            f"PICO mode={pico_mode!r}, transport={pico_transport!r}."
         )
 
-    # ── 1. ADB / PICO initialisation ──────────────────────────────────────────
+    # ── 1. PICO / XRoboToolkit initialisation ─────────────────────────────────
     xrt = None
     if not args.skip_pico:
-        log.info("─── PICO / ADB setup ───────────────────────────────────")
-        if not args.skip_adb_check:
+        log.info("─── PICO / XRoboToolkit setup ─────────────────────────")
+        if pico_transport == "adb" and not args.skip_adb_check:
             log.info("Checking ADB connection …")
             if not verify_adb_connection(timeout_s=15.0):
                 log.error(
                     "No ADB device found after 15 s.\n"
                     "  • Make sure the PICO headset is connected via USB cable.\n"
                     "  • Enable USB debugging on the headset.\n"
+                    "  • Or pass --pico-wifi to connect through LAN/WiFi.\n"
                     "  • Or pass --skip-pico to record without the headset."
                 )
                 sys.exit(1)
             setup_adb_reverse()
+        elif pico_transport == "wifi":
+            lan_ip = guess_lan_ip()
+            if lan_ip:
+                log.info(
+                    "PICO WiFi mode: skipping ADB. In the PICO XRoboToolkit app, "
+                    f"set PC-service IP to {lan_ip} and port {PICO_SERVICE_PORT}."
+                )
+            else:
+                log.info(
+                    "PICO WiFi mode: skipping ADB. Set the PICO XRoboToolkit "
+                    f"PC-service IP to this computer's LAN IP and port {PICO_SERVICE_PORT}."
+                )
+        else:
+            log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
 
         launch_xrt_service()
         xrt = init_xrt()

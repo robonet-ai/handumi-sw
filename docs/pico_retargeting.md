@@ -1,6 +1,6 @@
 # PICO Retargeting
 
-Ultima modificacion: 2026-06-23 22:30:37 -05 -0500
+Ultima modificacion: 2026-06-23 22:56:30 -05 -0500
 
 ## Modos de grabacion
 
@@ -18,6 +18,7 @@ Ejemplo para grabar solo object tracking:
 uv run python test/read_pico_cameras_motors.py \
   --only-pico \
   --pico-object \
+  --pico-wifi \
   --repo-id local/pico_object_test \
   --output-dir outputs/datasets/pico_object_test \
   --task "pico object tracking wrists" \
@@ -32,6 +33,7 @@ Ejemplo para grabar solo mandos:
 uv run python test/read_pico_cameras_motors.py \
   --only-pico \
   --pico-mandos \
+  --pico-wifi \
   --repo-id local/pico_mandos_test \
   --output-dir outputs/datasets/pico_mandos_test \
   --task "pico controller arm inference" \
@@ -67,8 +69,10 @@ Para object tracking no uses la calibracion full-body de tobillos. El flujo espe
 1. Emparejar los PICO Motion Trackers desde la app/configuracion de Motion Tracker del visor.
 2. Poner el modo de los trackers en object/independent tracking cuando la app lo solicite.
 3. Abrir XRoboToolkit en el PICO y conectar con el PC Service.
+   - Con `--pico-wifi`, pon como IP del PC la IP LAN que imprime el script y puerto `63901`.
+   - Con `--pico-adb`, conecta por USB/ADB y pon `127.0.0.1` como IP del PC.
 4. En la pantalla de tracking de XRoboToolkit, activar envio de pose hacia el PC (`Send`).
-5. Ejecutar el grabador con `--only-pico --pico-object`.
+5. Ejecutar el grabador con `--only-pico --pico-object --pico-wifi` o con `--pico-adb`.
 
 Si `observation.pico.motion_tracker_count` queda en cero, el problema casi siempre esta antes de Python: los trackers no estan emparejados, el modo no es object tracking, XRoboToolkit no esta enviando ese stream, o el PC Service no esta conectado.
 
