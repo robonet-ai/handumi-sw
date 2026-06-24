@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Replay PICO body arm motion on the Piper Viser simulation.
 
-This is intentionally kept under tests/manual while the coordinate mapping,
-scale, and calibration behavior are still being validated visually.
+This manual tool keeps the robot in a front/chest workspace by default. That
+matches the visual retargeting behavior validated on Axol and avoids starting
+from the raw URDF rest pose, which tends to make the arms work behind the body.
 """
 
 from __future__ import annotations
@@ -14,10 +15,14 @@ from pathlib import Path
 
 import numpy as np
 
-from dexumi.retargeting.piper_from_pico import PicoToPiperArmRetargeter
+from dexumi.retargeting.piper_from_pico import (
+    PicoToPiperArmRetargeter,
+    move_retargeter_to_front_workspace,
+    settle_first_frame,
+)
 from dexumi.robots.piper.config import KinematicsConfig
-from dexumi.robots.piper.solver import KinematicsSolver
 from dexumi.robots.piper.sim import Sim
+from dexumi.robots.piper.solver import KinematicsSolver
 from dexumi.utils.lerobot_io import load_pico_body_poses
 
 
@@ -38,11 +43,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--axis-map",
         default="z,x,y",
-        help="PICO delta to Piper delta mapping, e.g. z,x,y or z,y,-x.",
+        help=(
+            "PICO delta to Piper target delta. Default z,x,y maps the same "
+            "validated PICO axes used by the Axol replay into Piper's front "
+            "workspace."
+        ),
     )
     parser.add_argument("--left-only", action="store_true")
     parser.add_argument("--right-only", action="store_true")
     parser.add_argument("--gripper", type=float, default=1.0)
+    parser.add_argument(
+        "--piper-workspace",
+        choices=("front", "rest"),
+        default="front",
+        help="Use a front/chest initial Piper workspace or the raw URDF rest pose.",
+    )
+    parser.add_argument("--piper-wrist-forward", type=float, default=0.34)
+    parser.add_argument("--piper-wrist-height", type=float, default=0.24)
+    parser.add_argument("--piper-wrist-lateral", type=float, default=0.23)
+    parser.add_argument("--piper-elbow-forward", type=float, default=0.16)
+    parser.add_argument("--piper-elbow-height", type=float, default=0.34)
+    parser.add_argument("--piper-elbow-lateral", type=float, default=0.20)
+    parser.add_argument(
+        "--settle-iterations",
+        type=int,
+        default=20,
+        help="IK iterations on the first frame before playback starts.",
+    )
     parser.add_argument("--port", type=int, default=8003)
     parser.add_argument(
         "--loop",
@@ -74,8 +101,9 @@ async def replay_once(
     frame_indices: list[int],
     playback_fps: float,
     save_records: bool,
+    initial_q: np.ndarray,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    q = retargeter.q_rest.copy()
+    q = initial_q.copy()
     left, right = retargeter.split_for_sim(q)
     await sim.motion_control(left=left, right=right)
 
@@ -153,6 +181,24 @@ async def main_async() -> None:
         enable_right=not args.left_only,
         gripper=args.gripper,
     )
+    if args.piper_workspace == "front":
+        move_retargeter_to_front_workspace(
+            retargeter,
+            wrist_forward=args.piper_wrist_forward,
+            wrist_height=args.piper_wrist_height,
+            wrist_lateral=args.piper_wrist_lateral,
+            elbow_forward=args.piper_elbow_forward,
+            elbow_height=args.piper_elbow_height,
+            elbow_lateral=args.piper_elbow_lateral,
+        )
+
+    initial_q = settle_first_frame(
+        retargeter,
+        poses[frame_indices[0]],
+        0 if args.piper_workspace == "rest" else args.settle_iterations,
+    )
+    if args.piper_workspace == "front":
+        solver.set_posture_pose(initial_q)
 
     sim = Sim(port=args.port)
     await sim.enable()
@@ -162,7 +208,8 @@ async def main_async() -> None:
     print(
         "Replay config: "
         f"frames={len(frame_indices)}, fps={playback_fps:g}, "
-        f"scale={args.scale:g}, axis_map={args.axis_map!r}"
+        f"scale={args.scale:g}, axis_map={args.axis_map!r}, "
+        f"workspace={args.piper_workspace!r}"
     )
 
     all_q: list[np.ndarray] = []
@@ -178,6 +225,7 @@ async def main_async() -> None:
             frame_indices=frame_indices,
             playback_fps=playback_fps,
             save_records=bool(args.save and first_pass),
+            initial_q=initial_q,
         )
         all_q.extend(q_records)
         all_left.extend(left_records)
@@ -199,6 +247,7 @@ async def main_async() -> None:
             fps=np.asarray(playback_fps, dtype=np.float32),
             scale=np.asarray(args.scale, dtype=np.float32),
             axis_map=np.asarray(args.axis_map),
+            piper_workspace=np.asarray(args.piper_workspace),
         )
         print(f"Saved solved joints to {save_path}")
 
