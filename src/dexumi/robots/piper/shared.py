@@ -1,6 +1,36 @@
 """Shared constants and utilities for the Piper embodiment."""
 
+from enum import Enum
 from pathlib import Path
+
+
+class Joint(Enum):
+    """Joints on one Piper arm, in URDF/control order.
+
+    ``JOINT_1`` through ``JOINT_6`` are the revolute arm joints solved by IK.
+    ``FINGER_1`` and ``FINGER_2`` are the two prismatic gripper joints and are
+    commanded separately from arm IK.
+    """
+
+    JOINT_1 = "joint1"
+    JOINT_2 = "joint2"
+    JOINT_3 = "joint3"
+    JOINT_4 = "joint4"
+    JOINT_5 = "joint5"
+    JOINT_6 = "joint6"
+    FINGER_1 = "joint7"
+    FINGER_2 = "joint8"
+
+
+ARM_JOINTS: list[Joint] = [
+    Joint.JOINT_1,
+    Joint.JOINT_2,
+    Joint.JOINT_3,
+    Joint.JOINT_4,
+    Joint.JOINT_5,
+    Joint.JOINT_6,
+]
+FINGER_JOINTS: list[Joint] = [Joint.FINGER_1, Joint.FINGER_2]
 
 ARM_JOINT_COUNT = 6
 GRIPPER_OPEN_WIDTH_M = 0.035
@@ -20,17 +50,58 @@ def _resolve_urdf_path() -> Path:
         if path.is_file():
             return path
     raise FileNotFoundError(
-        "Could not find piper.urdf; expected it under dexumi/assets/piper or repo assets/piper"
+        "Could not find piper.urdf; expected it under dexumi/assets/piper "
+        "or repo assets/piper"
     )
 
 
 URDF_PATH: Path = _resolve_urdf_path()
 
 
+def _side_prefix(*, is_left: bool) -> str:
+    return "izq" if is_left else "der"
+
+
+def _link_prefix(*, is_left: bool) -> str:
+    return "izq" if is_left else "der"
+
+
+def urdf_joint_name(joint: Joint, *, is_left: bool) -> str:
+    """URDF joint name for ``joint`` on the requested Piper side."""
+
+    return f"{_side_prefix(is_left=is_left)}_{joint.value}"
+
+
+def urdf_body_name(joint: Joint, *, is_left: bool) -> str:
+    """URDF link driven by ``joint`` on the requested Piper side."""
+
+    number = int(joint.value.replace("joint", ""))
+    return f"{_link_prefix(is_left=is_left)}_link{number}"
+
+
+def urdf_revolute_joint_names(*, is_left: bool) -> list[str]:
+    """URDF revolute joint names for one arm, in IK/control order."""
+
+    return [urdf_joint_name(joint, is_left=is_left) for joint in ARM_JOINTS]
+
+
+def urdf_finger_joint_names(*, is_left: bool) -> list[str]:
+    """URDF prismatic gripper joint names for one arm."""
+
+    return [urdf_joint_name(joint, is_left=is_left) for joint in FINGER_JOINTS]
+
+
 def urdf_arm_joint_names(*, is_left: bool) -> list[str]:
-    """URDF actuated joint names for one arm, in control order (joint1..joint8)."""
+    """All URDF actuated joint names for one arm, in URDF order (joint1..joint8)."""
+
     prefix = "izq" if is_left else "der"
     return [f"{prefix}_joint{i}" for i in range(1, 9)]
+
+
+def urdf_revolute_body_names(*, is_left: bool) -> list[str]:
+    """URDF bodies driven by the six revolute arm joints."""
+
+    return [urdf_body_name(joint, is_left=is_left) for joint in ARM_JOINTS]
 
 
 def gripper_to_finger_positions(gripper: float) -> tuple[float, float]:
