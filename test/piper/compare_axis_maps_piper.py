@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--fps", type=float, default=None)
-    parser.add_argument("--scale", type=float, default=2.0)
+    parser.add_argument("--scale", type=float, default=1.5)
     parser.add_argument(
         "--axis-maps",
         default=None,
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pos-weight", type=float, default=50.0)
     parser.add_argument("--ori-weight", type=float, default=0.0)
     parser.add_argument("--elbow-weight", type=float, default=5.0)
-    parser.add_argument("--max-joint-delta", type=float, default=0.25)
+    parser.add_argument("--max-joint-delta", type=float, default=0.35)
     parser.add_argument("--max-reach", type=float, default=0.8)
     return parser
 

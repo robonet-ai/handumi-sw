@@ -15,16 +15,12 @@ from dexumi.retargeting.pico_upper_body import (
     RIGHT_WRIST,
     parse_axis_map,
 )
-from dexumi.robots.piper.shared import (
-    COMMAND_SIZE,
-    GRIPPER_INDEX,
-    gripper_to_finger_positions,
-)
+from dexumi.robots.piper.shared import ARM_JOINT_COUNT, COMMAND_SIZE, GRIPPER_INDEX
 from dexumi.robots.piper.solver import KinematicsSolver
 
 
-REST_LEFT_ARM = np.array([0.0, 1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-REST_RIGHT_ARM = np.array([0.0, 1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+REST_LEFT_ARM = np.zeros(ARM_JOINT_COUNT, dtype=np.float32)
+REST_RIGHT_ARM = np.zeros(ARM_JOINT_COUNT, dtype=np.float32)
 
 
 @dataclass(frozen=True)
@@ -46,30 +42,12 @@ class RetargetReferences:
     right: ArmReference
 
 
-def _set_gripper_q(
-    solver: KinematicsSolver,
-    q: np.ndarray,
-    *,
-    left: float,
-    right: float,
-) -> None:
-    left_a, left_b = gripper_to_finger_positions(left)
-    right_a, right_b = gripper_to_finger_positions(right)
-    q[solver.left_joint_indices[6:8]] = np.array([left_a, left_b], dtype=np.float32)
-    q[solver.right_joint_indices[6:8]] = np.array([right_a, right_b], dtype=np.float32)
-
-
-def make_rest_q(
-    solver: KinematicsSolver,
-    *,
-    gripper: float = 1.0,
-) -> np.ndarray:
-    """Create the full Piper joint vector for the visual rest pose."""
+def make_rest_q(solver: KinematicsSolver) -> np.ndarray:
+    """Create the full Piper joint vector for the rest pose."""
 
     q = np.zeros(solver.num_joints, dtype=np.float32)
     q[solver.left_indices] = REST_LEFT_ARM
     q[solver.right_indices] = REST_RIGHT_ARM
-    _set_gripper_q(solver, q, left=gripper, right=gripper)
     return q
 
 
@@ -189,7 +167,7 @@ class PicoToPiperArmRetargeter:
         self.enable_right = enable_right
         self.gripper = float(gripper)
 
-        self.q_rest = make_rest_q(solver, gripper=gripper)
+        self.q_rest = make_rest_q(solver)
         self.solver.set_posture_pose(self.q_rest)
         self.refs = calibrate_from_first_frame(solver, first_body_pose, self.q_rest)
 
@@ -243,23 +221,21 @@ class PicoToPiperArmRetargeter:
             )
             right_pose = (right_wrist_pos, self.refs.right.robot_wrist_rot)
 
-        q_out = self.solver.ik(
+        return self.solver.ik(
             q_current=q_current,
             left_pose=left_pose,
             right_pose=right_pose,
             left_elbow_pos=left_elbow_pos,
             right_elbow_pos=right_elbow_pos,
         )
-        _set_gripper_q(self.solver, q_out, left=self.gripper, right=self.gripper)
-        return q_out
 
     def split_for_sim(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Convert the full IK vector into left/right Piper command arrays."""
 
         left = np.zeros(COMMAND_SIZE, dtype=np.float32)
         right = np.zeros(COMMAND_SIZE, dtype=np.float32)
-        left[:6] = q[self.solver.left_indices]
-        right[:6] = q[self.solver.right_indices]
+        left[:ARM_JOINT_COUNT] = q[self.solver.left_indices]
+        right[:ARM_JOINT_COUNT] = q[self.solver.right_indices]
         left[GRIPPER_INDEX] = self.gripper
         right[GRIPPER_INDEX] = self.gripper
         return left, right

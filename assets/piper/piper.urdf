@@ -247,8 +247,8 @@
         <parent link="base_derecho"/>
         <child link="der_link1"/>
         <origin xyz="0 0 0.123" rpy="0 0 0"/>
-        <axis xyz="0 0 1"/>
-        <limit lower="-2.618" upper="2.168" effort="20000" velocity="3.14"/>
+        <axis xyz="0 0 -1"/>
+        <limit lower="-2.168" upper="2.618" effort="20000" velocity="3.14"/>
         <dynamics damping="300"/>
     </joint>
 
@@ -271,8 +271,8 @@
         <parent link="der_link1"/>
         <child link="der_link2"/>
         <origin xyz="0 0 0" rpy="1.5708 -0.1009 3.14159"/>
-        <axis xyz="0 0 1"/>
-        <limit lower="0" upper="3.14" effort="20000" velocity="3.14"/>
+        <axis xyz="0 0 -1"/>
+        <limit lower="-3.14" upper="0" effort="20000" velocity="3.14"/>
         <dynamics damping="100"/>
     </joint>
 
@@ -295,8 +295,8 @@
         <parent link="der_link2"/>
         <child link="der_link3"/>
         <origin xyz="0.28503 0 0" rpy="0 0 -1.7596"/>
-        <axis xyz="0 0 1"/>
-        <limit lower="-2.967" upper="0" effort="1000" velocity="3.14"/>
+        <axis xyz="0 0 -1"/>
+        <limit lower="0" upper="2.967" effort="1000" velocity="3.14"/>
         <dynamics damping="20"/>
     </joint>
 
@@ -319,7 +319,7 @@
         <parent link="der_link3"/>
         <child link="der_link4"/>
         <origin xyz="-0.021984 -0.25075 0" rpy="1.5708 0 0"/>
-        <axis xyz="0 0 1"/>
+        <axis xyz="0 0 -1"/>
         <limit lower="-1.745" upper="1.745" effort="70" velocity="3.14"/>
         <dynamics damping="5"/>
     </joint>
@@ -343,7 +343,7 @@
         <parent link="der_link4"/>
         <child link="der_link5"/>
         <origin xyz="0 0 0" rpy="-1.5708 0 0"/>
-        <axis xyz="0 0 1"/>
+        <axis xyz="0 0 -1"/>
         <limit lower="-1.22" upper="1.22" effort="50" velocity="3.14"/>
         <dynamics damping="2"/>
     </joint>
@@ -367,7 +367,7 @@
         <parent link="der_link5"/>
         <child link="der_link6"/>
         <origin xyz="8.8259e-05 -0.091 0" rpy="1.5708 0 0"/>
-        <axis xyz="0 0 1"/>
+        <axis xyz="0 0 -1"/>
         <limit lower="-2.0944" upper="2.0944" effort="6" velocity="3.14"/>
         <dynamics damping="0.1"/>
     </joint>
