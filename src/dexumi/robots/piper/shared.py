@@ -5,13 +5,16 @@ and the names that appear verbatim in ``piper.urdf`` lives here. No other module
 should hard-code Piper URDF strings; they should call the helpers below instead.
 
 Downstream consumers:
-- ``piper/solver.py`` — builds ``PIPER_KINEMATICS_SPEC`` from these names.
-- ``piper/sim.py``    — uses ``URDF_PATH``, ``urdf_arm_joint_names``, and
-  ``gripper_to_finger_positions`` to drive viser.
+- ``piper/solver.py``    — builds ``PIPER_KINEMATICS_SPEC`` from these names.
+- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~dexumi.robots.sim.ViserSim`.
 """
+
+from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+
+import numpy as np
 
 
 class Joint(Enum):
@@ -118,3 +121,19 @@ def gripper_to_finger_positions(gripper: float) -> tuple[float, float]:
     """Map a normalized gripper command to the two prismatic finger joints."""
     width = float(max(0.0, min(1.0, gripper))) * GRIPPER_OPEN_WIDTH_M
     return width, -width
+
+
+def command_to_arm_q(command: np.ndarray) -> np.ndarray:
+    """Map one Piper arm command to the URDF actuated-joint sub-vector.
+
+    Indices ``0..5`` are the six revolute arm joints. Index ``6`` is unused.
+    Index ``7`` is the normalized gripper opening in ``[0, 1]``, converted to
+    the two prismatic finger joint positions.
+    """
+    finger_a, finger_b = gripper_to_finger_positions(command[GRIPPER_INDEX])
+    return np.concatenate(
+        [
+            command[:ARM_JOINT_COUNT].astype(float),
+            np.array([finger_a, finger_b], dtype=float),
+        ]
+    )

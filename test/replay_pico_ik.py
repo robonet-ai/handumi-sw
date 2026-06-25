@@ -12,9 +12,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from dotenv import load_dotenv
@@ -35,31 +34,9 @@ from dexumi.retargeting.pico_upper_body import (
     parse_axis_map,
 )
 from dexumi.dataset import dataset_root_from_repo_id, load_pico_body_poses
+from dexumi.robots.registry import EmbodimentRuntime, load_embodiment
 
 DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/dexumi-dataset-v2"
-
-DEFAULT_COMPARE_AXIS_MAPS: dict[str, tuple[str, ...]] = {
-    "piper": (
-        "x,z,y",
-        "x,z,-y",
-        "x,-z,y",
-        "x,-z,-y",
-        "-x,z,y",
-        "-x,z,-y",
-        "-x,-z,y",
-        "-x,-z,-y",
-    ),
-    "axol": (
-        "z,x,y",
-        "z,x,-y",
-        "z,-x,y",
-        "z,-x,-y",
-        "-z,x,y",
-        "-z,x,-y",
-        "-z,-x,y",
-        "-z,-x,-y",
-    ),
-}
 
 ROBOT_TARGET_LINES = np.asarray(
     [[0, 1], [1, 2], [3, 4], [4, 5]],
@@ -74,88 +51,6 @@ RAW_PICO_LINES = np.asarray(
     ],
     dtype=np.int32,
 )
-
-
-@dataclass(frozen=True)
-class EmbodimentRuntime:
-    name: str
-    config_cls: type
-    solver_cls: type
-    retargeter_cls: type
-    sim_cls: type
-    move_to_front_workspace: Any
-    settle_first_frame: Any
-    urdf_path: Path
-    urdf_arm_joint_names: Callable[..., list[str]]
-    default_port: int
-    default_axis_map: str
-    default_compare_axis_maps: tuple[str, ...]
-    default_workspace: str
-    wrist_forward: float
-    wrist_height: float
-    wrist_lateral: float
-
-
-def load_embodiment(name: str) -> EmbodimentRuntime:
-    if name == "piper":
-        from dexumi.robots.kinematics import KinematicsConfig
-        from dexumi.robots.piper.retargeting import (
-            PicoToPiperArmRetargeter,
-            move_retargeter_to_front_workspace,
-            settle_first_frame,
-        )
-        from dexumi.robots.piper.shared import URDF_PATH, urdf_arm_joint_names
-        from dexumi.robots.piper.sim import Sim
-        from dexumi.robots.piper.solver import KinematicsSolver
-
-        return EmbodimentRuntime(
-            name="piper",
-            config_cls=KinematicsConfig,
-            solver_cls=KinematicsSolver,
-            retargeter_cls=PicoToPiperArmRetargeter,
-            sim_cls=Sim,
-            move_to_front_workspace=move_retargeter_to_front_workspace,
-            settle_first_frame=settle_first_frame,
-            urdf_path=URDF_PATH,
-            urdf_arm_joint_names=urdf_arm_joint_names,
-            default_port=8003,
-            default_axis_map="x,z,y",
-            default_compare_axis_maps=DEFAULT_COMPARE_AXIS_MAPS["piper"],
-            default_workspace="rest",
-            wrist_forward=0.34,
-            wrist_height=0.24,
-            wrist_lateral=0.23,
-        )
-    if name == "axol":
-        from dexumi.robots.axol.retargeting import (
-            PicoToAxolArmRetargeter,
-            move_retargeter_to_front_workspace,
-            settle_first_frame,
-        )
-        from dexumi.robots.axol.shared import URDF_PATH, urdf_arm_joint_names
-        from dexumi.robots.axol.sim import Sim
-        from dexumi.robots.axol.solver import KinematicsSolver
-        from dexumi.robots.kinematics import KinematicsConfig
-
-        return EmbodimentRuntime(
-            name="axol",
-            config_cls=KinematicsConfig,
-            solver_cls=KinematicsSolver,
-            retargeter_cls=PicoToAxolArmRetargeter,
-            sim_cls=Sim,
-            move_to_front_workspace=move_retargeter_to_front_workspace,
-            settle_first_frame=settle_first_frame,
-            urdf_path=URDF_PATH,
-            urdf_arm_joint_names=urdf_arm_joint_names,
-            default_port=8002,
-            default_axis_map="x,z,y",
-            default_compare_axis_maps=DEFAULT_COMPARE_AXIS_MAPS["axol"],
-            default_workspace="rest",
-            wrist_forward=0.28,
-            wrist_height=0.28,
-            wrist_lateral=0.20,
-        )
-    raise ValueError(f"Unsupported embodiment: {name!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -711,7 +606,7 @@ async def main_async() -> None:
         )
         return
 
-    sim = runtime.sim_cls(port=args.port or runtime.default_port)
+    sim = runtime.make_sim(port=args.port or runtime.default_port)
     await sim.enable()
     await asyncio.sleep(0.5)
 

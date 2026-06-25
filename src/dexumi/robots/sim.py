@@ -1,20 +1,19 @@
 """Generic Viser-based bimanual robot simulation.
 
 All the threading, viser setup, and joint-reordering logic lives here once.
-Robot-specific subclasses (``axol.sim.Sim``, ``piper.sim.Sim``) supply:
+Each embodiment supplies an ``arm_q_fn`` that maps one per-arm command vector
+to the URDF actuated-joint sub-vector for that arm (see
+``dexumi.robots.<embodiment>.shared.command_to_arm_q``).
 
-- ``_arm_q(command)`` — maps one 8-element arm command to the URDF
-  actuated-joint sub-vector for that arm.
-
-The constructor receives the URDF path and the left/right joint name lists
-so the rendering thread can map solver-order joints to viser's URDF order.
+Use :func:`~dexumi.robots.registry.load_embodiment` to construct a configured
+instance via :meth:`~dexumi.robots.registry.EmbodimentRuntime.make_sim`.
 """
 
 from __future__ import annotations
 
-import abc
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -31,17 +30,16 @@ except ImportError as e:
     ) from e
 
 
-class ViserSim(abc.ABC):
+class ViserSim:
     """Shared async bimanual simulation backed by a viser web server.
-
-    Subclasses must implement :meth:`_arm_q` to convert the robot's 8-element
-    per-arm command vector into the URDF actuated-joint sub-vector for that arm.
 
     The interface is intentionally minimal:
 
     .. code-block:: python
 
-        sim = Sim(port=8002)
+        from dexumi.robots.registry import load_embodiment
+
+        sim = load_embodiment("axol").make_sim(port=8002)
         await sim.enable()
         await sim.motion_control(
             left=np.zeros(8, dtype=np.float32),
@@ -56,6 +54,7 @@ class ViserSim(abc.ABC):
         left_joint_names: list[str],
         right_joint_names: list[str],
         command_size: int,
+        arm_q_fn: Callable[[np.ndarray], np.ndarray],
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
         port: int,
@@ -64,6 +63,7 @@ class ViserSim(abc.ABC):
         self._left_joint_names = left_joint_names
         self._right_joint_names = right_joint_names
         self._command_size = command_size
+        self._arm_q_fn = arm_q_fn
         self._joint_names = joint_names
         self._default_q = default_q
         self._port = port
@@ -73,9 +73,9 @@ class ViserSim(abc.ABC):
         self._last_left: np.ndarray = np.zeros(command_size, dtype=np.float32)
         self._last_right: np.ndarray = np.zeros(command_size, dtype=np.float32)
 
-    @abc.abstractmethod
     def _arm_q(self, command: np.ndarray) -> np.ndarray:
         """Map one arm command (shape ``(command_size,)``) to its URDF joint sub-vector."""
+        return self._arm_q_fn(command)
 
     async def enable(self) -> None:
         """Start the viser server thread. No-op after the first call."""

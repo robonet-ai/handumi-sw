@@ -23,9 +23,9 @@ from replay_pico_ik import (  # noqa: E402
     _robot_to_viser_order,
     _split_q_for_robot_order,
     _to_viser_q,
-    load_embodiment,
 )
 from dexumi.dataset import dataset_root_from_repo_id, load_pico_body_poses
+from dexumi.robots.registry import load_embodiment
 
 
 def _parse_axis_maps(value: str | None, defaults: tuple[str, ...]) -> list[str]:
