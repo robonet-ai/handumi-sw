@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
+
+# This visualizer is CPU-friendly and often runs on machines with mismatched
+# CUDA/CuDNN installs. Keep GPU opt-in so the default command opens reliably.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
 import pandas as pd

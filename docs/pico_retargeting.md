@@ -1,6 +1,6 @@
 # PICO Retargeting
 
-Ultima modificacion: 2026-06-24 18:23:18 -05 -0500
+Ultima modificacion: 2026-06-24 20:01:06 -05 -0500
 
 ## Modos de grabacion
 
@@ -99,6 +99,10 @@ uv run python test/axol/visualize_pico_controllers_upper_axol.py \
   --episode 0 \
   --loop
 ```
+
+Ese visualizador fuerza CPU por defecto para evitar fallos locales de
+CUDA/CuDNN al abrir PyVista. Si se quiere usar GPU explicitamente, definir
+`CUDA_VISIBLE_DEVICES` y `JAX_PLATFORMS` antes del comando.
 
 Por defecto usa `--body-frame headset-local`. Si se quiere depurar el error
 viejo, se puede comparar contra mundo directo:
