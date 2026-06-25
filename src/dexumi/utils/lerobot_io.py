@@ -8,6 +8,7 @@ Install the optional dependency with:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,16 +32,61 @@ def _parse_episodes(value: str | None) -> list[int] | None:
     return [int(item.strip()) for item in value.split(",") if item.strip()]
 
 
+def ensure_dataset_metadata(
+    repo_id: str,
+    root: str | Path,
+    *,
+    revision: str | None = "main",
+) -> dict[str, Any]:
+    """Ensure ``meta/info.json`` exists locally, downloading ``meta/`` from Hub if needed.
+
+    Call this before reading ``total_episodes`` so episode selection matches the
+    source repository.
+    """
+    root = Path(root)
+    info_path = root / "meta" / "info.json"
+
+    needs_download = not info_path.exists()
+    if not needs_download:
+        with open(info_path) as fh:
+            info = json.load(fh)
+        needs_download = int(info.get("total_episodes", 0)) <= 0
+    else:
+        info = {}
+
+    if needs_download:
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise RuntimeError(
+                "huggingface_hub is required to download dataset metadata. "
+                "Install with: GIT_LFS_SKIP_SMUDGE=1 uv sync --extra lerobot"
+            ) from exc
+
+        print(f"Downloading dataset metadata for {repo_id} …")
+        root.mkdir(parents=True, exist_ok=True)
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            revision=revision or "main",
+            local_dir=root,
+            allow_patterns=["meta/**"],
+        )
+        with open(info_path) as fh:
+            info = json.load(fh)
+
+    return info
+
+
 def download_lerobot_dataset(
     repo_id: str,
     output_dir: str | Path,
     *,
     revision: str | None = "main",
     episodes: str | None = None,
-    download_videos: bool = True,
     force_cache_sync: bool = False,
 ) -> DatasetDownloadResult:
-    """Download or load a LeRobot dataset using LeRobot's own dataset wrapper."""
+    """Download or load a LeRobot dataset (data, meta, and videos)."""
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError as exc:
@@ -54,7 +100,7 @@ def download_lerobot_dataset(
         root=Path(output_dir),
         revision=revision,
         episodes=_parse_episodes(episodes),
-        download_videos=download_videos,
+        download_videos=True,
         force_cache_sync=force_cache_sync,
     )
 
@@ -73,10 +119,16 @@ def load_lerobot_dataset(
     root: str | Path,
     *,
     episode: int | None = None,
+    episodes: list[int] | None = None,
     revision: str | None = "main",
-    download_videos: bool = False,
 ) -> Any:
-    """Load a local or remote LeRobot dataset with LeRobot's reader."""
+    """Load a local or remote LeRobot dataset with LeRobot's reader.
+
+    Always downloads video files when they are missing locally.
+    """
+    if episode is not None and episodes is not None:
+        raise ValueError("Use only one of episode or episodes.")
+
     try:
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except ImportError as exc:
@@ -85,13 +137,19 @@ def load_lerobot_dataset(
             "GIT_LFS_SKIP_SMUDGE=1 uv sync --extra lerobot"
         ) from exc
 
-    episodes = None if episode is None else [episode]
+    if episodes is not None:
+        resolved_episodes = episodes
+    elif episode is not None:
+        resolved_episodes = [episode]
+    else:
+        resolved_episodes = None
+
     return LeRobotDataset(
         repo_id=repo_id,
         root=Path(root),
         revision=revision,
-        episodes=episodes,
-        download_videos=download_videos,
+        episodes=resolved_episodes,
+        download_videos=True,
     )
 
 
@@ -104,6 +162,8 @@ def load_pico_body_poses(
     revision: str | None = "main",
 ) -> tuple[Any, int]:
     """Load PICO body joint poses from a LeRobot dataset.
+
+    Also ensures video files for the episode exist under ``root/videos/``.
 
     Returns:
         A tuple ``(poses, fps)`` where ``poses`` has shape ``(T, 24, 7)``.
@@ -118,7 +178,6 @@ def load_pico_body_poses(
         root=root,
         episode=episode,
         revision=revision,
-        download_videos=False,
     )
 
     if column not in dataset.features:
