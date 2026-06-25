@@ -14,10 +14,8 @@ from dexumi.robots.piper.sim import Sim
 
 
 def _rest_command() -> np.ndarray:
-    """Conservative rest pose within the Piper joint limits."""
+    """Piper's standard all-zero arm pose with an open gripper."""
     command = np.zeros(8, dtype=np.float32)
-    command[1] = 1.0
-    command[2] = -1.0
     command[7] = 1.0
     return command
 

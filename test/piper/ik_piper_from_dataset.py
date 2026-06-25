@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Replay PICO body arm motion on the Piper Viser simulation.
 
-This is intentionally kept under tests/manual while the coordinate mapping,
-scale, and calibration behavior are still being validated visually.
+PICO's frame is calibrated into Piper's world frame: PICO ``x,z,y`` maps to
+Piper ``x,y,z`` (front, lateral, vertical). Playback starts from Piper's
+standard all-zero joint pose; a front workspace remains available for tuning.
 """
 
 from __future__ import annotations
@@ -10,255 +11,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 
+from dexumi.retargeting.piper_from_pico import (
+    PicoToPiperArmRetargeter,
+    move_retargeter_to_front_workspace,
+    settle_first_frame,
+)
 from dexumi.robots.piper.config import KinematicsConfig
 from dexumi.robots.piper.solver import KinematicsSolver
 from dexumi.robots.piper.sim import Sim
-from dexumi.robots.piper.shared import ARM_JOINT_COUNT, COMMAND_SIZE, GRIPPER_INDEX
 from dexumi.utils.lerobot_io import load_pico_body_poses
-
-# SMPL24/PICO joint indices used by SONIC's body skeleton.
-LEFT_SHOULDER = 16
-RIGHT_SHOULDER = 17
-LEFT_ELBOW = 18
-RIGHT_ELBOW = 19
-LEFT_WRIST = 20
-RIGHT_WRIST = 21
-
-# Neutral rest pose for the Piper arm (6 revolute joints, in radians).
-REST_LEFT_ARM = np.zeros(ARM_JOINT_COUNT, dtype=np.float32)
-REST_RIGHT_ARM = np.zeros(ARM_JOINT_COUNT, dtype=np.float32)
-
-
-@dataclass(frozen=True)
-class ArmReference:
-    """Calibration data for one arm at the first replay frame."""
-
-    human_wrist_rel: np.ndarray
-    human_elbow_rel: np.ndarray
-    robot_wrist_pos: np.ndarray
-    robot_elbow_pos: np.ndarray
-    robot_wrist_rot: np.ndarray
-
-
-@dataclass(frozen=True)
-class RetargetReferences:
-    """Left/right calibration data."""
-
-    left: ArmReference
-    right: ArmReference
-
-
-def parse_axis_map(spec: str) -> Callable[[np.ndarray], np.ndarray]:
-    """Build a vector transform from a spec like ``z,x,y`` or ``z,y,-x``."""
-
-    axes = {"x": 0, "y": 1, "z": 2}
-    parts = [part.strip().lower() for part in spec.split(",")]
-    if len(parts) != 3:
-        raise ValueError("--axis-map must contain exactly 3 comma-separated axes.")
-
-    rows: list[tuple[int, int]] = []
-    used: set[int] = set()
-    for part in parts:
-        sign = -1 if part.startswith("-") else 1
-        axis = part[1:] if part.startswith("-") else part
-        if axis not in axes:
-            raise ValueError(f"Invalid axis {part!r}; use x, y, z, or a negated axis.")
-        index = axes[axis]
-        if index in used:
-            raise ValueError(f"Axis {axis!r} is repeated in --axis-map.")
-        used.add(index)
-        rows.append((sign, index))
-
-    def transform(vector: np.ndarray) -> np.ndarray:
-        vector = np.asarray(vector, dtype=np.float32)
-        return np.array([sign * vector[index] for sign, index in rows], dtype=np.float32)
-
-    return transform
-
-
-def make_rest_q(solver: KinematicsSolver) -> np.ndarray:
-    """Create the full Piper joint vector for the rest pose."""
-
-    q = np.zeros(solver.num_joints, dtype=np.float32)
-    q[solver.left_indices] = REST_LEFT_ARM
-    q[solver.right_indices] = REST_RIGHT_ARM
-    return q
-
-
-def _body_position(body_pose: np.ndarray, joint_index: int) -> np.ndarray:
-    return np.asarray(body_pose[joint_index, :3], dtype=np.float32)
-
-
-def _human_arm_reference(
-    body_pose: np.ndarray,
-    *,
-    shoulder_index: int,
-    elbow_index: int,
-    wrist_index: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    shoulder = _body_position(body_pose, shoulder_index)
-    elbow = _body_position(body_pose, elbow_index)
-    wrist = _body_position(body_pose, wrist_index)
-    return wrist - shoulder, elbow - shoulder
-
-
-def _robot_link_pose(
-    solver: KinematicsSolver,
-    q: np.ndarray,
-    link_index: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    import jax.numpy as jnp
-    import jaxlie
-
-    fk = solver.robot.forward_kinematics(jnp.asarray(q, dtype=jnp.float32))
-    pose = jaxlie.SE3(fk[link_index])
-    return (
-        np.asarray(pose.translation(), dtype=np.float32),
-        np.asarray(pose.rotation().as_matrix(), dtype=np.float32),
-    )
-
-
-def calibrate_from_first_frame(
-    solver: KinematicsSolver,
-    first_body_pose: np.ndarray,
-    q_rest: np.ndarray,
-) -> RetargetReferences:
-    """Use the first human frame and Piper rest pose as the shared zero motion."""
-
-    left_wrist_rel, left_elbow_rel = _human_arm_reference(
-        first_body_pose,
-        shoulder_index=LEFT_SHOULDER,
-        elbow_index=LEFT_ELBOW,
-        wrist_index=LEFT_WRIST,
-    )
-    right_wrist_rel, right_elbow_rel = _human_arm_reference(
-        first_body_pose,
-        shoulder_index=RIGHT_SHOULDER,
-        elbow_index=RIGHT_ELBOW,
-        wrist_index=RIGHT_WRIST,
-    )
-
-    left_wrist_pos, left_wrist_rot = _robot_link_pose(solver, q_rest, solver.l_ee_idx)
-    right_wrist_pos, right_wrist_rot = _robot_link_pose(solver, q_rest, solver.r_ee_idx)
-    left_elbow_pos, _ = _robot_link_pose(solver, q_rest, solver.l_elbow_idx)
-    right_elbow_pos, _ = _robot_link_pose(solver, q_rest, solver.r_elbow_idx)
-
-    return RetargetReferences(
-        left=ArmReference(
-            human_wrist_rel=left_wrist_rel,
-            human_elbow_rel=left_elbow_rel,
-            robot_wrist_pos=left_wrist_pos,
-            robot_elbow_pos=left_elbow_pos,
-            robot_wrist_rot=left_wrist_rot,
-        ),
-        right=ArmReference(
-            human_wrist_rel=right_wrist_rel,
-            human_elbow_rel=right_elbow_rel,
-            robot_wrist_pos=right_wrist_pos,
-            robot_elbow_pos=right_elbow_pos,
-            robot_wrist_rot=right_wrist_rot,
-        ),
-    )
-
-
-class PicoToPiperArmRetargeter:
-    """Minimal relative-position retargeter for visual Piper tests."""
-
-    def __init__(
-        self,
-        *,
-        solver: KinematicsSolver,
-        first_body_pose: np.ndarray,
-        scale: float,
-        axis_map: str,
-        enable_left: bool = True,
-        enable_right: bool = True,
-        gripper: float = 1.0,
-    ) -> None:
-        self.solver = solver
-        self.scale = float(scale)
-        self.transform = parse_axis_map(axis_map)
-        self.enable_left = enable_left
-        self.enable_right = enable_right
-        self.gripper = float(gripper)
-
-        self.q_rest = make_rest_q(solver)
-        self.solver.set_posture_pose(self.q_rest)
-        self.refs = calibrate_from_first_frame(solver, first_body_pose, self.q_rest)
-
-    def _arm_targets(
-        self,
-        body_pose: np.ndarray,
-        *,
-        ref: ArmReference,
-        shoulder_index: int,
-        elbow_index: int,
-        wrist_index: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        wrist_rel, elbow_rel = _human_arm_reference(
-            body_pose,
-            shoulder_index=shoulder_index,
-            elbow_index=elbow_index,
-            wrist_index=wrist_index,
-        )
-        wrist_delta = self.transform(wrist_rel - ref.human_wrist_rel) * self.scale
-        elbow_delta = self.transform(elbow_rel - ref.human_elbow_rel) * self.scale
-        return ref.robot_wrist_pos + wrist_delta, ref.robot_elbow_pos + elbow_delta
-
-    def retarget_frame(self, body_pose: np.ndarray, q_current: np.ndarray) -> np.ndarray:
-        """Solve one frame of PICO body data into a Piper joint vector."""
-
-        left_pose = None
-        left_elbow_pos = None
-        if self.enable_left:
-            left_wrist_pos, left_elbow_pos = self._arm_targets(
-                body_pose,
-                ref=self.refs.left,
-                shoulder_index=LEFT_SHOULDER,
-                elbow_index=LEFT_ELBOW,
-                wrist_index=LEFT_WRIST,
-            )
-            left_pose = (left_wrist_pos, self.refs.left.robot_wrist_rot)
-
-        right_pose = None
-        right_elbow_pos = None
-        if self.enable_right:
-            right_wrist_pos, right_elbow_pos = self._arm_targets(
-                body_pose,
-                ref=self.refs.right,
-                shoulder_index=RIGHT_SHOULDER,
-                elbow_index=RIGHT_ELBOW,
-                wrist_index=RIGHT_WRIST,
-            )
-            right_pose = (right_wrist_pos, self.refs.right.robot_wrist_rot)
-
-        return self.solver.ik(
-            q_current=q_current,
-            left_pose=left_pose,
-            right_pose=right_pose,
-            left_elbow_pos=left_elbow_pos,
-            right_elbow_pos=right_elbow_pos,
-        )
-
-    def split_for_sim(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Convert the full IK vector into Piper sim command arrays.
-
-        Each output is shape ``(COMMAND_SIZE,)`` = ``(8,)``: 6 arm joints in
-        radians, one unused slot (index 6), then gripper in [0, 1] (index 7).
-        """
-        left = np.zeros(COMMAND_SIZE, dtype=np.float32)
-        right = np.zeros(COMMAND_SIZE, dtype=np.float32)
-        left[:ARM_JOINT_COUNT] = q[self.solver.left_indices]
-        right[:ARM_JOINT_COUNT] = q[self.solver.right_indices]
-        left[GRIPPER_INDEX] = self.gripper
-        right[GRIPPER_INDEX] = self.gripper
-        return left, right
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -274,15 +39,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--fps", type=float, default=None)
-    parser.add_argument("--scale", type=float, default=1.5)
+    parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument(
         "--axis-map",
-        default="z,x,y",
-        help="PICO delta to Piper delta mapping, e.g. z,x,y or z,y,-x.",
+        default="x,z,y",
+        help="PICO delta to Piper target delta. Default: x,z,y.",
     )
     parser.add_argument("--left-only", action="store_true")
     parser.add_argument("--right-only", action="store_true")
     parser.add_argument("--gripper", type=float, default=1.0)
+    parser.add_argument(
+        "--piper-workspace",
+        choices=("front", "rest"),
+        default="rest",
+        help="Use Piper's standard all-zero pose or an optional front workspace.",
+    )
+    parser.add_argument("--piper-wrist-forward", type=float, default=0.34)
+    parser.add_argument("--piper-wrist-height", type=float, default=0.24)
+    parser.add_argument("--piper-wrist-lateral", type=float, default=0.23)
+    parser.add_argument("--piper-elbow-forward", type=float, default=0.16)
+    parser.add_argument("--piper-elbow-height", type=float, default=0.34)
+    parser.add_argument("--piper-elbow-lateral", type=float, default=0.20)
+    parser.add_argument(
+        "--settle-iterations",
+        type=int,
+        default=20,
+        help="IK iterations on the first frame before playback starts.",
+    )
     parser.add_argument("--port", type=int, default=8003)
     parser.add_argument(
         "--loop",
@@ -301,7 +84,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pos-weight", type=float, default=50.0)
     parser.add_argument("--ori-weight", type=float, default=0.0)
     parser.add_argument("--elbow-weight", type=float, default=5.0)
-    parser.add_argument("--max-joint-delta", type=float, default=0.35)
+    parser.add_argument(
+        "--manipulability-weight",
+        type=float,
+        default=0.0,
+        help="Keep Piper's standard zero pose stable during calibration.",
+    )
+    parser.add_argument(
+        "--max-joint-delta",
+        type=float,
+        default=KinematicsConfig().max_joint_delta,
+        help="Maximum Piper joint change per dataset frame in radians.",
+    )
     parser.add_argument("--max-reach", type=float, default=0.8)
     return parser
 
@@ -314,8 +108,9 @@ async def replay_once(
     frame_indices: list[int],
     playback_fps: float,
     save_records: bool,
+    initial_q: np.ndarray,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    q = retargeter.q_rest.copy()
+    q = initial_q.copy()
     left, right = retargeter.split_for_sim(q)
     await sim.motion_control(left=left, right=right)
 
@@ -327,7 +122,10 @@ async def replay_once(
     next_time = time.perf_counter()
 
     for frame_number, frame_index in enumerate(frame_indices):
-        q = retargeter.retarget_frame(poses[frame_index], q)
+        # The first selected pose defines the zero-motion calibration already
+        # represented by initial_q; solving it again can leave Piper's zero pose.
+        if frame_number > 0:
+            q = retargeter.retarget_frame(poses[frame_index], q)
         left, right = retargeter.split_for_sim(q)
         await sim.motion_control(left=left, right=right)
 
@@ -380,6 +178,7 @@ async def main_async() -> None:
         pos_weight=args.pos_weight,
         ori_weight=args.ori_weight,
         elbow_weight=args.elbow_weight,
+        manipulability_weight=args.manipulability_weight,
         max_joint_delta=args.max_joint_delta,
         max_reach=args.max_reach,
     )
@@ -393,6 +192,24 @@ async def main_async() -> None:
         enable_right=not args.left_only,
         gripper=args.gripper,
     )
+    if args.piper_workspace == "front":
+        move_retargeter_to_front_workspace(
+            retargeter,
+            wrist_forward=args.piper_wrist_forward,
+            wrist_height=args.piper_wrist_height,
+            wrist_lateral=args.piper_wrist_lateral,
+            elbow_forward=args.piper_elbow_forward,
+            elbow_height=args.piper_elbow_height,
+            elbow_lateral=args.piper_elbow_lateral,
+        )
+
+    initial_q = settle_first_frame(
+        retargeter,
+        poses[frame_indices[0]],
+        0 if args.piper_workspace == "rest" else args.settle_iterations,
+    )
+    if args.piper_workspace == "front":
+        solver.set_posture_pose(initial_q)
 
     sim = Sim(port=args.port)
     await sim.enable()
@@ -402,7 +219,8 @@ async def main_async() -> None:
     print(
         "Replay config: "
         f"frames={len(frame_indices)}, fps={playback_fps:g}, "
-        f"scale={args.scale:g}, axis_map={args.axis_map!r}"
+        f"scale={args.scale:g}, axis_map={args.axis_map!r}, "
+        f"workspace={args.piper_workspace!r}, ori_weight={args.ori_weight:g}"
     )
 
     all_q: list[np.ndarray] = []
@@ -418,6 +236,7 @@ async def main_async() -> None:
             frame_indices=frame_indices,
             playback_fps=playback_fps,
             save_records=bool(args.save and first_pass),
+            initial_q=initial_q,
         )
         all_q.extend(q_records)
         all_left.extend(left_records)
@@ -439,6 +258,7 @@ async def main_async() -> None:
             fps=np.asarray(playback_fps, dtype=np.float32),
             scale=np.asarray(args.scale, dtype=np.float32),
             axis_map=np.asarray(args.axis_map),
+            piper_workspace=np.asarray(args.piper_workspace),
         )
         print(f"Saved solved joints to {save_path}")
 

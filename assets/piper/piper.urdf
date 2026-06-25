@@ -16,7 +16,7 @@
     <joint name="world_to_izq_base" type="fixed">
         <parent link="world"/>
         <child link="base_izquierdo"/>
-        <origin xyz="0 0.3 0" rpy="0 0 0"/>
+        <origin xyz="0 0.35 0" rpy="0 0 0"/>
     </joint>
 
     <link name="base_izquierdo">
@@ -230,7 +230,7 @@
     <joint name="world_to_der_base" type="fixed">
         <parent link="world"/>
         <child link="base_derecho"/>
-        <origin xyz="0 -0.3 0" rpy="0 0 0"/>
+        <origin xyz="0 -0.35 0" rpy="0 0 0"/>
     </joint>
 
     <link name="base_derecho">

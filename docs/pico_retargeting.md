@@ -63,6 +63,40 @@ El IK de Axol no usa los elbows grabados por PICO. Los elbows grabados se muestr
 
 Por eso los trackers de pie no son necesarios para este caso de brazos. En whole-body los codos del SDK tambien vienen inferidos por el modelo corporal de PICO; si solo necesitamos manos/brazos, conviene inferir el codo de forma local y controlada desde hombro+wrist, y no depender de trackers de tobillo cuyo valor principal es pelvis/piernas/escala corporal.
 
+## Visualizacion PICO + Piper
+
+Piper usa un frame de URDF distinto de Axol. En este dataset, la separacion
+entre hombros de PICO esta sobre su eje `z`, mientras que los brazos de Piper
+se separan sobre el eje `y` de su URDF. Por eso el replay Piper usa `x,z,y`:
+PICO `(x, z, y)` pasa a Piper `(frente, lateral, vertical)`.
+
+Por defecto el replay comienza en el cero mecanico estandar de Piper: los seis
+joints de cada brazo estan en `0`, con la postura plegada de referencia. Un
+workspace frontal sigue disponible de forma explicita con
+`--piper-workspace front`. La orientacion de la muneca permanece fuera de la
+optimizacion (`--ori-weight 0`) hasta que exista una calibracion explicita
+entre los quaternions PICO y el frame de cada gripper Piper.
+
+El replay conserva ese primer frame sin volver a resolver IK y usa el limite
+cinematico de Piper de aproximadamente `0.0346 rad/frame` a 30 Hz. Esto evita
+que la optimizacion salte desde el cero mecanico a otra rama en un solo frame.
+
+```bash
+JAX_PLATFORMS=cpu uv run python test/piper/ik_piper_from_dataset.py \
+  --dataset-root outputs/datasets/dexumi-dataset-v2 \
+  --episode 0 \
+  --revision main
+```
+
+Para comparar signos de los ejes alrededor del mapeo base:
+
+```bash
+JAX_PLATFORMS=cpu uv run python test/piper/compare_axis_maps_piper.py \
+  --dataset-root outputs/datasets/dexumi-dataset-v2 \
+  --episode 0 \
+  --revision main
+```
+
 ## Activar object tracking en PICO
 
 Para object tracking no uses la calibracion full-body de tobillos. El flujo esperado es:

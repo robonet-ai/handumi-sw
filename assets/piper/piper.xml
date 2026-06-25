@@ -32,7 +32,7 @@
 
         <geom name="floor" pos="0 0 0" size="4 4 0.1" type="plane" material="matplane" condim="3"/>
 
-        <body name="base_izquierdo" pos="0 0.3 0">
+        <body name="base_izquierdo" pos="0 0.35 0">
             <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link" />
             <body name="izq_link1" pos="0 0 0.123">
                 <inertial pos="0.000121505 0.000104632 -0.00438597" quat="0.486797 0.49897 -0.50059 0.513292" mass="0.215052" diaginertia="0.000116369 0.00010964 9.9555e-05" />
@@ -77,7 +77,7 @@
             </body>
         </body>
 
-        <body name="base_derecho" pos="0 -0.3 0">
+        <body name="base_derecho" pos="0 -0.35 0">
             <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="base_link" />
             <body name="der_link1" pos="0 0 0.123">
                 <inertial pos="0.000121505 0.000104632 -0.00438597" quat="0.486797 0.49897 -0.50059 0.513292" mass="0.215052" diaginertia="0.000116369 0.00010964 9.9555e-05" />

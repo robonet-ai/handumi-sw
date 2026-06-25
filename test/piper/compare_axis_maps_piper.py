@@ -9,21 +9,25 @@ import time
 
 import numpy as np
 
-from dexumi.retargeting.piper_from_pico import PicoToPiperArmRetargeter
+from dexumi.retargeting.piper_from_pico import (
+    PicoToPiperArmRetargeter,
+    move_retargeter_to_front_workspace,
+    settle_first_frame,
+)
 from dexumi.robots.piper.config import KinematicsConfig
 from dexumi.robots.piper.shared import URDF_PATH, urdf_arm_joint_names
 from dexumi.robots.piper.solver import KinematicsSolver
 from dexumi.utils.lerobot_io import load_pico_body_poses
 
 DEFAULT_AXIS_MAPS = (
-    "z,x,y",
-    "z,x,-y",
-    "z,-x,y",
-    "z,-x,-y",
-    "-z,x,y",
-    "-z,x,-y",
-    "-z,-x,y",
-    "-z,-x,-y",
+    "x,z,y",
+    "x,z,-y",
+    "x,-z,y",
+    "x,-z,-y",
+    "-x,z,y",
+    "-x,z,-y",
+    "-x,-z,y",
+    "-x,-z,-y",
 )
 
 
@@ -95,7 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=None)
     parser.add_argument("--stride", type=int, default=1)
     parser.add_argument("--fps", type=float, default=None)
-    parser.add_argument("--scale", type=float, default=1.5)
+    parser.add_argument("--scale", type=float, default=1.0)
     parser.add_argument(
         "--axis-maps",
         default=None,
@@ -109,6 +113,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--left-only", action="store_true")
     parser.add_argument("--right-only", action="store_true")
     parser.add_argument("--gripper", type=float, default=1.0)
+    parser.add_argument(
+        "--piper-workspace",
+        choices=("front", "rest"),
+        default="rest",
+        help="Use Piper's standard all-zero pose or an optional front workspace.",
+    )
+    parser.add_argument("--piper-wrist-forward", type=float, default=0.34)
+    parser.add_argument("--piper-wrist-height", type=float, default=0.24)
+    parser.add_argument("--piper-wrist-lateral", type=float, default=0.23)
+    parser.add_argument("--piper-elbow-forward", type=float, default=0.16)
+    parser.add_argument("--piper-elbow-height", type=float, default=0.34)
+    parser.add_argument("--piper-elbow-lateral", type=float, default=0.20)
+    parser.add_argument("--settle-iterations", type=int, default=20)
     parser.add_argument("--port", type=int, default=8003)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--hold-after", type=float, default=20.0)
@@ -116,7 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pos-weight", type=float, default=50.0)
     parser.add_argument("--ori-weight", type=float, default=0.0)
     parser.add_argument("--elbow-weight", type=float, default=5.0)
-    parser.add_argument("--max-joint-delta", type=float, default=0.35)
+    parser.add_argument("--manipulability-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--max-joint-delta",
+        type=float,
+        default=KinematicsConfig().max_joint_delta,
+    )
     parser.add_argument("--max-reach", type=float, default=0.8)
     return parser
 
@@ -161,6 +183,7 @@ async def main_async() -> None:
         pos_weight=args.pos_weight,
         ori_weight=args.ori_weight,
         elbow_weight=args.elbow_weight,
+        manipulability_weight=args.manipulability_weight,
         max_joint_delta=args.max_joint_delta,
         max_reach=args.max_reach,
     )
@@ -177,7 +200,26 @@ async def main_async() -> None:
         )
         for axis_map in axis_maps
     ]
-    q_states = [retargeter.q_rest.copy() for retargeter in retargeters]
+    if args.piper_workspace == "front":
+        for retargeter in retargeters:
+            move_retargeter_to_front_workspace(
+                retargeter,
+                wrist_forward=args.piper_wrist_forward,
+                wrist_height=args.piper_wrist_height,
+                wrist_lateral=args.piper_wrist_lateral,
+                elbow_forward=args.piper_elbow_forward,
+                elbow_height=args.piper_elbow_height,
+                elbow_lateral=args.piper_elbow_lateral,
+            )
+
+    initial_q = settle_first_frame(
+        retargeters[0],
+        poses[frame_indices[0]],
+        0 if args.piper_workspace == "rest" else args.settle_iterations,
+    )
+    if args.piper_workspace == "front":
+        solver.set_posture_pose(initial_q)
+    q_states = [initial_q.copy() for _ in retargeters]
 
     try:
         import viser
@@ -245,7 +287,7 @@ async def main_async() -> None:
     print(
         "Replay config: "
         f"frames={len(frame_indices)}, fps={playback_fps:g}, scale={args.scale:g}, "
-        f"candidates={len(axis_maps)}"
+        f"candidates={len(axis_maps)}, workspace={args.piper_workspace!r}"
     )
 
     frame_delay = 0.0 if playback_fps <= 0 else 1.0 / playback_fps
@@ -254,11 +296,14 @@ async def main_async() -> None:
         while True:
             next_time = time.perf_counter()
             for frame_number, frame_index in enumerate(frame_indices):
-                for i, retargeter in enumerate(retargeters):
-                    q_states[i] = retargeter.retarget_frame(
-                        poses[frame_index],
-                        q_states[i],
-                    )
+                if frame_number > 0:
+                    for i, retargeter in enumerate(retargeters):
+                        q_states[i] = retargeter.retarget_frame(
+                            poses[frame_index],
+                            q_states[i],
+                        )
+
+                for i in range(len(retargeters)):
                     q_robot = _split_q_for_robot_order(solver, q_states[i])
                     robot_views[i].update_cfg(_to_viser_q(q_robot, viser_to_robot))
 
