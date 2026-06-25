@@ -1,4 +1,13 @@
-"""Shared constants and utilities for the Axol embodiment."""
+"""Axol URDF adapter — the single source of truth for Axol link/joint names.
+
+Everything that needs to map between Axol's logical joints (the ``Joint`` enum)
+and the names that appear verbatim in ``axol.urdf`` lives here. No other module
+should hard-code Axol URDF strings; they should call the helpers below instead.
+
+Downstream consumers:
+- ``axol/solver.py`` — builds ``AXOL_KINEMATICS_SPEC`` from these names.
+- ``axol/sim.py``    — uses ``URDF_PATH`` and ``urdf_arm_joint_names`` to drive viser.
+"""
 
 from enum import Enum
 from pathlib import Path

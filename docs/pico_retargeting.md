@@ -82,16 +82,28 @@ cinematico de Piper de aproximadamente `0.0346 rad/frame` a 30 Hz. Esto evita
 que la optimizacion salte desde el cero mecanico a otra rama en un solo frame.
 
 ```bash
-JAX_PLATFORMS=cpu uv run python test/piper/ik_piper_from_dataset.py \
+JAX_PLATFORMS=cpu uv run python test/replay_pico_ik.py \
+  --embodiment piper \
   --dataset-root outputs/datasets/dexumi-dataset-v2 \
   --episode 0 \
   --revision main
 ```
 
+Para ver el esqueleto PICO junto con targets IK y FK del robot:
+
+```bash
+JAX_PLATFORMS=cpu uv run python test/replay_pico_ik.py \
+  --embodiment piper \
+  --dataset-root outputs/datasets/dexumi-dataset-v2 \
+  --episode 0 \
+  --visualize
+```
+
 Para comparar signos de los ejes alrededor del mapeo base:
 
 ```bash
-JAX_PLATFORMS=cpu uv run python test/piper/compare_axis_maps_piper.py \
+JAX_PLATFORMS=cpu uv run python test/compare_axis.py \
+  --embodiment piper \
   --dataset-root outputs/datasets/dexumi-dataset-v2 \
   --episode 0 \
   --revision main

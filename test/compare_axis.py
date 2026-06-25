@@ -1,77 +1,40 @@
 #!/usr/bin/env python3
-"""Compare multiple PICO-to-Axol axis mappings in one Viser scene."""
+"""Compare multiple PICO axis mappings for a selected robot embodiment.
+
+Examples:
+    python test/compare_axis.py --embodiment piper --episode 0
+    python test/compare_axis.py --embodiment axol --episode 0 --workspace front
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-from dexumi.robots.axol.config import KinematicsConfig
-from dexumi.robots.axol.solver import KinematicsSolver
-from dexumi.robots.axol.shared import URDF_PATH, urdf_arm_joint_names
-from dexumi.utils.lerobot_io import load_pico_body_poses
-from dexumi.retargeting.axol_from_pico import (
-    PicoToAxolArmRetargeter,
-    move_retargeter_to_front_workspace,
-    settle_first_frame,
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from replay_pico_ik import (  # noqa: E402
+    DEFAULT_REPO_ID,
+    _robot_to_viser_order,
+    _split_q_for_robot_order,
+    _to_viser_q,
+    load_embodiment,
 )
-
-DEFAULT_AXIS_MAPS = (
-    "z,x,y",
-    "z,x,-y",
-    "z,-x,y",
-    "z,-x,-y",
-    "-z,x,y",
-    "-z,x,-y",
-    "-z,-x,y",
-    "-z,-x,-y",
-)
+from dexumi.dataset import dataset_root_from_repo_id, load_pico_body_poses
 
 
-def _parse_axis_maps(value: str | None) -> list[str]:
+def _parse_axis_maps(value: str | None, defaults: tuple[str, ...]) -> list[str]:
     if value is None or value.strip() == "":
-        return list(DEFAULT_AXIS_MAPS)
+        return list(defaults)
     axis_maps = [item.strip() for item in value.split(";") if item.strip()]
     if not axis_maps:
         raise ValueError("--axis-maps did not contain any mappings.")
     return axis_maps
-
-
-def _robot_to_viser_order(viser_order: list[str]) -> list[int]:
-    robot_order = urdf_arm_joint_names(is_left=True) + urdf_arm_joint_names(
-        is_left=False
-    )
-    mapping: list[int] = []
-    for name in viser_order:
-        try:
-            mapping.append(robot_order.index(name))
-        except ValueError:
-            mapping.append(-1)
-    return mapping
-
-
-def _to_viser_q(q_robot: np.ndarray, viser_to_robot: list[int]) -> np.ndarray:
-    q_out = np.zeros(len(viser_to_robot), dtype=float)
-    for viser_index, robot_index in enumerate(viser_to_robot):
-        if robot_index >= 0:
-            q_out[viser_index] = q_robot[robot_index]
-    return q_out
-
-
-def _split_q_for_robot_order(
-    solver: KinematicsSolver,
-    q_solver: np.ndarray,
-) -> np.ndarray:
-    return np.concatenate(
-        [
-            q_solver[solver.left_indices],
-            q_solver[solver.right_indices],
-        ]
-    ).astype(float)
 
 
 def _layout_position(index: int, *, columns: int, spacing: float) -> np.ndarray:
@@ -89,10 +52,15 @@ def _layout_position(index: int, *, columns: int, spacing: float) -> np.ndarray:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare PICO-to-Axol axis-map candidates in a Viser grid."
+        description="Compare PICO axis-map candidates for piper or axol in a Viser grid."
     )
-    parser.add_argument("--repo-id", default="NONHUMAN-RESEARCH/dexumi-dataset-v2")
-    parser.add_argument("--dataset-root", default="outputs/datasets/dexumi-dataset-v2")
+    parser.add_argument("--embodiment", choices=("piper", "axol"), default="piper")
+    parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
+    parser.add_argument(
+        "--dataset-root",
+        default=None,
+        help="Local dataset root. Defaults to outputs/datasets/<repo-id suffix>.",
+    )
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--revision", default="main")
     parser.add_argument("--column", default="observation.pico.body_joints_pose")
@@ -104,39 +72,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--axis-maps",
         default=None,
-        help="Semicolon-separated mappings. Default compares the selected finalist mappings.",
+        help="Semicolon-separated mappings. Default uses embodiment-specific finalists.",
     )
     parser.add_argument("--columns", type=int, default=4)
     parser.add_argument("--spacing", type=float, default=1.35)
     parser.add_argument("--left-only", action="store_true")
     parser.add_argument("--right-only", action="store_true")
     parser.add_argument("--gripper", type=float, default=1.0)
-    parser.add_argument(
-        "--axol-workspace",
-        choices=("front", "rest"),
-        default="front",
-        help="Use a front/chest initial Axol workspace or the raw URDF rest pose.",
-    )
-    parser.add_argument("--axol-wrist-forward", type=float, default=-0.34)
-    parser.add_argument("--axol-wrist-height", type=float, default=0.58)
-    parser.add_argument("--axol-wrist-lateral", type=float, default=0.23)
-    parser.add_argument("--axol-elbow-forward", type=float, default=-0.16)
-    parser.add_argument("--axol-elbow-height", type=float, default=0.68)
-    parser.add_argument("--axol-elbow-lateral", type=float, default=0.20)
-    parser.add_argument(
-        "--settle-iterations",
-        type=int,
-        default=20,
-        help="IK iterations on the first frame before playback starts.",
-    )
-    parser.add_argument("--port", type=int, default=8003)
+    parser.add_argument("--workspace", choices=("rest", "front"), default=None)
+    parser.add_argument("--wrist-forward", type=float, default=None)
+    parser.add_argument("--wrist-height", type=float, default=None)
+    parser.add_argument("--wrist-lateral", type=float, default=None)
+    parser.add_argument("--settle-iterations", type=int, default=20)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--loop", action="store_true")
     parser.add_argument("--hold-after", type=float, default=20.0)
-
     parser.add_argument("--pos-weight", type=float, default=50.0)
     parser.add_argument("--ori-weight", type=float, default=0.0)
-    parser.add_argument("--elbow-weight", type=float, default=5.0)
-    parser.add_argument("--max-joint-delta", type=float, default=0.25)
+    parser.add_argument("--manipulability-weight", type=float, default=0.0)
+    parser.add_argument("--max-joint-delta", type=float, default=None)
     parser.add_argument("--max-reach", type=float, default=0.8)
     return parser
 
@@ -151,14 +105,22 @@ async def main_async() -> None:
     if args.start_frame < 0:
         raise ValueError("--start-frame must be >= 0.")
 
-    axis_maps = _parse_axis_maps(args.axis_maps)
+    runtime = load_embodiment(args.embodiment)
+    workspace = args.workspace or runtime.default_workspace
+    axis_maps = _parse_axis_maps(args.axis_maps, runtime.default_compare_axis_maps)
     if args.columns < 1:
         raise ValueError("--columns must be >= 1.")
     if args.spacing <= 0:
         raise ValueError("--spacing must be > 0.")
+
+    dataset_root = (
+        Path(args.dataset_root)
+        if args.dataset_root is not None
+        else dataset_root_from_repo_id(args.repo_id)
+    )
     poses, dataset_fps = load_pico_body_poses(
         repo_id=args.repo_id,
-        root=args.dataset_root,
+        root=dataset_root,
         episode=args.episode,
         column=args.column,
         revision=args.revision,
@@ -176,16 +138,18 @@ async def main_async() -> None:
 
     playback_fps = float(args.fps if args.fps is not None else dataset_fps)
 
-    config = KinematicsConfig(
+    config_kwargs = dict(
         pos_weight=args.pos_weight,
         ori_weight=args.ori_weight,
-        elbow_weight=args.elbow_weight,
-        max_joint_delta=args.max_joint_delta,
+        manipulability_weight=args.manipulability_weight,
         max_reach=args.max_reach,
     )
-    solver = KinematicsSolver(config=config)
+    if args.max_joint_delta is not None:
+        config_kwargs["max_joint_delta"] = args.max_joint_delta
+    config = runtime.config_cls(**config_kwargs)
+    solver = runtime.solver_cls(config=config)
     retargeters = [
-        PicoToAxolArmRetargeter(
+        runtime.retargeter_cls(
             solver=solver,
             first_body_pose=poses[frame_indices[0]],
             scale=args.scale,
@@ -196,24 +160,21 @@ async def main_async() -> None:
         )
         for axis_map in axis_maps
     ]
-    if args.axol_workspace == "front":
+    if workspace == "front":
         for retargeter in retargeters:
-            move_retargeter_to_front_workspace(
+            runtime.move_to_front_workspace(
                 retargeter,
-                wrist_forward=args.axol_wrist_forward,
-                wrist_height=args.axol_wrist_height,
-                wrist_lateral=args.axol_wrist_lateral,
-                elbow_forward=args.axol_elbow_forward,
-                elbow_height=args.axol_elbow_height,
-                elbow_lateral=args.axol_elbow_lateral,
+                wrist_forward=args.wrist_forward or runtime.wrist_forward,
+                wrist_height=args.wrist_height or runtime.wrist_height,
+                wrist_lateral=args.wrist_lateral or runtime.wrist_lateral,
             )
 
-    initial_q = settle_first_frame(
+    initial_q = runtime.settle_first_frame(
         retargeters[0],
         poses[frame_indices[0]],
-        0 if args.axol_workspace == "rest" else args.settle_iterations,
+        0 if workspace == "rest" else args.settle_iterations,
     )
-    if args.axol_workspace == "front":
+    if workspace == "front":
         solver.set_posture_pose(initial_q)
     q_states = [initial_q.copy() for _ in retargeters]
 
@@ -223,11 +184,12 @@ async def main_async() -> None:
         from viser.extras import ViserUrdf
     except ImportError as exc:
         raise RuntimeError(
-            "Viser Axol dependencies are missing. Install with: "
+            "Viser dependencies are missing. Install with: "
             "GIT_LFS_SKIP_SMUDGE=1 uv sync --extra lerobot --extra axol"
         ) from exc
 
-    server = viser.ViserServer(port=args.port)
+    port = args.port or runtime.default_port
+    server = viser.ViserServer(port=port)
     server.scene.add_grid(
         "/grid",
         width=5.0,
@@ -235,7 +197,9 @@ async def main_async() -> None:
         position=(0.0, -0.65, 0.0),
     )
 
-    urdf = yourdfpy.URDF.load(str(URDF_PATH), mesh_dir=str(URDF_PATH.parent))
+    urdf = yourdfpy.URDF.load(
+        str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent)
+    )
     robot_views = []
     viser_to_robot: list[int] | None = None
     for index, axis_map in enumerate(axis_maps):
@@ -264,15 +228,19 @@ async def main_async() -> None:
             load_collision_meshes=False,
         )
         if viser_to_robot is None:
-            viser_to_robot = _robot_to_viser_order(robot_view.get_actuated_joint_names())
+            viser_to_robot = _robot_to_viser_order(
+                robot_view.get_actuated_joint_names(),
+                runtime.urdf_arm_joint_names,
+            )
         robot_views.append(robot_view)
 
     if viser_to_robot is None:
         raise RuntimeError("Could not build Viser joint mapping.")
 
     for q_state, robot_view in zip(q_states, robot_views, strict=True):
-        q_robot = _split_q_for_robot_order(solver, q_state)
-        robot_view.update_cfg(_to_viser_q(q_robot, viser_to_robot))
+        robot_view.update_cfg(
+            _to_viser_q(_split_q_for_robot_order(solver, q_state), viser_to_robot)
+        )
 
     print(f"Viser comparison: http://localhost:{server.get_port()}")
     print("Axis-map candidates:")
@@ -280,8 +248,8 @@ async def main_async() -> None:
         print(f"  [{index}] {axis_map}")
     print(
         "Replay config: "
-        f"frames={len(frame_indices)}, fps={playback_fps:g}, scale={args.scale:g}, "
-        f"candidates={len(axis_maps)}, workspace={args.axol_workspace!r}"
+        f"embodiment={runtime.name}, frames={len(frame_indices)}, fps={playback_fps:g}, "
+        f"scale={args.scale:g}, candidates={len(axis_maps)}, workspace={workspace!r}"
     )
 
     frame_delay = 0.0 if playback_fps <= 0 else 1.0 / playback_fps
@@ -290,10 +258,20 @@ async def main_async() -> None:
         while True:
             next_time = time.perf_counter()
             for frame_number, frame_index in enumerate(frame_indices):
-                for i, retargeter in enumerate(retargeters):
-                    q_states[i] = retargeter.retarget_frame(poses[frame_index], q_states[i])
-                    q_robot = _split_q_for_robot_order(solver, q_states[i])
-                    robot_views[i].update_cfg(_to_viser_q(q_robot, viser_to_robot))
+                if frame_number > 0:
+                    for i, retargeter in enumerate(retargeters):
+                        q_states[i] = retargeter.retarget_frame(
+                            poses[frame_index],
+                            q_states[i],
+                        )
+
+                for i in range(len(retargeters)):
+                    robot_views[i].update_cfg(
+                        _to_viser_q(
+                            _split_q_for_robot_order(solver, q_states[i]),
+                            viser_to_robot,
+                        )
+                    )
 
                 if frame_number % 30 == 0:
                     print(f"frame {frame_index}/{len(poses) - 1}")

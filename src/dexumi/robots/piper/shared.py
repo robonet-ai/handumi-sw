@@ -1,4 +1,14 @@
-"""Shared constants and utilities for the Piper embodiment."""
+"""Piper URDF adapter — the single source of truth for Piper link/joint names.
+
+Everything that needs to map between Piper's logical joints (the ``Joint`` enum)
+and the names that appear verbatim in ``piper.urdf`` lives here. No other module
+should hard-code Piper URDF strings; they should call the helpers below instead.
+
+Downstream consumers:
+- ``piper/solver.py`` — builds ``PIPER_KINEMATICS_SPEC`` from these names.
+- ``piper/sim.py``    — uses ``URDF_PATH``, ``urdf_arm_joint_names``, and
+  ``gripper_to_finger_positions`` to drive viser.
+"""
 
 from enum import Enum
 from pathlib import Path
@@ -59,11 +69,11 @@ URDF_PATH: Path = _resolve_urdf_path()
 
 
 def _side_prefix(*, is_left: bool) -> str:
-    return "izq" if is_left else "der"
+    return "left" if is_left else "right"
 
 
 def _link_prefix(*, is_left: bool) -> str:
-    return "izq" if is_left else "der"
+    return "left" if is_left else "right"
 
 
 def urdf_joint_name(joint: Joint, *, is_left: bool) -> str:
@@ -94,7 +104,7 @@ def urdf_finger_joint_names(*, is_left: bool) -> list[str]:
 def urdf_arm_joint_names(*, is_left: bool) -> list[str]:
     """All URDF actuated joint names for one arm, in URDF order (joint1..joint8)."""
 
-    prefix = "izq" if is_left else "der"
+    prefix = "left" if is_left else "right"
     return [f"{prefix}_joint{i}" for i in range(1, 9)]
 
 

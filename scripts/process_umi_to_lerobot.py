@@ -284,7 +284,7 @@ def process_episode(
     -------
     EpisodeResult
     """
-    from dexumi.datasets.lerobot_writer import EpisodeResult
+    from dexumi.dataset import EpisodeResult
     from dexumi.robots.loader import build_embodiment
 
     if len(poses) < 2:
@@ -377,9 +377,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Ensure source metadata is available, then read episode count
     # ------------------------------------------------------------------
-    from dexumi.utils.lerobot_io import ensure_dataset_metadata
+    from dexumi.dataset import ensure_metadata
 
-    source_info = ensure_dataset_metadata(
+    source_info = ensure_metadata(
         repo_id=args.repo_id,
         root=source_root,
         revision=args.revision,
@@ -419,7 +419,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Process each episode
     # ------------------------------------------------------------------
-    from dexumi.utils.lerobot_io import load_pico_body_poses
+    from dexumi.dataset import load_pico_body_poses
 
     results = []
     for out_idx, src_idx in enumerate(episode_indices):
@@ -472,7 +472,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Write output dataset
     # ------------------------------------------------------------------
-    from dexumi.datasets.lerobot_writer import write_dataset
+    from dexumi.dataset import write_dataset
 
     write_dataset(
         output_root=output_root,
