@@ -4,7 +4,9 @@
 The script loads a source LeRobot dataset that contains PICO body-joint poses
 (``observation.pico.body_joints_pose``), runs inverse kinematics for the chosen
 embodiment, and writes a new LeRobot v3.0 dataset whose ``observation.state``
-and ``action`` columns contain motor joint angles.
+and ``action`` columns contain physical robot joint values. For Piper this is
+``[j1..j6 radians, gripper meters]`` per arm; SDK integer command units are
+derived later at replay/control time.
 
 All video streams are preserved unchanged (the last frame of each episode is
 dropped from the parquet data to produce ``action = state[t+1]``, but the
@@ -15,20 +17,20 @@ Quick start
 ::
 
     # Axol embodiment (default settings)
-    python scripts/process_umi_to_lerobot.py \\
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \\
-        --dataset-root outputs/datasets/handumi-dataset-v2 \\
-        --embodiment axol \\
-        --output-name handumi-dataset-v2-axol \\
+    python scripts/process_umi_to_lerobot.py \
+        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
+        --dataset-root outputs/datasets/handumi-dataset-v2 \
+        --embodiment axol \
+        --output-name handumi-dataset-v2-axol \
         --output-root outputs/datasets/handumi-dataset-v2-axol
 
     # Piper embodiment, push to hub afterwards
-    python scripts/process_umi_to_lerobot.py \\
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \\
-        --dataset-root outputs/datasets/handumi-dataset-v2 \\
-        --embodiment piper \\
-        --output-name handumi-dataset-v2-piper \\
-        --output-root outputs/datasets/handumi-dataset-v2-piper \\
+    python scripts/process_umi_to_lerobot.py \
+        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
+        --dataset-root outputs/datasets/handumi-dataset-v2 \
+        --embodiment piper \
+        --output-name handumi-dataset-v2-piper \
+        --output-root outputs/datasets/handumi-dataset-v2-piper \
         --push-to-hub
 """
 
@@ -153,10 +155,10 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--scale", type=float, default=1.0)
     ik.add_argument(
         "--axis-map",
-        default="z,x,y",
+        default=None,
         help=(
             "PICO delta → robot delta mapping, e.g. z,x,y or z,y,-x.  "
-            "Default validated for upright upper-body / front workspace."
+            "Defaults to the selected embodiment's validated mapping."
         ),
     )
     ik.add_argument("--left-only", action="store_true")

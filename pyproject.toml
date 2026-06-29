@@ -25,6 +25,11 @@ dependencies = [
     "mujoco>=3.9.0",
 ]
 
+[project.optional-dependencies]
+piper = [
+    "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
