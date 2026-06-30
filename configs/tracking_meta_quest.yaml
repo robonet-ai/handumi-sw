@@ -1,14 +1,26 @@
-# Meta Quest / WebXR tracking config.
+# Meta Quest native-app tracking config (yubi-style TCP/JSON + UDP time-sync).
+#
+# The PC dials the Quest: the Quest app is the TCP server, the workstation
+# connects to quest_ip:tcp_port and binds the UDP sync_port. No TLS / WSS.
 
 backend: "meta_quest"
 
-server:
-  host: "0.0.0.0"
-  port: 8765
+connection:
+  quest_ip: "WRITE_HERE"   # Quest LAN IP (pin it; DHCP can change it)
+  tcp_port: 65432          # pose stream (newline-delimited JSON)
+  sync_port: 42000         # NTP-style UDP time-sync
+  connect_retry_s: 1.0
 
 streams:
-  left_pose: true
-  right_pose: true
-  headset_pose: true
-  buttons: true
+  left: true
+  right: true
+  hmd: true                # used as the body/chest reference frame
+  buttons: true            # forwarded raw; Python owns the state machine
 
+# Explicit, unit-tested calibration applied in handumi.tracking.transforms.
+# Identity defaults until a workspace reset is captured at runtime.
+calibration:
+  # Fixed mounting offset from the OVR controller anchor to the gripper TCP.
+  controller_to_gripper_tcp:
+    left:  { position: [0.0, 0.0, 0.0], quaternion: [0.0, 0.0, 0.0, 1.0] }
+    right: { position: [0.0, 0.0, 0.0], quaternion: [0.0, 0.0, 0.0, 1.0] }

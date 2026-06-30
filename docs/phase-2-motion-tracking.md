@@ -15,11 +15,175 @@ HandUMI gripper motion from Meta Quest controller
 Python live state
         |
         v
-Rerun for cameras/scalars + Viser for 3D robot/workspace
+Rerun for cameras/scalars + live 3D controller trajectory
+   (Viser 3D robot follow-along is DEFERRED — see Phase 2 Scope)
         |
         v
 same state contract can later be recorded as raw LeRobot data
 ```
+
+## Wearable Form Factor
+
+HandUMI is a portable, body-worn rig (same idea as the "Portable YUBI" setup).
+The Meta Quest is **not worn on the head and renders no operator-facing UI**.
+
+```text
+Meta Quest HMD  -> mounted on the neck / upper chest, facing forward-down
+                   used only as a 6DoF inside-out tracking base
+Quest controllers -> one rigidly mounted on each HandUMI gripper
+Wrist cameras   -> two gripper-mounted USB cameras only
+Laptop          -> in a backpack, runs the Python server + Rerun + Viser
+```
+
+Consequences for this phase:
+
+- **No headset HUD.** The operator cannot see the Quest display, so there is no
+  in-VR UI. All operator feedback (connection, mode, recording, saving, error)
+  is surfaced on the workstation (Rerun / terminal) and, optionally, controller
+  haptics.
+- **No front / torso camera this phase.** Only the two gripper-mounted wrist
+  cameras are used. A front camera is a future addition, not part of Phase 2.
+- **Native app, no immersive session needed.** The yubi-style Quest app reads
+  OVR controller poses and streams them; it does not need an immersive WebXR
+  render session. Launch the app once, mount the headset on the neck, and it
+  keeps streaming. (This is a key reason native beats WebXR here — see
+  [Decision](#decision).)
+- **Headset cameras must see the controllers.** Mounted on the neck facing the
+  workspace in front of the body, the Quest's inside-out cameras keep the
+  grippers in view; controller visibility drives tracking quality.
+- **Headset pose becomes the body/chest reference frame**, not an ignored
+  field. It anchors the `quest_tracking_space -> handumi_workspace` calibration
+  to the operator's torso instead of their eyes.
+
+## Phase 2 Scope
+
+Get the **motion tracking right first**. Viser is the 3D viewer that shows the
+*robot* moving (IK-driven follow-along of the controller poses); it is useful
+but **out of scope for now** and deferred to a later sub-phase.
+
+```text
+Phase 2A  (THIS phase — focus here)
+  - Meta Quest HMD + controllers stream poses into Python
+  - explicit, tested coordinate / calibration transforms
+  - merge with Feetech width into the 16D HandUMI raw state
+  - Rerun shows: gripper wrist cameras, Feetech width series,
+    and a live 3D trajectory of each controller
+  - recording writes the same 16D raw state layout
+
+Phase 2B  (DEFERRED — do not build yet)
+  - retargeting / IK on the live tracked poses
+  - ViserSim robot follow-along ("see the robot move in 3D")
+```
+
+Everything below tagged **[2B]** is deferred. Build and validate 2A before
+touching IK or Viser. Sections that mention `live_viser.py`, `ViserSim`,
+retargeting, or IK belong to 2B.
+
+## Phase 2A — Three Steps
+
+Build the motion tracking in three sequential steps, using `../yubi-sw`
+(`airoa_quest/`) as the guide. Each step has a demonstrable outcome; do not
+start a step until the previous one's "Done when" holds.
+
+A native Quest app that emits the [TCP/JSON Payload](#tcpjson-payload) is a
+parallel build track (`clients/quest_app/`). Each Python step is developed
+first against `mock_quest_sender.py`, then validated against the real app — so
+the app does not block progress.
+
+```text
+Step 1  The pose pipe       — get controller numbers into Python
+Step 2  The transforms      — turn raw Unity poses into HandUMI-frame poses
+Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
+```
+
+### Step 1 — The pose pipe (receiver + contract)
+
+- **Goal:** real controller poses flow into Python with timing + tracking flags.
+- **Build:** `handumi/tracking/meta_quest.py` (TCP/JSON newline framing, frame
+  dataclass model, latest-frame buffer, UDP NTP-style time-sync, `connected` /
+  `streaming` / `fps` / `last_frame_age` diagnostics) and
+  `handumi/tracking/mock_quest_sender.py`.
+- **yubi-sw guide:** `airoa_quest_bridge/transport/tcp_json.py` (framing, UDP
+  sync, metrics) and `QuestController.msg` / `QuestHmd.msg` (frame fields).
+- **Done when:** against the mock, frames parse and fps/diagnostics print;
+  against the real app, moving each controller changes raw `position` /
+  `quaternion` and `tracked` / `valid`, and every sample carries both
+  `device_time_ns` and `pc_monotonic_ns`. No transforms yet.
+
+### Step 2 — The transforms (tested calibration)
+
+- **Goal:** raw Unity poses become correct left/right HandUMI-frame poses.
+- **Build:** `handumi/tracking/transforms.py` (Unity→right-handed conversion,
+  `handumi_workspace` calibration / reset offset, fixed controller→gripper-TCP
+  mounting offset) and `tests/tracking/test_transforms.py`.
+- **yubi-sw guide:** `_unity_pose_to_ros` plus the compose/invert quaternion
+  helpers in `airoa_quest_bridge/quest_bridge_node.py`.
+- **Done when:** unit tests pass (known Unity inputs → expected outputs, plus
+  round-trips); a captured reset re-centers the workspace; left/right poses sit
+  correctly relative to the body when the receiver is fed real frames.
+
+### Step 3 — The live view (Feetech merge + Rerun trajectory)
+
+- **Goal:** the visible milestone — move the grippers, see the trajectory.
+- **Build:** `handumi/capture/live_tracking.py` (merge calibrated Quest poses +
+  Feetech width into the 16D raw state; Rerun blueprint = wrist cameras +
+  Feetech series + 3D controller trajectory with rolling trails). Then wire
+  `record_handumi.py --tracking-backend meta_quest`.
+- **yubi-sw guide:** the Rerun 3D trajectory image is the target look (see
+  [Rerun 3D Trajectory View](#rerun-3d-trajectory-view)).
+- **Done when:** moving each gripper draws its trail in the Rerun 3D view;
+  opening/closing updates Feetech width; recording writes the 16D layout; no
+  gripper width comes from Quest triggers. (This is the Phase 2A acceptance
+  bar.)
+
+## Reference: yubi-sw motion tracking
+
+`../yubi-sw` (airoa-org `yubi`) is the **primary reference for the motion
+tracking part** — the Rerun trajectory image came from that project. Its
+`airoa_quest/` package is a clean, production-grade Quest → workstation pose
+pipeline. Study it alongside `../axol-vr`.
+
+Patterns to reuse from yubi-sw:
+
+- **Boundary coordinate conversion in tested Python.** The Quest streams Unity
+  coordinates (X right, Y up, Z forward, left-handed); yubi converts to a
+  right-handed robot frame *at the receive boundary*, not on the device:
+
+  ```text
+  position:    Unity(x, y, z)     -> (z, -x, y)
+  quaternion:  Unity(x, y, z, w)  -> (z, -x, y, -w)
+  ```
+
+  HandUMI's `transforms.py` should do the analogous Quest→`handumi_workspace`
+  conversion the same way: explicit and unit-tested (`quest_bridge_node`'s
+  `_unity_pose_to_ros` is the model).
+
+- **`tracked` / `valid` per-controller flags.** OVR reports whether each
+  controller pose is currently tracked and valid. Carry these through so a
+  dropped/occluded controller marks the pose unreliable instead of freezing the
+  robot at a stale pose.
+
+- **Timestamp metadata for offline alignment.** Every sample carries
+  `device_time_ns` (Quest monotonic clock) and `pc_monotonic_ns` (PC receive),
+  plus an NTP-style UDP time-sync side channel that estimates
+  `offset = median(pc_monotonic_ns - device_time_ns)`. This lets Quest poses be
+  re-aligned with camera/Feetech frames in post-processing. HandUMI should
+  record both clocks per tracked frame.
+
+- **Diagnostics on the workstation, not the headset.** yubi publishes
+  `connected` / `streaming` / `fps` / `last_frame_age` / `*_tracked` /
+  `*_valid` on a health channel. Because the HandUMI operator has no headset
+  display, this is exactly the feedback surface we need (Rerun / terminal).
+
+- **Controller→mount offset.** yubi composes a fixed controller→`hand_root`
+  transform to get the actual hand frame from the raw OVR controller anchor.
+  HandUMI's controller is rigidly bolted to the gripper, so the equivalent
+  fixed **controller→gripper-TCP offset** belongs in `transforms.py`.
+
+**Decided:** HandUMI uses the yubi-style **native Quest app over TCP/JSON**
+(plus UDP time-sync), not the `axol-vr` WebXR/WSS path. See [Decision](#decision)
+and [Transport & Network](#transport--network). `axol-vr` survives only as a
+secondary reference for button/state-machine logic.
 
 ## Current Status
 
@@ -34,50 +198,76 @@ Already in `handumi-sw`:
 Missing:
 
 - Meta Quest tracking backend.
-- Quest Browser WebXR client.
-- Python WebSocket receiver for Quest frames.
-- Live loop that merges Quest pose + Feetech width and updates Viser.
+- Native Quest streaming app (yubi-style; streams controller/HMD poses).
+- Python TCP/JSON receiver + UDP time-sync for Quest frames.
+- Live loop that merges Quest pose + Feetech width into the 16D raw state.
 - Recording path that writes Quest poses into the 16D HandUMI raw state.
 
 ## Decision
 
-Use `../axol-vr` as the primary guide.
+**Transport: go the yubi-sw way — a native Quest app that streams poses over
+TCP/JSON with a UDP time-sync side channel.** `../yubi-sw` is the primary guide
+for the Quest→workstation pipeline. `../axol-vr` is kept only as a *secondary*
+reference for the button state-machine and reconnect ideas.
 
-Keep from `axol-vr`:
+Why native-app over WebXR (`axol-vr`):
 
-- Vite + React + `@react-three/xr` app opened in Quest Browser.
-- WebSocket connection from headset to Python.
-- Per-XR-frame streaming from browser to workstation.
-- Headset HUD for connection/recording state.
-- Server-pushed state feedback such as `saving` and `error`.
-- Button edge handling for reset/start/stop.
+- The Quest is **neck-mounted with no display in use**. WebXR forces an
+  immersive render session for nobody to watch; a native app streams poses
+  without rendering, which fits an always-on body-worn tracker.
+- Native gives **real clock alignment** (`device_time_ns` + `pc_monotonic_ns` +
+  UDP sync) so Quest poses line up with camera/Feetech frames in the dataset.
+- Native exposes OVR **`tracked`/`valid`** flags and a clean diagnostics channel
+  — the feedback surface we need without a headset HUD.
+- No HTTPS/WSS secure-context plumbing; a plain TCP socket is enough on the LAN.
 
-Change for HandUMI:
+Keep from `yubi-sw`:
 
-- Use `XRInputSource.gripSpace` for gripper pose, not `targetRaySpace`.
-- Feetech is the only source of gripper opening. Quest trigger values are UI
-  controls only.
-- Elbows/body tracking are optional diagnostics, not required fields.
-- Payload names should be HandUMI names: `left.pose`, `right.pose`, `state`,
-  `buttons`, not `l_ee`, `r_ee`, `l_grip`, `r_grip`.
-- Python receiver lives in `handumi.tracking.meta_quest`, not in an Axol SDK.
-- The live robot view is Viser; camera/scalar monitoring remains Rerun.
+- Native Quest app (OVRPlugin) as the pose source.
+- TCP/JSON per-sample stream + UDP NTP-style time-sync.
+- Unity→robot coordinate conversion done in **tested Python at the boundary**.
+- Per-controller `tracked`/`valid` flags.
+- `device_time_ns` + `pc_monotonic_ns` per sample for offline alignment.
+- Diagnostics (`connected`/`streaming`/`fps`/`*_tracked`/`*_valid`) surfaced on
+  the workstation.
+
+Keep from `axol-vr` (secondary):
+
+- Button edge handling and the reset/start/stop state-machine semantics.
+- Server-owned states such as `saving` and `error`.
+
+HandUMI specifics:
+
+- **No headset HUD.** The Quest is body-mounted; all feedback goes to Rerun /
+  terminal (and optionally controller haptics). See
+  [Wearable Form Factor](#wearable-form-factor).
+- Use each controller's **grip/anchor pose** mounted on the gripper; a fixed
+  controller→gripper-TCP offset is applied in `transforms.py`.
+- Feetech is the only source of gripper opening. Quest trigger/grip values are
+  UI controls only.
+- Keep `hmd.pose` as the body/chest reference frame for calibration.
+- Python receiver lives in `handumi.tracking.meta_quest`.
+- Camera/scalar monitoring + the live 3D controller trajectory are in Rerun.
+  Viser robot follow-along is **[2B]** deferred.
 
 ## Target Flow
 
 ```text
+Meta Quest HMD body-mounted on the neck (tracking base, no display use)
 Quest controller mounted on each HandUMI gripper
-  WebXR gripSpace pose per side
+  OVR anchor pose per side (Unity coords)
   Quest buttons for reset/start/stop/mode
         |
         v
-Quest Browser WebSocket client
+Native Quest app (OVRPlugin)
+  TCP/JSON pose stream + UDP time-sync
         |
         v
-Python WebSocket server
+Python TCP receiver (handumi.tracking.meta_quest)
+  + UDP NTP-style offset estimation
         |
         v
-handumi.tracking.meta_quest
+transforms.py  (Unity -> handumi_workspace, tested)
         |
         v
 HandUMI raw state
@@ -87,13 +277,22 @@ HandUMI raw state
   right_width_m from Feetech
         |
         v
-retargeting / IK
+Rerun: cameras + Feetech + 3D controller trajectory   (Phase 2A)
         |
         v
-ViserSim robot update
+[2B] retargeting / IK -> ViserSim robot update          (deferred)
 ```
 
-Planned live visualization script:
+Planned Phase 2A live tracking script (Rerun only — no robot/Viser):
+
+```bash
+PYTHONPATH=src python scripts/live_tracking.py \
+  --tracking-backend meta_quest \
+  --feetech-config configs/feetech.yaml \
+  --port 8000
+```
+
+Planned **[2B, deferred]** live robot view (adds IK + Viser follow-along):
 
 ```bash
 PYTHONPATH=src python scripts/live_viser.py \
@@ -111,95 +310,120 @@ PYTHONPATH=src python scripts/record_handumi.py \
   --tracking-backend meta_quest
 ```
 
-## WebXR Contract
+## Tracking Contract
 
-Use:
+The Quest app streams **raw Unity / OVR poses on the wire**. All axis fixes and
+calibration happen in Python — never on the device.
 
 ```text
-referenceSpace = local-floor
-poseSpace      = XRInputSource.gripSpace
+trackingSpace  = OVRCameraRig.trackingSpace (stage / local-floor equivalent)
+poseSpace      = OVR controller anchor (the gripper-mounted controller)
 units          = meters
 quaternion     = [x, y, z, w]
 ```
 
-WebXR coordinates:
+Unity coordinates on the wire (left-handed):
 
 ```text
 +X = right
 +Y = up
--Z = forward
++Z = forward
 ```
 
-HandUMI internal pose layout:
+Python converts at the receive boundary to a right-handed frame (the yubi
+mapping), then applies HandUMI calibration:
 
 ```text
-[x, y, z, qx, qy, qz, qw]
+position:    Unity(x, y, z)     -> (z, -x, y)
+quaternion:  Unity(x, y, z, w)  -> (z, -x, y, -w)
+
+quest_tracking_space
+  -> handumi_workspace               (workspace calibration / reset offset)
+  -> controller -> gripper-TCP        (fixed mounting offset)
+  -> [2B] robot_base_left / robot_base_right
 ```
 
-The Python side should preserve the WebXR pose first, then apply explicit
-calibration transforms:
+HandUMI internal pose layout stays `[x, y, z, qx, qy, qz, qw]`.
 
-```text
-quest_local_floor
-  -> handumi_workspace
-  -> robot_base_left / robot_base_right
-```
+Do not hide axis fixes inside the Quest app. Every transform is testable Python
+code in `transforms.py`.
 
-Do not hide axis fixes inside the WebXR client. Axis transforms should be
-testable Python code.
+## TCP/JSON Payload
 
-## WebSocket Payload
-
-Initial headset to Python message:
+The Quest app sends one **newline-delimited JSON object per sample** over TCP.
+Poses are raw Unity coordinates; Python converts and timestamps on receive.
 
 ```json
 {
-  "type": "handumi_xr_frame",
+  "type": "handumi_quest_frame",
   "seq": 1234,
-  "t_ms": 456789.12,
-  "space": "local-floor",
-  "state": "teleop",
+  "device_time_ns": 123456789012345,
+  "delta_time_s": 0.0111,
+  "space": "stage",
+  "hmd": {
+    "tracked": true,
+    "position": [0.02, 1.10, 0.05],
+    "quaternion": [0.0, 0.0, 0.0, 1.0]
+  },
   "left": {
     "tracked": true,
-    "pose": {
-      "position": [0.12, 1.24, -0.48],
-      "quaternion": [0.01, 0.72, 0.02, 0.69]
-    },
+    "valid": true,
+    "position": [-0.18, 0.95, 0.32],
+    "quaternion": [0.01, 0.72, 0.02, 0.69],
     "buttons": {
       "trigger": 0.0,
       "grip": 0.0,
       "thumbstick": [0.0, 0.0],
-      "x": false,
-      "y": false
-    },
-    "profiles": ["meta-quest-touch-plus", "oculus-touch-v3", "oculus-touch"]
+      "thumbstick_click": false,
+      "primary": false,
+      "secondary": false
+    }
   },
   "right": {
     "tracked": true,
-    "pose": {
-      "position": [0.20, 1.24, -0.50],
-      "quaternion": [0.0, 0.70, 0.0, 0.71]
-    },
+    "valid": true,
+    "position": [0.20, 0.95, 0.30],
+    "quaternion": [0.0, 0.70, 0.0, 0.71],
     "buttons": {
       "trigger": 0.0,
       "grip": 0.0,
       "thumbstick": [0.0, 0.0],
-      "a": false,
-      "b": false
-    },
-    "profiles": ["meta-quest-touch-plus", "oculus-touch-v3", "oculus-touch"]
+      "thumbstick_click": false,
+      "primary": false,
+      "secondary": false
+    }
+  },
+  "battery": {
+    "hmd_pct": 87,
+    "left_pct": 90,
+    "right_pct": 92,
+    "hmd_charging": false
   }
 }
 ```
 
+Field notes:
+
+- `position` is meters, `quaternion` is `[x, y, z, w]`, both in **Unity
+  left-handed** coordinates. Python converts at the boundary.
+- `device_time_ns` is the Quest monotonic clock at sample generation (OVR
+  runtime clock). Python adds `pc_monotonic_ns = time.monotonic_ns()` on
+  receive and stores both; the UDP sync channel gives the offset between them.
+- `seq` is a per-sample counter for loss detection (0 if the app omits it).
+- `left.primary/secondary` = X/Y; `right.primary/secondary` = A/B.
+- `tracked` = OVR is tracking this device; `valid` = pose is usable this frame.
+  When either is false, mark the pose unreliable (hold last good / flag in
+  Rerun) rather than feeding a stale or garbage pose downstream.
+
 Rules:
 
-- If `gripSpace` pose is unavailable, set `tracked: false`.
-- Keep `profiles` for debugging controller variants.
-- Keep `trigger` and `grip` values for UI/debug only.
-- Do not use `trigger` or `grip` as gripper width.
-- Gripper width comes from Feetech in Python and is merged after this frame is
-  received.
+- If a controller pose is unavailable, set `tracked: false` (and `valid: false`).
+- Keep `trigger` and `grip` analog values for UI/debug only.
+- **Do not use `trigger` or `grip` as gripper width.** Width comes from Feetech
+  in Python and is merged after the frame is received.
+- The `state` machine is owned by Python, not sent in this frame (see
+  [Button Mapping](#button-mapping)); the app forwards raw button states and
+  Python derives transitions.
 
 ## Button Mapping
 
@@ -213,16 +437,24 @@ right B  = toggle teleop/data_collection mode
 both grip buttons = enable/disable tracking lock, optional
 ```
 
-Gamepad layout should use WebXR `xr-standard`:
+Buttons are pressed by feel — the operator cannot see a headset menu — so each
+state change must be confirmed on the workstation (Rerun / terminal), and
+optionally via controller haptics, instead of an in-VR HUD.
+
+These map onto the per-controller `buttons` block in the TCP/JSON payload:
 
 ```text
-button 0 = trigger
-button 1 = squeeze / grip
-button 3 = thumbstick press
-axes 2/3 = thumbstick x/y
+primary           = X (left) / A (right)   -> reset / start-stop
+secondary         = Y (left) / B (right)   -> exit / toggle mode
+trigger, grip     = analog 0..1            -> UI/debug only (never width)
+thumbstick[x, y]  = analog axes            -> optional
+thumbstick_click  = bool                   -> optional
 ```
 
-Keep server-pushed states:
+The app forwards raw button states; **Python owns the state machine** and does
+the edge detection, so the device never decides recording state.
+
+Keep Python-owned states:
 
 ```text
 teleop
@@ -232,122 +464,143 @@ saving
 error
 ```
 
-`saving` and `error` should be controlled by Python so the headset UI cannot
-start another recording while an episode is being written.
+`saving` and `error` should be controlled by Python so the client cannot start
+another recording while an episode is being written. Since there is no headset
+UI, Python is the single source of truth for state and surfaces it on the
+workstation.
 
-## Mapping From axol-vr
+## Porting Plan
 
-Reference files:
+Primary reference is `../yubi-sw` (`airoa_quest/`). Map its ROS-based pipeline
+onto HandUMI's ROS-free Python:
 
 ```text
-../axol-vr/app/src/App.tsx
-../axol-vr/packages/axol-vr-client/src/AxolVRClient.tsx
-../axol-vr/packages/axol-vr-client/src/useAxolVRClient.ts
-../axol-vr/packages/axol-vr-client/src/types.ts
+airoa_quest_bridge/transport/tcp_json.py
+  -> handumi/tracking/meta_quest.py  (transport half)
+  - keep newline-delimited TCP/JSON framing
+  - keep the UDP NTP-style time-sync loop + median offset
+  - keep connect/retry + fps / last_frame_age metrics
+  - expose a latest-frame buffer instead of ROS publishers
+
+airoa_quest_bridge/quest_bridge_node.py (_unity_pose_to_ros etc.)
+  -> handumi/tracking/transforms.py
+  - port the Unity->right-handed conversion verbatim, with unit tests
+  - add handumi_workspace calibration + controller->gripper-TCP offset
+
+QuestController.msg / QuestHmd.msg
+  -> the TCP/JSON Payload above (dataclass frame model in meta_quest.py)
+  - keep tracked/valid, device_time_ns, seq
 ```
 
-Port to HandUMI:
+Secondary reference is `../axol-vr`, **for logic only** (it is a WebXR app we
+are not building):
 
 ```text
-AxolVRClient.tsx
-  -> HandUMIXRClient.tsx
-  - read left/right XRInputSource each frame
-  - use source.gripSpace
-  - send handumi_xr_frame JSON
-  - keep button edge logic
+AxolVRClient.tsx button edge logic + AxolState machine
+  -> Python state machine in the live loop
+  - reset / start-stop / toggle-mode edge detection
+  - server-owned saving / error states
 
-useAxolVRClient.ts
-  -> useHandUMIQuestClient.ts
-  - keep reconnect logic
-  - keep server state feedback
-  - keep wss://hostname:port/ws
-
-types.ts
-  -> types.ts
-  - rename AxolState to HandUMIQuestState
-  - rename AxolPoseData to HandUMIXRFrame
-
-App.tsx
-  -> Quest browser app
-  - keep host input + Start button + headset HUD
-  - replace Almond/Axol labels with HandUMI labels
+useAxolVRClient.ts reconnect logic
+  -> already covered by the yubi connect/retry transport
 ```
 
-Do not port:
+Do not build / do not port:
 
 ```text
-targetRaySpace as controller pose
+WebXR / @react-three/xr browser client
+immersive XR session + in-VR HUD / help / countdown / exit
+targetRaySpace / gripSpace as the *only* pose source (use the OVR anchor)
 required elbow/body tracking
-l_grip / r_grip as gripper opening
-Axol-specific SDK naming
-Axol-specific robot assumptions
+trigger / grip as gripper opening
+WSS / HTTPS secure-context plumbing
+ROS 2 message/topic machinery from yubi (keep the patterns, drop rclpy)
 ```
+
+The Quest **app itself** (Unity/OVRPlugin APK that emits the TCP/JSON above) is a
+separate build component. Phase 2A's Python is developed against the contract
+with a mock sender, then the real app is swapped in without changing Python.
 
 ## Proposed Files
 
 ```text
-clients/meta_quest_webxr/
-  package.json
-  index.html
-  src/
-    App.tsx
-    HandUMIXRClient.tsx
-    useHandUMIQuestClient.ts
-    types.ts
-
 src/handumi/tracking/
-  meta_quest.py          # receiver, frame model, latest-frame buffer
-  transforms.py          # explicit frame/calibration transforms
+  meta_quest.py          # TCP/JSON receiver + UDP time-sync, frame model,
+                         #   latest-frame buffer, tracked/valid + both clocks
+  transforms.py          # Unity->workspace + mounting offset (unit-tested)
+  mock_quest_sender.py   # emits the TCP/JSON contract for offline dev/tests
 
 src/handumi/capture/
-  live_viser.py          # Quest + Feetech + IK + Viser loop
+  live_tracking.py       # Phase 2A: Quest + Feetech + Rerun trajectory (no robot)
+  live_viser.py          # [2B] adds IK + ViserSim robot follow-along
+
+tests/tracking/
+  test_transforms.py     # Unity<->workspace conversions, mounting offset
 
 configs/
-  tracking_meta_quest.yaml
+  tracking_meta_quest.yaml   # quest_ip, tcp_port, sync_port, calibration
+
+clients/quest_app/         # native Unity/OVRPlugin app (separate build) that
+                           #   emits the TCP/JSON contract above
 ```
+
+Phase 2A builds `meta_quest.py`, `transforms.py`, `mock_quest_sender.py`,
+`live_tracking.py`, and the transform tests. `live_viser.py` is **[2B]**. The
+native `clients/quest_app/` is its own build track, developed against the same
+contract.
 
 Python scripts:
 
 ```text
-PYTHONPATH=src python scripts/live_viser.py
+PYTHONPATH=src python scripts/live_tracking.py            # Phase 2A
 PYTHONPATH=src python scripts/record_handumi.py --tracking-backend meta_quest
+PYTHONPATH=src python scripts/live_viser.py               # [2B]
 ```
 
 Direct dependencies to add when implementing:
 
 ```text
-viser
-websockets
+(none new for Phase 2A — TCP/UDP use the Python stdlib `socket`)
+viser   # [2B] only, for the robot view
 ```
 
-`viser` should be direct because HandUMI imports it directly. `websockets` is
-the simplest Python server dependency for the Quest receiver.
+The Quest receiver needs no `websockets`/TLS dependency: a plain stdlib TCP
+socket plus a UDP sync socket is enough on the LAN.
 
-## HTTPS / WSS Requirement
+## Transport & Network
 
-Quest Browser WebXR should be treated as a secure-context workflow.
-
-Use one of these:
+Plain LAN sockets, no TLS:
 
 ```text
-local HTTPS dev server + trusted certificate
-deployed HTTPS static client + WSS Python endpoint
-reverse proxy that terminates TLS and forwards to Python
+TCP  : per-sample newline-delimited JSON pose stream
+UDP  : NTP-style time-sync (PC pings, Quest echoes its clock)
 ```
 
-The `axol-vr` client already assumes:
+Connection model (following yubi): the **PC dials the Quest** — the Quest app is
+the TCP server, the workstation connects to `quest_ip:tcp_port` and binds the
+UDP `sync_port`. Defaults mirror yubi (`tcp_port: 65432`, `sync_port: 42000`);
+all configurable in `configs/tracking_meta_quest.yaml`.
 
 ```text
-wss://hostname:port/ws
+PC  --TCP connect-->  quest_ip:tcp_port     (pose stream in)
+PC  <--UDP echo-->    quest_ip:sync_port    (clock offset)
 ```
 
-HandUMI should keep that convention.
+Notes:
 
-## Live Viser Loop
+- The Quest needs a reachable LAN IP. On DHCP it can change; pin it or read it
+  from the headset before a session.
+- `pc_monotonic_ns` is stamped on receive; `device_time_ns` comes from the app;
+  `offset = median(pc_monotonic_ns - device_time_ns)` aligns them.
+- No secure context / certificates are required (this was a WebXR-only
+  constraint that no longer applies).
 
-Loop:
+## Live Tracking Loop
 
-1. Receive latest Quest left/right `gripSpace` poses.
+Loop. Steps 1–3, 4, 9, 10 are Phase 2A (build now). Steps 5–8 are **[2B]
+deferred** (IK + Viser robot follow-along — do not build yet).
+
+1. Receive latest Quest left/right controller poses (with `tracked`/`valid`).
 2. Read Feetech left/right gripper width.
 3. Build the 16D HandUMI state:
 
@@ -371,18 +624,53 @@ Loop:
 ```
 
 4. Apply workspace calibration and axis transform.
-5. Convert raw state into left/right target poses.
-6. Solve IK for the selected embodiment.
-7. Insert gripper width into the command vector.
-8. Call `ViserSim.motion_control(left=..., right=...)`.
+5. **[2B]** Convert raw state into left/right target poses.
+6. **[2B]** Solve IK for the selected embodiment.
+7. **[2B]** Insert gripper width into the command vector.
+8. **[2B]** Call `ViserSim.motion_control(left=..., right=...)`.
 9. Log tracking FPS, dropped frames, Feetech width, and camera frames to Rerun.
+10. Log the left/right controller poses to a Rerun 3D view so the operator can
+    see the trajectory traced by each gripper.
+
+For Phase 2A the loop ends at step 4 + the Rerun logging (9, 10): tracked poses
+are calibrated and visualized, but no robot is driven yet.
 
 Recommended split:
 
 ```text
-Rerun = USB cameras + Feetech ticks/mm/m + tracking FPS
-Viser = robot pose + controller frames + workspace axes
+Rerun = USB gripper cameras
+      + Feetech ticks/mm/m
+      + tracking FPS / dropped frames
+      + 3D controller trajectory view        (Phase 2A)
+Viser = robot pose + controller frames + workspace axes   [2B, deferred]
 ```
+
+## Rerun 3D Trajectory View
+
+Because the operator has no headset display, Rerun on the workstation is the
+primary spatial feedback. In addition to the camera and gripper-width panels,
+the Rerun blueprint must include a **3D view that shows the path traced by each
+controller**, similar to a UMI-style trajectory plot:
+
+```text
+observation.tracking.left_pose   -> position + orientation axes (left)
+observation.tracking.right_pose  -> position + orientation axes (right)
+observation.tracking.left_trail  -> growing 3D line strip of left positions
+observation.tracking.right_trail -> growing 3D line strip of right positions
+```
+
+Conventions:
+
+- Use a fixed-length world grid so the trajectory has a stable reference.
+- Color left and right consistently with the existing Feetech series
+  (left = cyan, right = magenta) so panels read together.
+- Log poses in the calibrated `handumi_workspace` frame, not raw
+  `quest_local_floor`, so the trail matches the Viser robot view.
+- Cap the trail to a rolling window (e.g. last N seconds) so the line strip
+  does not grow unbounded during long sessions.
+
+The blueprint extends the current `teleoperate_handumi` layout (wrist cameras +
+gripper-width / normalized / ticks time series) with this `Spatial3DView`.
 
 ## PICO Compatibility
 
@@ -412,23 +700,39 @@ The Meta Quest backend should normalize to this same shape.
 
 ## Acceptance Criteria
 
-Phase 2 is ready when:
+Phase 2A (motion tracking) is ready when:
 
-- Quest Browser connects to the live Viser server over WSS.
-- Moving the left/right HandUMI grippers updates left/right frames in Viser.
+- The Quest client connects to the workstation with the headset neck-mounted
+  (no operator HUD required).
+- Each controller pose arrives in Python with `tracked`/`valid` flags and both
+  `device_time_ns` and `pc_monotonic_ns` timestamps.
+- Coordinate / calibration transforms live in unit-tested Python.
+- Rerun shows a 3D view tracing each controller's trajectory, plus the two
+  gripper wrist cameras and the Feetech width series.
+- Moving each gripper visibly draws its trajectory in the Rerun 3D view.
 - Opening/closing each physical gripper updates Feetech width in Rerun.
-- The Viser robot follows the controller-mounted grippers.
-- Reset/calibration is explicit and repeatable.
+- Reset/calibration is explicit and repeatable, with confirmation surfaced on
+  the workstation (no headset UI).
 - `PYTHONPATH=src python scripts/record_handumi.py --tracking-backend meta_quest` writes the same 16D raw state
   layout used by the current dataset schema.
 - No gripper width is taken from Quest trigger values.
 
+Phase 2B (deferred) adds: the Viser robot follows the controller-mounted
+grippers via live IK.
+
 ## References
 
-- Local guide: `../axol-vr`
-- WebXR Device API: https://www.w3.org/TR/webxr/
-- WebXR Gamepads Module: https://www.w3.org/TR/webxr-gamepads-module-1/
-- Meta WebXR overview: https://developers.meta.com/horizon/documentation/web/webxr-overview/
-- Meta WebXR controllers guide: https://developers.meta.com/horizon/documentation/web/webxr-first-steps-chapter2/
-- WebXR input profiles: https://github.com/immersive-web/webxr-input-profiles
-- Viser docs: https://viser.studio/
+- Wearable form factor inspiration: "Portable YUBI" body-worn rig (neck-mounted
+  HMD as tracker, gripper-mounted controllers + cameras).
+- **Primary** motion-tracking reference: `../yubi-sw` (airoa-org `yubi`),
+  `airoa_quest/airoa_quest_bridge/` — native Quest→PC TCP/JSON pose pipeline,
+  Unity→robot coordinate conversion, `tracked`/`valid` flags, device/PC clock
+  alignment (UDP NTP-style sync).
+- Meta XR / OVRPlugin (native app, controller poses + OVR tracking space):
+  https://developers.meta.com/horizon/documentation/unity/
+- **Secondary** reference (logic only, not the chosen transport): `../axol-vr`
+  — button state-machine + reconnect ideas, ported to Python. WebXR links below
+  are background only since HandUMI does not use the browser/WebXR path:
+  - WebXR Device API: https://www.w3.org/TR/webxr/
+  - WebXR input profiles: https://github.com/immersive-web/webxr-input-profiles
+- Viser docs (for [2B] only): https://viser.studio/

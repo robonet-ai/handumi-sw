@@ -170,8 +170,24 @@ observation.feetech.right_normalized
 `observation.state[14]` and `observation.state[15]` are left/right gripper width
 in meters.
 
+## Motion Tracking (Phase 2)
+
+Phase 2 adds Meta Quest controller tracking. The Quest is **body-worn on the
+neck as a tracking base** (no headset UI) with a controller mounted on each
+gripper; the two gripper wrist cameras are the only cameras. The transport is a
+**yubi-style native Quest app streaming poses over TCP/JSON** (plus UDP
+time-sync) — not WebXR. Phase 2A focuses on the motion tracking itself:
+receiving controller poses in Python, calibrating them with unit-tested
+transforms, merging Feetech width into the 16D raw state, and rendering a **live
+3D controller trajectory in Rerun** (alongside the cameras and gripper-width
+series). The Viser 3D robot follow-along is deferred to Phase 2B. See
+[docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md); `../yubi-sw`
+is the primary reference (`../axol-vr` is secondary, for state-machine logic).
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md)
-- [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md)
+- [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) — Meta Quest
+  motion tracking (body-worn, no-UI), Rerun trajectory rendering, yubi-sw/axol-vr
+  references
 - [docs/add-new-embodiment.md](docs/add-new-embodiment.md)
