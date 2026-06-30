@@ -18,6 +18,7 @@ later through offline retargeting / IK.
 ## Requirements
 
 - Linux workstation with USB access.
+- Python 3.12.
 - `uv` installed.
 - Two USB wrist cameras.
 - Two Feetech servos used as gripper encoders.
@@ -25,20 +26,19 @@ later through offline retargeting / IK.
 
 ## Installation
 
-From a fresh clone:
-
 ```bash
 git clone <repo-url> handumi-sw
 cd handumi-sw
-uv sync
+uv sync --python "$(command -v python3.12)"
 source .venv/bin/activate
-uv pip install -e .
 ```
 
-If you are already inside the repository, start at `uv sync`.
+Verify:
 
-This installs LeRobot Feetech support, Rerun visualization, OpenCV camera
-support, and the `handumi-*` CLI commands.
+```bash
+python --version
+PYTHONPATH=src python scripts/record_handumi.py --help
+```
 
 ## Checkpoint 1: Cameras + Feetech Width
 
@@ -57,10 +57,28 @@ checkpoint.
 
 ### 1. Feetech Ports And IDs
 
-Connect the Feetech USB adapters and scan all serial ports:
+Identify serial ports by unplugging/plugging one gripper adapter at a time:
 
 ```bash
-handumi-find-servos --all-ports --start-id 0 --end-id 20
+while true; do
+  clear
+  echo "=== $(date) ==="
+  ls -l /dev/serial/by-id 2>/dev/null || true
+  ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+  sleep 2
+done
+```
+
+Use `/dev/serial/by-id/...` when available; otherwise use `/dev/ttyACM*` or
+`/dev/ttyUSB*`.
+
+Scan servos:
+
+```bash
+PYTHONPATH=src python scripts/setup/scan_feetech.py \
+  --all-ports \
+  --start-id 0 \
+  --end-id 20
 ```
 
 Expected convention:
@@ -70,53 +88,59 @@ left gripper  -> servo ID 0
 right gripper -> servo ID 1
 ```
 
-If a servo still has another ID, connect one servo at a time and write the
-target ID:
+Assign IDs one side at a time if needed:
+
+Left gripper:
 
 ```bash
-handumi-setup-servos \
-  --write-id left \
+PYTHONPATH=src python scripts/setup/write_feetech_id.py \
+  --port /dev/SERIAL_LEFT \
   --current-id <current_left_id> \
-  --left-id 0 \
-  --left-port /dev/ttyUSB_LEFT \
-  --config configs/feetech.yaml
+  --new-id 0
+```
 
-handumi-setup-servos \
-  --write-id right \
+Right gripper:
+
+```bash
+PYTHONPATH=src python scripts/setup/write_feetech_id.py \
+  --port /dev/SERIAL_RIGHT \
   --current-id <current_right_id> \
-  --right-id 1 \
-  --right-port /dev/ttyUSB_RIGHT \
-  --config configs/feetech.yaml
+  --new-id 1
 ```
 
-Then save the final left/right port mapping:
+Verify:
 
 ```bash
-handumi-setup-servos \
-  --left-id 0 \
-  --right-id 1 \
-  --left-port /dev/ttyUSB_LEFT \
-  --right-port /dev/ttyUSB_RIGHT \
-  --config configs/feetech.yaml
+PYTHONPATH=src python scripts/setup/scan_feetech.py \
+  --all-ports \
+  --start-id 0 \
+  --end-id 20
 ```
 
-If both servos share one serial bus, use:
+Save mapping:
 
 ```bash
-handumi-setup-servos \
+PYTHONPATH=src python scripts/setup/save_gripper_config.py \
   --left-id 0 \
   --right-id 1 \
-  --port /dev/ttyUSB0 \
-  --config configs/feetech.yaml
+  --left-port /dev/SERIAL_LEFT \
+  --right-port /dev/SERIAL_RIGHT
+```
+
+Check encoder ticks:
+
+```bash
+PYTHONPATH=src python scripts/setup/monitor_gripper_ticks.py \
+  --port-id /dev/SERIAL_LEFT 0 \
+  --port-id /dev/SERIAL_RIGHT 1
 ```
 
 ### 2. Calibrate Gripper Opening
 
-Measure the physical maximum opening of the grippers in millimeters. Then run:
+Measure max opening in millimeters, then run:
 
 ```bash
-handumi-calibrate-grippers \
-  --config configs/feetech.yaml \
+PYTHONPATH=src python scripts/setup/calibrate_gripper_width.py \
   --max-width-mm 80
 ```
 
@@ -133,13 +157,24 @@ width in meters.
 
 ### 3. Cameras
 
-Connect both USB wrist cameras and run:
+Identify cameras by unplugging/plugging one camera at a time:
 
 ```bash
-handumi-find-cameras
+while true; do
+  clear
+  echo "=== $(date) ==="
+  v4l2-ctl --list-devices
+  sleep 2
+done
 ```
 
-Use the detected indices as:
+Scan OpenCV indices:
+
+```bash
+PYTHONPATH=src python scripts/setup/scan_cameras.py
+```
+
+Use camera IDs in this order:
 
 ```text
 first --cam-ids value  -> observation.images.left_wrist
@@ -151,7 +186,7 @@ second --cam-ids value -> observation.images.right_wrist
 Before recording, run the live Rerun monitor:
 
 ```bash
-handumi-teleoperate \
+PYTHONPATH=src python -m handumi.capture.teleoperate_handumi \
   --cam-ids 0 2 \
   --feetech-config configs/feetech.yaml \
   --fps 30
@@ -172,7 +207,7 @@ correct before recording.
 ### 5. Record Dataset
 
 ```bash
-handumi-record \
+PYTHONPATH=src python scripts/record_handumi.py \
   --cam-ids 0 2 \
   --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_width_test \
@@ -227,7 +262,7 @@ lerobot-dataset-viz \
 After the hardware checkpoint works, enable PICO streams with:
 
 ```bash
-handumi-record \
+PYTHONPATH=src python scripts/record_handumi.py \
   --use-pico \
   --pico-mandos \
   --cam-ids 0 2 \
@@ -268,7 +303,7 @@ bash bin/piper/replay_from_dataset.sh --episode 0 --dry-run
 ├── bin/                     # Shell launchers
 ├── configs/                 # Camera, Feetech, tracking configs
 ├── docs/                    # Architecture and embodiment guide
-├── scripts/                 # Pipeline CLI wrappers
+├── scripts/                 # Manual hardware and pipeline scripts
 ├── src/handumi/             # Core package
 ├── tests/                   # Automated tests
 └── utils/                   # Upload helpers
@@ -278,7 +313,6 @@ bash bin/piper/replay_from_dataset.sh --episode 0 --dry-run
 src/handumi/
 ├── capture/                 # HandUMI raw recorder
 ├── cameras/                 # USB wrist cameras
-├── cli/                     # Hardware setup commands
 ├── dataset/                 # Raw schema, LeRobot IO, conversion
 ├── feetech/                 # Feetech encoder bus/calibration/gripper widths
 ├── replay/                  # PICO IK replay and robot replay
@@ -291,5 +325,6 @@ src/handumi/
 
 | Doc | Description |
 |-----|-------------|
-| [docs/architecture.md](docs/architecture.md) | System architecture, raw schema, configs, and entrypoints |
+| [docs/architecture.md](docs/architecture.md) | System architecture, raw schema, configs, and manual scripts |
+| [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) | Meta Quest/WebXR tracking and live Viser plan |
 | [docs/add-new-embodiment.md](docs/add-new-embodiment.md) | How to add a new robot embodiment |

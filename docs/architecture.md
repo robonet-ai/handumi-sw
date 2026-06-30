@@ -56,7 +56,7 @@ PICO body pose -> retargeting -> IK -> Piper/Axol dataset -> replay/sim
 |-- bin/                     # Shell launchers
 |-- configs/                 # Hardware/configuration defaults
 |-- docs/                    # Architecture and embodiment guide
-|-- scripts/                 # Pipeline CLI wrappers
+|-- scripts/                 # Manual hardware and pipeline scripts
 |-- src/handumi/             # Core package
 |-- tests/                   # Automated tests
 `-- utils/                   # Upload/helper scripts
@@ -66,7 +66,6 @@ PICO body pose -> retargeting -> IK -> Piper/Axol dataset -> replay/sim
 src/handumi/
 |-- capture/                 # Recording loop and capture features
 |-- cameras/                 # USB cameras and preview helpers
-|-- cli/                     # Hardware setup commands
 |-- tracking/                # PICO / tracking backends
 |-- feetech/                 # Feetech servo encoders and calibration
 |-- dataset/                 # LeRobot schemas, readers, writers, conversion
@@ -82,7 +81,6 @@ src/handumi/
 |--------|------|--------------|
 | `capture/` | episode timing, frame reads, raw recording | robot IK, robot joint names |
 | `cameras/` | camera discovery/read/preview | dataset conversion |
-| `cli/` | hardware setup commands | reusable hardware logic |
 | `tracking/` | PICO/tracker pose reads | robot-specific transforms |
 | `feetech/` | servo IDs, encoder reads, width calibration | robot action layout |
 | `dataset/` | LeRobot IO, schema, metadata, conversion | hardware polling |
@@ -161,6 +159,18 @@ servo ID 0 -> left HandUMI gripper
 servo ID 1 -> right HandUMI gripper
 ```
 
+Setup is side-by-side, not blind global assignment:
+
+```text
+1. identify left/right serial ports by unplug/plug
+2. scan Feetech IDs on those ports
+3. assign ID 0 to left and ID 1 to right if needed
+4. save left.port and right.port in configs/feetech.yaml
+5. validate gripper encoder ticks while opening/closing
+6. identify left/right USB cameras physically
+7. record with --cam-ids <left_camera> <right_camera>
+```
+
 Each gripper can have its own USB serial port, or both can share one Feetech
 bus. `configs/feetech.yaml` stores the left/right port mapping, closed/open
 encoder ticks, and `max_width_mm`.
@@ -203,7 +213,37 @@ Piper: [j1, j2, j3, j4, j5, j6, unused, gripper]
 Axol : [j1, j2, j3, j4, j5, j6, j7, gripper]
 ```
 
-## Entry Points
+## Phase 2 Tracking / Live Viser
+
+After the cameras + Feetech checkpoint is validated on hardware, the next
+tracking backend is Meta Quest through WebXR. The planned live path is:
+
+```text
+Meta Quest WebXR gripSpace poses
+  + Feetech gripper widths
+  -> HandUMI raw state
+  -> retargeting / IK
+  -> ViserSim live robot visualization
+```
+
+Details are tracked in [phase-2-motion-tracking.md](phase-2-motion-tracking.md).
+
+## Manual Scripts
+
+During hardware setup, HandUMI uses direct scripts from the repo instead of
+installed CLIs. Once the hardware flow is stable, the validated commands can be
+promoted to packaged entrypoints.
+
+Setup scripts:
+
+```text
+scripts/setup/scan_feetech.py
+scripts/setup/monitor_gripper_ticks.py
+scripts/setup/write_feetech_id.py
+scripts/setup/save_gripper_config.py
+scripts/setup/calibrate_gripper_width.py
+scripts/setup/scan_cameras.py
+```
 
 Pipeline scripts:
 
@@ -215,20 +255,10 @@ scripts/compare_axis.py                -> handumi.retargeting.compare_axis
 scripts/piper/replay_from_dataset.py   -> handumi.replay.piper
 ```
 
-Hardware setup CLIs:
-
-```text
-handumi-find-servos
-handumi-find-cameras
-handumi-setup-servos
-handumi-calibrate-grippers
-handumi-teleoperate
-handumi-record
-```
-
-`handumi-teleoperate` is the LeRobot-style live inspection loop. It does not
-write a dataset; it streams cameras and Feetech aperture signals to Rerun so the
-operator can validate hardware before `handumi-record`.
+`python -m handumi.capture.teleoperate_handumi` is the LeRobot-style live
+inspection loop. It does not write a dataset; it streams cameras and Feetech
+aperture signals to Rerun so the operator can validate hardware before
+`scripts/record_handumi.py`.
 
 Shell launchers:
 

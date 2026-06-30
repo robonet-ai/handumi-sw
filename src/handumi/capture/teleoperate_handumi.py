@@ -197,7 +197,7 @@ def _assert_calibrated(config) -> None:
         raise SystemExit(
             "Feetech calibration is incomplete for "
             + ", ".join(missing)
-            + ". Run `handumi-calibrate-grippers` first."
+            + ". Calibrate configs/feetech.yaml before live monitoring."
         )
 
 

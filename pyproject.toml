@@ -31,14 +31,6 @@ piper = [
     "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
 ]
 
-[project.scripts]
-handumi-find-servos = "handumi.cli.find_servos:main"
-handumi-find-cameras = "handumi.cli.find_cameras:main"
-handumi-setup-servos = "handumi.cli.setup_servos:main"
-handumi-calibrate-grippers = "handumi.cli.calibrate_grippers:main"
-handumi-record = "handumi.capture.record_handumi:main"
-handumi-teleoperate = "handumi.capture.teleoperate_handumi:main"
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
