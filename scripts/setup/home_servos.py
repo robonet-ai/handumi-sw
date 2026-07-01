@@ -53,7 +53,9 @@ def main() -> None:
     parser.add_argument("--interval-s", type=float, default=0.1)
     args = parser.parse_args()
 
-    config = load_config(resolve_config_path(args.config, seed=True))
+    config_path = resolve_config_path(args.config, seed=True)
+    print(f"Using config: {config_path}")
+    config = load_config(config_path)
     sides = ["left", "right"] if args.side == "both" else [args.side]
     for side in sides:
         calibration = getattr(config, side)

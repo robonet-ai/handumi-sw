@@ -59,6 +59,7 @@ def main() -> None:
     # Read from / write to the machine-local cache (seeded from the repo template
     # on first use); an explicit --config still wins.
     args.config = resolve_config_path(args.config, seed=True)
+    print(f"Using config: {args.config}")
     args.func(args)
 
 

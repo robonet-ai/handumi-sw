@@ -10,6 +10,9 @@ ports, servo homing, gripper-width calibration. Run commands live in
 > template `configs/feetech.yaml` on first run and write back to it. Homing itself
 > is stored in the servo's EEPROM (persists across power cycles and laptops). Pass
 > `--config` to any setup tool to override the path.
+>
+> **Once the cache exists, editing `configs/feetech.yaml` has no effect** — every
+> setup tool prints `Using config: <path>` first; always edit *that* path.
 
 ## 1. Identify Ports
 
