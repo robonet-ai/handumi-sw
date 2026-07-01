@@ -22,7 +22,7 @@ Check:
 
 ```bash
 python --version
-PYTHONPATH=src python scripts/record_handumi_pico.py --help
+python -m handumi.capture.record_handumi_pico --help
 ```
 
 ## Setup (one-time)
@@ -39,7 +39,7 @@ Everything below assumes that setup is done.
 ## Teleoperate (live monitor, no saving)
 
 ```bash
-PYTHONPATH=src python -m handumi.capture.teleoperate_handumi \
+python -m handumi.capture.teleoperate_handumi \
   --feetech-config configs/feetech.yaml \
   --fps 30
 ```
@@ -55,7 +55,7 @@ matching your tracking source.
 ### PICO / XRoboToolkit
 
 ```bash
-PYTHONPATH=src python scripts/record_handumi_pico.py \
+python -m handumi.capture.record_handumi_pico \
   --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
@@ -82,10 +82,10 @@ First set up and smoke-test per [README_quest.md](README_quest.md), then:
 
 ```bash
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
-PYTHONPATH=src python scripts/live_tracking.py
+python -m handumi.capture.live_tracking
 
 # record a dataset (16D state + observation.quest.* poses/clocks)
-PYTHONPATH=src python scripts/record_handumi_quest.py \
+python -m handumi.capture.record_handumi_quest \
   --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_quest_test \
   --output-dir outputs/datasets/handumi_quest_test \

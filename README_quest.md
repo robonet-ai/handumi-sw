@@ -21,10 +21,10 @@ app. Two terminals:
 
 ```bash
 # terminal 1 — fake Quest (TCP pose stream + UDP time-sync on localhost)
-PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
+python -m handumi.tracking.mock_quest_sender
 
 # terminal 2 — live tracking to Rerun (no cameras/Feetech needed)
-PYTHONPATH=src python scripts/live_tracking.py \
+python -m handumi.capture.live_tracking \
   --quest-ip 127.0.0.1 --skip-cameras --skip-feetech
 ```
 
@@ -136,7 +136,7 @@ timeout 5 bash -c 'exec 3<>/dev/tcp/10.104.18.172/65432 && echo ABIERTO || echo 
 cameras). It prints one self-updating line; `Ctrl+C` to stop:
 
 ```bash
-PYTHONPATH=src python -m handumi.tracking.meta_quest \
+python -m handumi.tracking.meta_quest \
   --config configs/tracking_meta_quest.yaml
 ```
 
@@ -161,7 +161,7 @@ With the stream verified, visualize the controllers as a live 3D trajectory —
 still without the gripper hardware, so skip cameras and Feetech:
 
 ```bash
-PYTHONPATH=src python scripts/live_tracking.py --skip-cameras --skip-feetech
+python -m handumi.capture.live_tracking --skip-cameras --skip-feetech
 ```
 
 A Rerun window opens with a 3D grid. Move the controllers and their trajectories
@@ -193,7 +193,7 @@ the full live/record commands (with cameras + Feetech) in [README.md](README.md)
   *TCP/JSON Payload*:
 
   ```bash
-  PYTHONPATH=src python -m handumi.tracking.meta_quest \
+  python -m handumi.tracking.meta_quest \
     --config configs/tracking_meta_quest.yaml --print-raw
   ```
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# bin/record.sh  –  launcher for scripts/record_handumi_pico.py
+# bin/record.sh  –  launcher for handumi.capture.record_handumi_pico
 #
 # Usage (all arguments are optional; defaults shown below):
 #
@@ -127,7 +127,7 @@ if [[ -n "${CAM_IDS}" ]]; then
     CAMERA_ARGS+=(--cam-ids ${CAM_IDS})
 fi
 
-exec python "${REPO_ROOT}/scripts/record_handumi_pico.py" \
+exec python -m handumi.capture.record_handumi_pico \
     "${CAMERA_ARGS[@]}" \
     --cam-width  "${CAM_WIDTH}" \
     --cam-height "${CAM_HEIGHT}" \

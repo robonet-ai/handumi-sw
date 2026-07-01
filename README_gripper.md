@@ -7,7 +7,7 @@ the run commands live in the main [README.md](README.md).
 ## 1. Identify Ports
 
 ```bash
-PYTHONPATH=src python scripts/setup/setup_ports.py
+python scripts/setup/setup_ports.py
 ```
 
 Connect/disconnect one device at a time and note the changed port.
@@ -43,7 +43,7 @@ right_wrist:
 ## 2. Check Feetech Ticks
 
 ```bash
-PYTHONPATH=src python scripts/setup/calibrate_grippers.py monitor
+python scripts/setup/calibrate_grippers.py monitor
 ```
 
 Open/close each gripper and confirm `ticks` changes.
@@ -55,8 +55,8 @@ If a gripper's travel crosses that seam, the width readout flips or saturates.
 Homing stores a correction so the current shaft angle reads 2048 (centre):
 
 ```bash
-PYTHONPATH=src python scripts/setup/home_servos.py              # both sides
-PYTHONPATH=src python scripts/setup/home_servos.py --side right # one side
+python scripts/setup/home_servos.py              # both sides
+python scripts/setup/home_servos.py --side right # one side
 ```
 
 Hold the gripper at **mid-travel** (half open, ~2040 ticks) and press ENTER so
@@ -70,8 +70,8 @@ grippers roughly closed** (away from the seam).
 ## 4. Calibrate Gripper Width
 
 ```bash
-PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate
-PYTHONPATH=src python scripts/setup/calibrate_grippers.py calibrate --side right
+python scripts/setup/calibrate_grippers.py calibrate
+python scripts/setup/calibrate_grippers.py calibrate --side right
 ```
 
 For each side:
