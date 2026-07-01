@@ -26,7 +26,7 @@ Usage
       --episode-time-s 60 \
       --fps 30
 
-  (See bin/record.sh for a ready-made launcher.)
+  (See bin/record_pico.sh for a ready-made launcher.)
 """
 
 import argparse

@@ -273,9 +273,9 @@ recording.
 Shell launchers:
 
 ```text
-bin/record.sh
-bin/process_handumi_to_lerobot.sh
-bin/piper/replay_from_dataset.sh
+bin/record_pico.sh                     # PICO recorder launcher (capture)
+bin/process_handumi_to_lerobot.sh      # legacy: dataset -> robot embodiment
+bin/piper/replay_from_dataset.sh       # legacy: replay a dataset on Piper
 ```
 
 Automated tests live only under `tests/`.

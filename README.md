@@ -68,7 +68,7 @@ python -m handumi.capture.record_handumi_pico \
 Or use the launcher (wraps the PICO recorder):
 
 ```bash
-bash bin/record.sh \
+bash bin/record_pico.sh \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
   --task "gripper width hardware test" \

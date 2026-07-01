@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# bin/record.sh  –  launcher for handumi.capture.record_handumi_pico
+# bin/record_pico.sh  –  launcher for handumi.capture.record_handumi_pico
 #
 # Usage (all arguments are optional; defaults shown below):
 #
-#   bash bin/record.sh \
+#   bash bin/record_pico.sh \
 #       --repo-id local/handumi_dataset \
 #       --output-dir datasets/my_dataset \
 #       --task "Pick and place cube" \
@@ -34,9 +34,9 @@ VENV="${REPO_ROOT}/.venv"
 if [[ -f "${VENV}/bin/activate" ]]; then
     # shellcheck source=/dev/null
     source "${VENV}/bin/activate"
-    echo "[record.sh] Virtual environment activated: ${VENV}"
+    echo "[record_pico.sh] Virtual environment activated: ${VENV}"
 else
-    echo "[record.sh] WARNING: no .venv found at ${VENV}. Using system Python."
+    echo "[record_pico.sh] WARNING: no .venv found at ${VENV}. Using system Python."
 fi
 
 # ── Make the handumi package importable ────────────────────────────────────────
@@ -99,7 +99,7 @@ done
 # ── Print configuration ────────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║          handumi  –  multi-modal recording                ║"
+echo "║                 handumi – PICO recording                 ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf "║  Cameras       : %-40s║\n" "${CAM_IDS:-from config}"
 printf "║  Camera config : %-40s║\n" "${CAMERA_CONFIG}"
