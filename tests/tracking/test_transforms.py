@@ -167,9 +167,12 @@ class MountingOffsetsTest(unittest.TestCase):
 
     def test_from_repo_config_loads(self):
         m = MountingOffsets.from_yaml(CONFIG)
-        # Repo ships identity placeholders until measured.
-        self.assertTrue(np.allclose(m.left.as_matrix(), np.eye(4)))
-        self.assertTrue(np.allclose(m.right.as_matrix(), np.eye(4)))
+        # Partial calibration: only the X (forward) reach is measured so far;
+        # rotation is still identity pending Y/Z + rotation measurement.
+        self.assertTrue(np.allclose(m.left.position, [0.140, 0.0, 0.0]))
+        self.assertTrue(np.allclose(m.right.position, [0.140, 0.0, 0.0]))
+        self.assertTrue(np.allclose(m.left.quaternion, [0.0, 0.0, 0.0, 1.0]))
+        self.assertTrue(np.allclose(m.right.quaternion, [0.0, 0.0, 0.0, 1.0]))
 
 
 class PipelineTest(unittest.TestCase):
