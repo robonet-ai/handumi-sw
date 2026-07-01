@@ -8,7 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import FeetechConfig, GripperCalibration, load_config, save_config
+from handumi.feetech.calibration import (
+    FeetechConfig,
+    GripperCalibration,
+    load_config,
+    resolve_config_path,
+    save_config,
+)
 
 
 @dataclass
@@ -27,7 +33,12 @@ class Monitor:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor and calibrate HandUMI Feetech gripper encoders.")
-    parser.add_argument("--config", type=Path, default=Path("configs/feetech.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Override the config path (default: per-user cache, see resolve_config_path).",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     monitor = subparsers.add_parser("monitor", help="Watch encoder ticks for configured grippers.")
@@ -45,6 +56,9 @@ def main() -> None:
     calibrate.set_defaults(func=cmd_calibrate)
 
     args = parser.parse_args()
+    # Read from / write to the machine-local cache (seeded from the repo template
+    # on first use); an explicit --config still wins.
+    args.config = resolve_config_path(args.config, seed=True)
     args.func(args)
 
 

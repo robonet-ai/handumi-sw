@@ -18,7 +18,12 @@ from handumi.cameras.usb import (
     read_camera_frames,
     resolve_camera_ids,
 )
-from handumi.feetech import FeetechGripperPair, GripperWidths, load_config
+from handumi.feetech import (
+    FeetechGripperPair,
+    GripperWidths,
+    load_config,
+    resolve_config_path,
+)
 from handumi.feetech.bus import FeetechUnavailableError
 
 log = logging.getLogger("handumi.teleoperate")
@@ -35,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cam-fps", type=int, default=30)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--duration-s", type=float, default=None)
-    parser.add_argument("--feetech-config", type=Path, default=Path("configs/feetech.yaml"))
+    parser.add_argument("--feetech-config", type=Path, default=None)
     parser.add_argument("--feetech-port", type=str, default=None)
     parser.add_argument("--skip-feetech", action="store_true")
     parser.add_argument("--display-ip", type=str, default=None)
@@ -73,7 +78,7 @@ def main() -> None:
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
     else:
-        feetech_config = load_config(args.feetech_config)
+        feetech_config = load_config(resolve_config_path(args.feetech_config))
         if args.feetech_port is not None:
             feetech_config = type(feetech_config)(
                 port=args.feetech_port,
@@ -277,7 +282,7 @@ def _assert_calibrated(config) -> None:
         raise SystemExit(
             "Feetech calibration is incomplete for "
             + ", ".join(missing)
-            + ". Calibrate configs/feetech.yaml before live monitoring."
+            + ". Run scripts/setup/calibrate_grippers.py calibrate before live monitoring."
         )
 
 

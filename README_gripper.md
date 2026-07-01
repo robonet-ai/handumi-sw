@@ -1,7 +1,15 @@
 # Gripper Setup (Feetech + Cameras)
 
-One-time hardware setup before teleoperating or recording: serial ports, servo
-homing, gripper-width calibration. Run commands live in [README.md](README.md).
+One-time **per-laptop** hardware setup before teleoperating or recording: serial
+ports, servo homing, gripper-width calibration. Run commands live in
+[README.md](README.md).
+
+> **Where calibration is stored.** Ports and tick ranges are machine-specific, so
+> they live in a per-user cache — `~/.cache/handumi/feetech.yaml` (or
+> `$XDG_CACHE_HOME/...`), **not** in git. The setup tools seed it from the tracked
+> template `configs/feetech.yaml` on first run and write back to it. Homing itself
+> is stored in the servo's EEPROM (persists across power cycles and laptops). Pass
+> `--config` to any setup tool to override the path.
 
 ## 1. Identify Ports
 
@@ -9,17 +17,18 @@ homing, gripper-width calibration. Run commands live in [README.md](README.md).
 python scripts/setup/setup_ports.py
 ```
 
-Connect/disconnect one device at a time and note the changed port.
-Use `Ctrl+C` to stop.
-
-The Feetech section shows each serial port and detected servo IDs:
+Connect/disconnect one device at a time and note the changed port. `Ctrl+C` to
+stop. The Feetech section shows each serial port and detected servo IDs, and
+prints the cache file to edit:
 
 ```text
 /dev/ttyACM0: ids=[0]
 /dev/ttyACM1: ids=[1]
+
+Edit servo_id/port in: /home/you/.cache/handumi/feetech.yaml
 ```
 
-Edit `configs/feetech.yaml`:
+Set each `servo_id`/`port` in that cache file:
 
 ```yaml
 left:
@@ -81,6 +90,6 @@ close gripper fully while watching live ticks, press ENTER
 ```
 
 Use `--side left|right` to recalibrate one gripper without disturbing the other.
-This updates `configs/feetech.yaml`.
+This writes to the per-user cache (`~/.cache/handumi/feetech.yaml`).
 
 Setup done — head back to [README.md](README.md) to teleoperate and record.

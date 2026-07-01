@@ -23,7 +23,12 @@ import sys
 from pathlib import Path
 
 from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import FeetechConfig, GripperCalibration, load_config
+from handumi.feetech.calibration import (
+    FeetechConfig,
+    GripperCalibration,
+    load_config,
+    resolve_config_path,
+)
 
 _ENCODER_CENTER = 2048
 _OK_TOLERANCE = 150
@@ -33,7 +38,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Centre HandUMI Feetech servos at 2048 (homing) to avoid the encoder seam."
     )
-    parser.add_argument("--config", type=Path, default=Path("configs/feetech.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Override the config path (default: per-user cache, see resolve_config_path).",
+    )
     parser.add_argument(
         "--side",
         choices=["left", "right", "both"],
@@ -43,7 +53,7 @@ def main() -> None:
     parser.add_argument("--interval-s", type=float, default=0.1)
     args = parser.parse_args()
 
-    config = load_config(args.config)
+    config = load_config(resolve_config_path(args.config, seed=True))
     sides = ["left", "right"] if args.side == "both" else [args.side]
     for side in sides:
         calibration = getattr(config, side)

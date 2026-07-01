@@ -57,6 +57,7 @@ from handumi.feetech import (
     FeetechGripperPair,
     GripperWidths,
     load_config,
+    resolve_config_path,
     zero_gripper_widths,
 )
 from handumi.feetech.bus import FeetechUnavailableError
@@ -475,8 +476,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--feetech-config",
         type=Path,
-        default=Path("configs/feetech.yaml"),
-        help="Feetech calibration/config YAML.",
+        default=None,
+        help="Feetech calibration/config YAML (default: per-user cache).",
     )
     p.add_argument(
         "--feetech-port",
@@ -766,7 +767,7 @@ def main() -> None:
     if args.skip_feetech:
         log.info("Feetech disabled: left/right gripper widths will be zero-filled.")
     else:
-        feetech_config = load_config(args.feetech_config)
+        feetech_config = load_config(resolve_config_path(args.feetech_config))
         if args.feetech_port is not None:
             feetech_config = type(feetech_config)(
                 port=args.feetech_port,

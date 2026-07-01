@@ -45,6 +45,7 @@ from handumi.feetech import (
     FeetechGripperPair,
     GripperWidths,
     load_config,
+    resolve_config_path,
     zero_gripper_widths,
 )
 from handumi.feetech.bus import FeetechUnavailableError
@@ -292,7 +293,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
-    p.add_argument("--feetech-config", type=Path, default=Path("configs/feetech.yaml"))
+    p.add_argument("--feetech-config", type=Path, default=None)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_quest")
@@ -458,7 +459,7 @@ def _connect_feetech(args) -> FeetechGripperPair | None:
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
         return None
-    feetech_config = load_config(args.feetech_config)
+    feetech_config = load_config(resolve_config_path(args.feetech_config))
     if args.feetech_port is not None:
         feetech_config = type(feetech_config)(
             port=args.feetech_port,

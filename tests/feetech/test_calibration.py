@@ -1,12 +1,17 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from handumi.feetech.calibration import (
+    REPO_TEMPLATE_PATH,
     FeetechConfig,
     GripperCalibration,
     load_config,
+    resolve_config_path,
     save_config,
+    user_config_path,
 )
 
 
@@ -56,6 +61,43 @@ class FeetechCalibrationTest(unittest.TestCase):
         )
         self.assertEqual(calibration.width_mm(1500), 40.0)
         self.assertEqual(calibration.width_m(1500), 0.04)
+
+
+class ResolveConfigPathTest(unittest.TestCase):
+    def test_explicit_override_wins(self):
+        explicit = Path("/tmp/whatever.yaml")
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                self.assertEqual(resolve_config_path(explicit), explicit)
+
+    def test_user_cache_path_follows_xdg(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                self.assertEqual(
+                    user_config_path(), Path(tmp) / "handumi" / "feetech.yaml"
+                )
+
+    def test_falls_back_to_template_without_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                self.assertEqual(resolve_config_path(), REPO_TEMPLATE_PATH)
+
+    def test_prefers_cache_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                cache = user_config_path()
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text("port: null\n", encoding="utf-8")
+                self.assertEqual(resolve_config_path(), cache)
+
+    def test_seed_creates_cache_from_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                path = resolve_config_path(seed=True)
+                self.assertEqual(path, user_config_path())
+                self.assertTrue(path.exists())
+                # Seeded from the template, so it loads as a valid (uncalibrated) config.
+                self.assertFalse(load_config(path).left.is_complete)
 
 
 if __name__ == "__main__":

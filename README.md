@@ -40,7 +40,6 @@ Everything below assumes that setup is done.
 
 ```bash
 python -m handumi.capture.teleoperate_handumi \
-  --feetech-config configs/feetech.yaml \
   --fps 30
 ```
 
@@ -56,7 +55,6 @@ matching your tracking source.
 
 ```bash
 python -m handumi.capture.record_handumi_pico \
-  --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
   --task "gripper width hardware test" \
@@ -86,7 +84,6 @@ python -m handumi.capture.live_tracking_quest
 
 # record a dataset (16D state + observation.quest.* poses/clocks)
 python -m handumi.capture.record_handumi_quest \
-  --feetech-config configs/feetech.yaml \
   --repo-id local/handumi_quest_test \
   --output-dir outputs/datasets/handumi_quest_test \
   --task "quest tracking test" --num-episodes 1 --episode-time-s 20

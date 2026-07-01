@@ -2,11 +2,47 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# The repo ships a checked-in template; the real, machine-specific calibration
+# (ports + tick ranges) lives in a per-user cache so it is never committed and
+# each laptop calibrates once. See resolve_config_path().
+REPO_TEMPLATE_PATH = Path("configs/feetech.yaml")
+
+
+def user_config_path() -> Path:
+    """Per-user Feetech config path: ``$XDG_CACHE_HOME/handumi/feetech.yaml``
+    (falling back to ``~/.cache/handumi/feetech.yaml``)."""
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base).expanduser() if base else Path.home() / ".cache"
+    return root / "handumi" / "feetech.yaml"
+
+
+def resolve_config_path(explicit: Path | None = None, *, seed: bool = False) -> Path:
+    """Resolve which Feetech config file to use.
+
+    Precedence: explicit ``--config`` override > per-user cache > repo template.
+    With ``seed=True`` (used by the setup/calibration tools that write back), the
+    user cache is created from the repo template on first use so there is always
+    a writable, machine-local file to calibrate into.
+    """
+    if explicit is not None:
+        return explicit
+    cache = user_config_path()
+    if cache.exists():
+        return cache
+    if seed:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        if REPO_TEMPLATE_PATH.exists():
+            shutil.copy(REPO_TEMPLATE_PATH, cache)
+        return cache
+    return REPO_TEMPLATE_PATH
 
 
 @dataclass(frozen=True)

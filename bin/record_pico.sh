@@ -45,7 +45,7 @@ export PYTHONPATH="${REPO_ROOT}/src:${PYTHONPATH:-}"
 # ── Default arguments (override via CLI) ──────────────────────────────────────
 CAM_IDS="${CAM_IDS:-}"              # Optional left_wrist right_wrist camera override
 CAMERA_CONFIG="${CAMERA_CONFIG:-${REPO_ROOT}/configs/cameras.yaml}"
-FEETECH_CONFIG="${FEETECH_CONFIG:-${REPO_ROOT}/configs/feetech.yaml}"
+FEETECH_CONFIG="${FEETECH_CONFIG:-}"   # empty -> recorder resolves the per-user cache
 FEETECH_PORT="${FEETECH_PORT:-}"
 REPO_ID="${REPO_ID:-local/handumi_dataset}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/datasets/handumi_dataset}"
@@ -103,7 +103,7 @@ echo "║                 handumi – PICO recording                 ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 printf "║  Cameras       : %-40s║\n" "${CAM_IDS:-from config}"
 printf "║  Camera config : %-40s║\n" "${CAMERA_CONFIG}"
-printf "║  Feetech config: %-40s║\n" "${FEETECH_CONFIG}"
+printf "║  Feetech config: %-40s║\n" "${FEETECH_CONFIG:-per-user cache}"
 printf "║  Feetech port  : %-40s║\n" "${FEETECH_PORT:-from config}"
 printf "║  Repo id       : %-40s║\n" "${REPO_ID}"
 printf "║  Output dir    : %-40s║\n" "${OUTPUT_DIR}"
@@ -117,7 +117,10 @@ echo "╚═══════════════════════�
 echo ""
 
 # ── Run the recorder ──────────────────────────────────────────────────────────
-FEETECH_ARGS=(--feetech-config "${FEETECH_CONFIG}")
+FEETECH_ARGS=()
+if [[ -n "${FEETECH_CONFIG}" ]]; then
+    FEETECH_ARGS+=(--feetech-config "${FEETECH_CONFIG}")
+fi
 if [[ -n "${FEETECH_PORT}" ]]; then
     FEETECH_ARGS+=(--feetech-port "${FEETECH_PORT}")
 fi
