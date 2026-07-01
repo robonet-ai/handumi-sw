@@ -62,7 +62,9 @@ Appears in *Library → Unknown Sources → YubiQuestApp*. GUI alternative:
 ## 4. Find the Quest IP and set it once
 
 Streaming is over Wi-Fi/LAN (USB is only for installing); the laptop dials the
-Quest. Put both on the **same network**, then:
+Quest. **You can unplug the USB-C cable once the app is installed** — tracking
+keeps working over Wi-Fi as long as both are on the same network. Put both on
+the **same network**, then:
 
 ```bash
 adb shell ip route          # prints e.g. ... src 10.104.18.172
