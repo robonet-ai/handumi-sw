@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -70,16 +71,34 @@ class FeetechBus:
     def scan(self, ids: Iterable[int]) -> list[int]:
         return [int(servo_id) for servo_id in ids if self.ping(int(servo_id))]
 
-    def read_position(self, servo_id: int) -> int:
+    def read_position(
+        self, servo_id: int, *, retries: int = 4, retry_delay_s: float = 0.05
+    ) -> int:
         packet = self._require_packet()
-        value, comm, error = packet.read2ByteTxRx(
-            self._require_port(),
-            int(servo_id),
-            _PRESENT_POSITION_ADDR,
+        port = self._require_port()
+        last_error = "no response"
+        for attempt in range(retries + 1):
+            try:
+                value, comm, error = packet.read2ByteTxRx(
+                    port, int(servo_id), _PRESENT_POSITION_ADDR
+                )
+            except IndexError:
+                # The SCServo SDK indexes the reply buffer before checking the
+                # comm result, so a truncated response (e.g. the servo is still
+                # busy right after an EEPROM middle-position write) crashes with
+                # IndexError instead of reporting a clean failure. Treat it as a
+                # retryable short-packet read.
+                last_error = "truncated response"
+            else:
+                if _comm_success(comm, self._sdk) and _no_error(error):
+                    return int(value)
+                last_error = f"comm={comm}, error={error}"
+            if attempt < retries:
+                time.sleep(retry_delay_s)
+        raise RuntimeError(
+            f"Failed to read Present_Position from servo {servo_id} after "
+            f"{retries + 1} attempts ({last_error})."
         )
-        if not _comm_success(comm, self._sdk) or not _no_error(error):
-            raise RuntimeError(f"Failed to read Present_Position from servo {servo_id}.")
-        return int(value)
 
     def write_servo_id(self, old_id: int, new_id: int) -> None:
         self.disable_torque(old_id)
@@ -107,8 +126,6 @@ class FeetechBus:
         caller must confirm success by reading the position back. Returns False
         if any write was rejected.
         """
-        import time
-
         ok = True
         try:
             self._write_1_byte(servo_id, _LOCK_ADDR, 0, "Lock(unlock)")  # unlock EEPROM
@@ -120,7 +137,7 @@ class FeetechBus:
             )
         except RuntimeError:
             ok = False
-        time.sleep(0.1)  # let the EEPROM write commit before re-locking
+        time.sleep(0.2)  # let the EEPROM write commit before re-locking / reading back
         try:
             self._write_1_byte(servo_id, _LOCK_ADDR, 1, "Lock(relock)")  # re-lock EEPROM
         except RuntimeError:

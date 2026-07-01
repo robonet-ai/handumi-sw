@@ -3,13 +3,13 @@ baudrate: 1000000
 protocol_version: 0
 left:
   servo_id: 0
-  port: /dev/ttyACM1
-  closed_ticks: 1220
-  open_ticks: 2813
-  max_width_mm: 85.0
+  port: /dev/ttyACM0
+  closed_ticks: 1668
+  open_ticks: 2937
+  max_width_mm: 80.0
 right:
   servo_id: 1
-  port: /dev/ttyACM0
-  closed_ticks: 1131
-  open_ticks: 2876
-  max_width_mm: 85.0
+  port: /dev/ttyACM1
+  closed_ticks: 2294
+  open_ticks: 1409
+  max_width_mm: 80.0
