@@ -125,6 +125,26 @@ def default_config() -> FeetechConfig:
     )
 
 
+def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> None:
+    """Fail fast with an actionable message if either gripper is uncalibrated.
+
+    Call this at startup (before the record/monitor loop) so an uncalibrated rig
+    is reported clearly instead of crashing mid-run inside width computation.
+    """
+    missing = [side for side in ("left", "right") if not getattr(config, side).is_complete]
+    if not missing:
+        return
+    where = f" in {source}" if source else ""
+    raise SystemExit(
+        f"Feetech calibration is incomplete for {', '.join(missing)}{where}.\n"
+        "Calibrate this laptop first (see README_gripper.md):\n"
+        "  python scripts/setup/setup_ports.py           # set servo_id/port\n"
+        "  python scripts/setup/home_servos.py           # centre the encoder range\n"
+        "  python scripts/setup/calibrate_grippers.py calibrate\n"
+        "Or pass --skip-feetech to run without gripper widths."
+    )
+
+
 def load_config(path: Path) -> FeetechConfig:
     if not path.exists():
         return default_config()

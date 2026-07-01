@@ -56,6 +56,7 @@ from handumi.dataset.raw import raw_state_feature
 from handumi.feetech import (
     FeetechGripperPair,
     GripperWidths,
+    assert_calibrated,
     load_config,
     resolve_config_path,
     zero_gripper_widths,
@@ -767,7 +768,8 @@ def main() -> None:
     if args.skip_feetech:
         log.info("Feetech disabled: left/right gripper widths will be zero-filled.")
     else:
-        feetech_config = load_config(resolve_config_path(args.feetech_config))
+        feetech_path = resolve_config_path(args.feetech_config)
+        feetech_config = load_config(feetech_path)
         if args.feetech_port is not None:
             feetech_config = type(feetech_config)(
                 port=args.feetech_port,
@@ -776,6 +778,7 @@ def main() -> None:
                 left=feetech_config.left,
                 right=feetech_config.right,
             )
+        assert_calibrated(feetech_config, source=feetech_path)
         grippers = FeetechGripperPair(feetech_config)
         try:
             grippers.open()

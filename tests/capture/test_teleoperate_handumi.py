@@ -1,7 +1,7 @@
 import unittest
 
-from handumi.capture.teleoperate_handumi import _assert_calibrated, zero_gripper_widths
-from handumi.feetech.calibration import FeetechConfig, GripperCalibration
+from handumi.capture.teleoperate_handumi import zero_gripper_widths
+from handumi.feetech.calibration import FeetechConfig, GripperCalibration, assert_calibrated
 
 
 class TeleoperateHandUMITest(unittest.TestCase):
@@ -22,7 +22,7 @@ class TeleoperateHandUMITest(unittest.TestCase):
         )
 
         with self.assertRaises(SystemExit):
-            _assert_calibrated(config)
+            assert_calibrated(config)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from handumi.feetech.calibration import (
     REPO_TEMPLATE_PATH,
     FeetechConfig,
     GripperCalibration,
+    assert_calibrated,
     load_config,
     resolve_config_path,
     save_config,
@@ -61,6 +62,31 @@ class FeetechCalibrationTest(unittest.TestCase):
         )
         self.assertEqual(calibration.width_mm(1500), 40.0)
         self.assertEqual(calibration.width_m(1500), 0.04)
+
+
+class AssertCalibratedTest(unittest.TestCase):
+    def _config(self, *, right_complete: bool) -> FeetechConfig:
+        right = (
+            GripperCalibration(1, 900, 1900, 75.0) if right_complete else GripperCalibration(1)
+        )
+        return FeetechConfig(
+            port=None,
+            baudrate=1_000_000,
+            protocol_version=0,
+            left=GripperCalibration(0, 1000, 2000, 80.0),
+            right=right,
+        )
+
+    def test_passes_when_complete(self):
+        assert_calibrated(self._config(right_complete=True))  # no raise
+
+    def test_raises_and_names_missing_side(self):
+        with self.assertRaises(SystemExit) as ctx:
+            assert_calibrated(self._config(right_complete=False), source=Path("/x/feetech.yaml"))
+        msg = str(ctx.exception)
+        self.assertIn("right", msg)
+        self.assertIn("/x/feetech.yaml", msg)
+        self.assertIn("--skip-feetech", msg)
 
 
 class ResolveConfigPathTest(unittest.TestCase):

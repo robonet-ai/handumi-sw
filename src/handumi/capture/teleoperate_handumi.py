@@ -21,8 +21,10 @@ from handumi.cameras.usb import (
 from handumi.feetech import (
     FeetechGripperPair,
     GripperWidths,
+    assert_calibrated,
     load_config,
     resolve_config_path,
+    zero_gripper_widths,
 )
 from handumi.feetech.bus import FeetechUnavailableError
 
@@ -78,7 +80,8 @@ def main() -> None:
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
     else:
-        feetech_config = load_config(resolve_config_path(args.feetech_config))
+        feetech_path = resolve_config_path(args.feetech_config)
+        feetech_config = load_config(feetech_path)
         if args.feetech_port is not None:
             feetech_config = type(feetech_config)(
                 port=args.feetech_port,
@@ -87,7 +90,7 @@ def main() -> None:
                 left=feetech_config.left,
                 right=feetech_config.right,
             )
-        _assert_calibrated(feetech_config)
+        assert_calibrated(feetech_config, source=feetech_path)
         grippers = FeetechGripperPair(feetech_config)
         try:
             grippers.open()
@@ -270,33 +273,6 @@ def _print_status(*, widths: GripperWidths, frame_index: int) -> None:
         f"right={widths.right_mm:7.2f}mm ({widths.right_normalized:0.3f})"
     )
     sys.stdout.flush()
-
-
-def _assert_calibrated(config) -> None:
-    missing = []
-    if not config.left.is_complete:
-        missing.append("left")
-    if not config.right.is_complete:
-        missing.append("right")
-    if missing:
-        raise SystemExit(
-            "Feetech calibration is incomplete for "
-            + ", ".join(missing)
-            + ". Run scripts/setup/calibrate_grippers.py calibrate before live monitoring."
-        )
-
-
-def zero_gripper_widths() -> GripperWidths:
-    return GripperWidths(
-        left=0.0,
-        right=0.0,
-        left_mm=0.0,
-        right_mm=0.0,
-        left_normalized=0.0,
-        right_normalized=0.0,
-        left_ticks=0,
-        right_ticks=0,
-    )
 
 
 def _camera_arg(value: str) -> int | str:
