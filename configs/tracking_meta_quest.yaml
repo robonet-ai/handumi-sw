@@ -6,7 +6,7 @@
 backend: "meta_quest"
 
 connection:
-  quest_ip: "WRITE_HERE"   # Quest LAN IP (pin it; DHCP can change it)
+  quest_ip: "10.104.18.172"   # Quest LAN IP (pin it; DHCP can change it)
   tcp_port: 65432          # pose stream (newline-delimited JSON)
   sync_port: 42000         # NTP-style UDP time-sync
   connect_retry_s: 1.0
