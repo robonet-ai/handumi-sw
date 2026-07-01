@@ -37,6 +37,7 @@ cython_debug/
 
 # Virtual environments
 .venv/
+.uv-cache/
 venv/
 env/
 ENV/

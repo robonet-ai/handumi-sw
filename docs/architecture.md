@@ -145,10 +145,8 @@ robot-arm dependency.
 ## Configs
 
 ```text
-configs/handumi.yaml              # top-level recording config
 configs/cameras.yaml              # left_wrist/right_wrist assignment
 configs/feetech.yaml              # left/right servo IDs and calibration ticks
-configs/tracking_pico.yaml        # PICO backend settings
 configs/tracking_meta_quest.yaml  # Meta Quest backend settings
 ```
 

@@ -108,6 +108,16 @@ lerobot-dataset-viz \
   --episode-index 0
 ```
 
+## Upload to Hugging Face
+
+A recorded dataset is a plain folder, so push it with the Hugging Face CLI:
+
+```bash
+huggingface-cli login   # once, with a write token
+huggingface-cli upload NONHUMAN-RESEARCH/handumi-dataset-v2 \
+  outputs/datasets/handumi_quest_test --repo-type dataset
+```
+
 ## Dataset Fields
 
 ```text
