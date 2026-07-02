@@ -139,6 +139,12 @@ Step 3  The live view       — merge Feetech + draw the Rerun 3D trajectory
   `configs/tracking_meta_quest.yaml`), `WorkspaceCalibration.from_reference`
   (reset re-centering), and `gripper_pose_in_workspace` (full pipeline).
   Tests: `python -m unittest discover -s tests/tracking` (22 transform tests).
+  Mounting offset in `configs/tracking_meta_quest.yaml`: position from CAD
+  (X only so far), rotation measured live with
+  `python scripts/setup/print_controller_pose.py` — hold the assembled
+  device so the gripper reads workspace-identity, read the printed
+  quaternion, invert it into the config (needed because the controller
+  mounts vertically, not in its natural handheld grip).
 
 ### Step 3 — The live view (Feetech merge + Rerun trajectory)
 

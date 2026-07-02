@@ -167,12 +167,15 @@ class MountingOffsetsTest(unittest.TestCase):
 
     def test_from_repo_config_loads(self):
         m = MountingOffsets.from_yaml(CONFIG)
-        # Partial calibration: only the X (forward) reach is measured so far;
-        # rotation is still identity pending Y/Z + rotation measurement.
+        # Position: only the X (forward) reach is measured so far (CAD), Y/Z TODO.
+        # Rotation: measured empirically (print_controller_pose.py), each side a
+        # unit quaternion — not identity, since the controller mounts vertically.
         self.assertTrue(np.allclose(m.left.position, [0.140, 0.0, 0.0]))
         self.assertTrue(np.allclose(m.right.position, [0.140, 0.0, 0.0]))
-        self.assertTrue(np.allclose(m.left.quaternion, [0.0, 0.0, 0.0, 1.0]))
-        self.assertTrue(np.allclose(m.right.quaternion, [0.0, 0.0, 0.0, 1.0]))
+        self.assertAlmostEqual(float(np.linalg.norm(m.left.quaternion)), 1.0, places=5)
+        self.assertAlmostEqual(float(np.linalg.norm(m.right.quaternion)), 1.0, places=5)
+        self.assertFalse(np.allclose(m.left.quaternion, [0.0, 0.0, 0.0, 1.0]))
+        self.assertFalse(np.allclose(m.right.quaternion, [0.0, 0.0, 0.0, 1.0]))
 
 
 class PipelineTest(unittest.TestCase):

@@ -1,0 +1,76 @@
+"""Print live left/right controller orientation to find the mounting-offset rotation.
+
+The gizmo arrows in Rerun are too small/angled to read precisely from a
+screenshot. This prints the exact quaternion instead: hold the assembled
+HandUMI device in the pose where the *gripper* should read as workspace-
+identity (level, TCP pointing straight forward), then read the printed
+quaternion for that stance — that quaternion IS the inverse of the rotation
+you need in ``configs/tracking_meta_quest.yaml``'s
+``calibration.controller_to_gripper_tcp.<side>.quaternion``.
+
+No mounting offset or workspace reset is applied here — this is the raw
+Unity->handumi-converted controller pose, on purpose.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
+from handumi.tracking.transforms import unity_pose_to_handumi
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
+    parser.add_argument("--quest-ip", type=str, default=None)
+    parser.add_argument("--tcp-port", type=int, default=None)
+    parser.add_argument("--sync-port", type=int, default=None)
+    parser.add_argument("--rate-hz", type=float, default=2.0)
+    args = parser.parse_args()
+
+    config = MetaQuestConfig.from_yaml(args.tracking_config) if args.tracking_config.exists() else MetaQuestConfig(quest_ip="")
+    config = MetaQuestConfig(
+        quest_ip=args.quest_ip if args.quest_ip is not None else config.quest_ip,
+        tcp_port=args.tcp_port if args.tcp_port is not None else config.tcp_port,
+        sync_port=args.sync_port if args.sync_port is not None else config.sync_port,
+        connect_retry_s=config.connect_retry_s,
+    )
+
+    receiver = MetaQuestReceiver(config)
+    receiver.start()
+    print(f"Connecting to Quest at {config.quest_ip}:{config.tcp_port}. Ctrl+C to stop.\n")
+    print("Hold the stance you want to measure, then read the printed quaternion.\n")
+
+    try:
+        while True:
+            frame = receiver.latest()
+            if frame is None:
+                sys.stdout.write("\r(waiting for Quest frames)                                    ")
+                sys.stdout.flush()
+                time.sleep(1.0 / args.rate_hz)
+                continue
+
+            for side, ctrl in (("left", frame.left), ("right", frame.right)):
+                if not ctrl.tracked:
+                    continue
+                pose = unity_pose_to_handumi(ctrl.position, ctrl.quaternion)
+                qx, qy, qz, qw = pose.quaternion
+                sys.stdout.write(
+                    f"\r{side:5s} tracked=1 quaternion=[{qx:+.4f}, {qy:+.4f}, {qz:+.4f}, {qw:+.4f}]"
+                    f"  position=[{pose.position[0]:+.3f}, {pose.position[1]:+.3f}, {pose.position[2]:+.3f}]"
+                    "          \n"
+                )
+            sys.stdout.flush()
+            time.sleep(1.0 / args.rate_hz)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        receiver.stop()
+
+
+if __name__ == "__main__":
+    main()

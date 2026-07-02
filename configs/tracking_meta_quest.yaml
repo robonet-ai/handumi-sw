@@ -20,18 +20,26 @@ streams:
 # Explicit, unit-tested calibration applied in handumi.tracking.transforms.
 calibration:
   # Fixed mounting offset from the OVR controller anchor to the gripper TCP,
-  # measured from CAD (right-handed X-forward/Y-left/Z-up, meters + [x,y,z,w]).
+  # in HandUMI convention (right-handed X-forward/Y-left/Z-up, meters + [x,y,z,w]).
   #
-  # PARTIAL — first-pass, only the forward (X) reach is measured so far:
-  #   left/right controller-clip edge -> gripper-tip TCP, along the gripper's
-  #   long axis = 140 mm = 0.140 m.
-  # Still TODO before this is a real calibration:
-  #   - Y/Z (lateral/vertical) offset, not yet measured (assumed ~0 for now)
-  #   - rotation (quaternion), not yet measured (identity for now)
+  # Position: PARTIAL, first-pass — only the forward (X) reach is measured so
+  #   far, from CAD: left/right controller-clip edge -> gripper-tip TCP,
+  #   along the gripper's long axis = 140 mm = 0.140 m.
+  # Rotation: measured empirically (2026-07-02) with
+  #   scripts/setup/print_controller_pose.py — hold the assembled device so
+  #   the gripper TCP reads workspace-identity (level, pointing straight
+  #   forward), read the printed controller quaternion, invert it (offset =
+  #   conjugate of the measured quaternion, since gripper = controller compose
+  #   offset and we want that composition to equal identity at that stance).
+  #   Left/right differ because the two mounts aren't perfectly symmetric.
+  # Still TODO before this is a full calibration:
+  #   - Y/Z (lateral/vertical) position offset, not yet measured (assumed ~0)
   #   - refine X: this measures clip edge -> gripper tip, not yet corrected
   #     for (a) where the controller's actual OVR tracking origin sits inside
   #     the handle, or (b) that "gripper tip" should be the fixed TCP
   #     reference point, not the moving fingertip
+  #   - rotation was measured from a single held stance (by hand, not a rig)
+  #     — re-measure a couple more times and average if IK orientation looks off
   controller_to_gripper_tcp:
-    left:  { position: [0.140, 0.0, 0.0], quaternion: [0.0, 0.0, 0.0, 1.0] }
-    right: { position: [0.140, 0.0, 0.0], quaternion: [0.0, 0.0, 0.0, 1.0] }
+    left:  { position: [0.140, 0.0, 0.0], quaternion: [-0.1131, 0.3818, -0.4368, 0.8066] }
+    right: { position: [0.140, 0.0, 0.0], quaternion: [0.0689, 0.3971, 0.3747, 0.8350] }
