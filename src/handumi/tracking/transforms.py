@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import yaml
 
 _IDENTITY_QUAT = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
@@ -37,7 +38,7 @@ _IDENTITY_QUAT = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
 # ---------------------------------------------------------------------------
 
 
-def quat_normalize(q: np.ndarray) -> np.ndarray:
+def quat_normalize(q: npt.ArrayLike) -> np.ndarray:
     q = np.asarray(q, dtype=np.float64).reshape(4)
     n = float(np.linalg.norm(q))
     if n <= 1e-12:
@@ -45,12 +46,12 @@ def quat_normalize(q: np.ndarray) -> np.ndarray:
     return q / n
 
 
-def quat_conjugate(q: np.ndarray) -> np.ndarray:
+def quat_conjugate(q: npt.ArrayLike) -> np.ndarray:
     x, y, z, w = np.asarray(q, dtype=np.float64).reshape(4)
     return np.array([-x, -y, -z, w], dtype=np.float64)
 
 
-def quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def quat_multiply(a: npt.ArrayLike, b: npt.ArrayLike) -> np.ndarray:
     """Hamilton product of two `[x, y, z, w]` quaternions (a then b applied)."""
     ax, ay, az, aw = np.asarray(a, dtype=np.float64).reshape(4)
     bx, by, bz, bw = np.asarray(b, dtype=np.float64).reshape(4)
@@ -65,7 +66,7 @@ def quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     )
 
 
-def quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
+def quat_rotate(q: npt.ArrayLike, v: npt.ArrayLike) -> np.ndarray:
     """Rotate a 3-vector by a quaternion."""
     qx, qy, qz, qw = quat_normalize(q)
     u = np.array([qx, qy, qz], dtype=np.float64)
@@ -75,7 +76,7 @@ def quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
     return v + 2.0 * (qw * uv + uuv)
 
 
-def quat_to_matrix(q: np.ndarray) -> np.ndarray:
+def quat_to_matrix(q: npt.ArrayLike) -> np.ndarray:
     """Convert `[x, y, z, w]` to a 3x3 rotation matrix."""
     x, y, z, w = quat_normalize(q)
     return np.array(
@@ -88,7 +89,7 @@ def quat_to_matrix(q: np.ndarray) -> np.ndarray:
     )
 
 
-def matrix_to_quat(m: np.ndarray) -> np.ndarray:
+def matrix_to_quat(m: npt.ArrayLike) -> np.ndarray:
     """Convert a 3x3 rotation matrix to `[x, y, z, w]` (w >= 0)."""
     m = np.asarray(m, dtype=np.float64).reshape(3, 3)
     trace = m[0, 0] + m[1, 1] + m[2, 2]
@@ -145,7 +146,7 @@ class Pose:
         return cls(np.zeros(3), _IDENTITY_QUAT.copy())
 
     @classmethod
-    def from_matrix(cls, m: np.ndarray) -> "Pose":
+    def from_matrix(cls, m: npt.ArrayLike) -> "Pose":
         m = np.asarray(m, dtype=np.float64).reshape(4, 4)
         return cls(m[:3, 3], matrix_to_quat(m[:3, :3]))
 
@@ -175,19 +176,19 @@ class Pose:
 # ---------------------------------------------------------------------------
 
 
-def unity_position_to_handumi(position: np.ndarray) -> np.ndarray:
+def unity_position_to_handumi(position: npt.ArrayLike) -> np.ndarray:
     """Unity (x, y, z) -> right-handed (z, -x, y)."""
     x, y, z = np.asarray(position, dtype=np.float64).reshape(3)
     return np.array([z, -x, y], dtype=np.float64)
 
 
-def unity_quaternion_to_handumi(quaternion: np.ndarray) -> np.ndarray:
+def unity_quaternion_to_handumi(quaternion: npt.ArrayLike) -> np.ndarray:
     """Unity `[x, y, z, w]` -> right-handed `[z, -x, y, -w]`."""
     x, y, z, w = np.asarray(quaternion, dtype=np.float64).reshape(4)
     return quat_normalize(np.array([z, -x, y, -w], dtype=np.float64))
 
 
-def unity_pose_to_handumi(position: np.ndarray, quaternion: np.ndarray) -> Pose:
+def unity_pose_to_handumi(position: npt.ArrayLike, quaternion: npt.ArrayLike) -> Pose:
     """Convert a raw Unity pose to a right-handed HandUMI :class:`Pose`."""
     return Pose(
         unity_position_to_handumi(position),
@@ -259,8 +260,8 @@ def apply_mounting_offset(controller_pose: Pose, offset: Pose) -> Pose:
 
 
 def gripper_pose_in_workspace(
-    unity_position: np.ndarray,
-    unity_quaternion: np.ndarray,
+    unity_position: npt.ArrayLike,
+    unity_quaternion: npt.ArrayLike,
     *,
     mounting_offset: Pose,
     workspace: WorkspaceCalibration,
