@@ -26,20 +26,25 @@ calibration:
   #   far, from CAD: left/right controller-clip edge -> gripper-tip TCP,
   #   along the gripper's long axis = 140 mm = 0.140 m.
   # Rotation: measured empirically (2026-07-02) with
-  #   scripts/setup/print_controller_pose.py — hold the assembled device so
-  #   the gripper TCP reads workspace-identity (level, pointing straight
-  #   forward), read the printed controller quaternion, invert it (offset =
-  #   conjugate of the measured quaternion, since gripper = controller compose
-  #   offset and we want that composition to equal identity at that stance).
-  #   Left/right differ because the two mounts aren't perfectly symmetric.
+  #   scripts/setup/print_controller_pose.py, two-stance method:
+  #     A) hold the BARE controller in the natural handheld grip, pointing
+  #        forward -> read quaternion q_A
+  #     B) mount it in the HandUMI (it sits vertically) and hold the device
+  #        pointing the SAME forward -> read quaternion q_B
+  #     offset = conj(q_B) * q_A  (since gripper = controller compose offset,
+  #     we want the mounted controller to read as the naturally-held one).
+  #   The difference cancels the tracking frame's arbitrary yaw and the OVR
+  #   controller frame's built-in tilt, so the gripper behaves exactly like a
+  #   naturally-held controller. Left ~79.0 deg, right ~77.2 deg (the two
+  #   mounts aren't perfectly symmetric).
   # Still TODO before this is a full calibration:
   #   - Y/Z (lateral/vertical) position offset, not yet measured (assumed ~0)
   #   - refine X: this measures clip edge -> gripper tip, not yet corrected
   #     for (a) where the controller's actual OVR tracking origin sits inside
   #     the handle, or (b) that "gripper tip" should be the fixed TCP
   #     reference point, not the moving fingertip
-  #   - rotation was measured from a single held stance (by hand, not a rig)
-  #     — re-measure a couple more times and average if IK orientation looks off
+  #   - both stances were held by hand (not a rig) — re-measure and average
+  #     if IK orientation looks off
   controller_to_gripper_tcp:
-    left:  { position: [0.140, 0.0, 0.0], quaternion: [-0.1131, 0.3818, -0.4368, 0.8066] }
-    right: { position: [0.140, 0.0, 0.0], quaternion: [0.0689, 0.3971, 0.3747, 0.8350] }
+    left:  { position: [0.140, 0.0, 0.0], quaternion: [-0.0187, 0.5206, -0.3650, 0.7716] }
+    right: { position: [0.140, 0.0, 0.0], quaternion: [0.0112, 0.5325, 0.3246, 0.7816] }

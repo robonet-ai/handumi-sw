@@ -1,12 +1,18 @@
 """Print live left/right controller orientation to find the mounting-offset rotation.
 
-The gizmo arrows in Rerun are too small/angled to read precisely from a
-screenshot. This prints the exact quaternion instead: hold the assembled
-HandUMI device in the pose where the *gripper* should read as workspace-
-identity (level, TCP pointing straight forward), then read the printed
-quaternion for that stance — that quaternion IS the inverse of the rotation
-you need in ``configs/tracking_meta_quest.yaml``'s
-``calibration.controller_to_gripper_tcp.<side>.quaternion``.
+Two-stance method for ``configs/tracking_meta_quest.yaml``'s
+``calibration.controller_to_gripper_tcp.<side>.quaternion``:
+
+  A) Hold the BARE controller in the natural handheld grip, pointing
+     forward. Record the printed quaternion ``q_A``.
+  B) Mount the controller in the HandUMI and hold the device pointing the
+     SAME forward direction. Record ``q_B``.
+
+The offset is ``conj(q_B) * q_A`` (``quat_multiply`` from
+``handumi.tracking.transforms``): the mounted controller then reads as a
+naturally-held one. Using the *difference* between the stances cancels the
+tracking frame's arbitrary yaw and the OVR frame's built-in tilt, so
+neither stance needs to be aligned with the tracking origin.
 
 No mounting offset or workspace reset is applied here — this is the raw
 Unity->handumi-converted controller pose, on purpose.
