@@ -52,9 +52,12 @@ from handumi.tracking.transforms import (
 
 log = logging.getLogger("handumi.live_tracking_quest")
 
-LEFT_COLOR = (0, 255, 255)  # cyan — matches Feetech left series
-RIGHT_COLOR = (255, 0, 255)  # magenta — matches Feetech right series
-ORIGIN_COLOR = (255, 255, 0)  # yellow — the workspace origin (HMD pose at last reset)
+# Pastel palette (warm cream/mustard/taupe), kept saturated enough on the
+# cream 3D background to stay readable at a glance.
+BACKGROUND_COLOR = (238, 233, 220)  # warm cream — the 3D view background
+LEFT_COLOR = (240, 189, 63)  # mustard gold — matches Feetech left series
+RIGHT_COLOR = (150, 130, 110)  # warm taupe — matches Feetech right series
+ORIGIN_COLOR = (70, 58, 46)  # dark warm brown — the workspace origin (HMD pose at last reset)
 
 
 # ---------------------------------------------------------------------------
@@ -103,27 +106,63 @@ def _init_rerun(*, spawn: bool, ip: str | None, port: int | None) -> bool:
     return True
 
 
+# Diagnostic-signal colors, kept distinct from the LEFT/RIGHT tracking palette
+# above so a glance tells "which hand" (mustard/taupe) apart from "is this
+# healthy" (terracotta=fps, dark brown=clock skew) — same pastel family.
+FPS_COLOR = (196, 108, 78)  # muted terracotta
+OFFSET_COLOR = (90, 80, 70)  # dark warm brown
+
+# How much recent history the 2D charts show by default. Rerun's default is
+# "the whole recording", which keeps compressing as a session runs longer —
+# a rolling window keeps oscillations (gripper opening/closing, fps) readable
+# no matter how long you've been recording.
+_CHART_WINDOW_S = 20.0
+
+
 def _send_styles() -> None:
     import rerun as rr
 
     styles = {
         "observation.feetech.left_width_mm": ("left_width_mm", [*LEFT_COLOR, 255]),
         "observation.feetech.right_width_mm": ("right_width_mm", [*RIGHT_COLOR, 255]),
-        "tracking.fps": ("fps", [255, 255, 0, 255]),
-        "tracking.offset_s": ("offset_s", [0, 200, 255, 255]),
+        "tracking.fps": ("fps", [*FPS_COLOR, 255]),
+        "tracking.offset_s": ("clock_offset_s", [*OFFSET_COLOR, 255]),
+        "tracking.left_tracked": ("left_tracked", [*LEFT_COLOR, 255]),
+        "tracking.right_tracked": ("right_tracked", [*RIGHT_COLOR, 255]),
     }
     for path, (name, color) in styles.items():
-        rr.log(path, rr.SeriesLines(colors=[color], widths=[2.0], names=[name]), static=True)
+        rr.log(path, rr.SeriesLines(colors=[color], widths=[2.5], names=[name]), static=True)
     # handumi_workspace is right-handed, X forward / Y left / Z up.
     rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+
+
+def _recent_window():
+    import rerun.blueprint as rrb
+    import rerun.datatypes as rdt
+
+    return rrb.VisibleTimeRanges(
+        rrb.VisibleTimeRange(
+            timeline="log_time",
+            range=rdt.TimeRange(
+                start=rdt.TimeRangeBoundary.cursor_relative(seconds=-_CHART_WINDOW_S),
+                end=rdt.TimeRangeBoundary.cursor_relative(seconds=0.0),
+            ),
+        )
+    )
 
 
 def _send_blueprint() -> None:
     import rerun.blueprint as rrb
 
+    recent = _recent_window()
+
     blueprint = rrb.Blueprint(
         rrb.Horizontal(
-            rrb.Spatial3DView(origin="/tracking", name="controller_trajectory"),
+            rrb.Spatial3DView(
+                origin="/tracking",
+                name="controller_trajectory",
+                background=rrb.Background(color=[*BACKGROUND_COLOR, 255]),
+            ),
             rrb.Vertical(
                 rrb.Horizontal(
                     rrb.Spatial2DView(origin="/observation.images.left_wrist", name="left_wrist"),
@@ -136,11 +175,11 @@ def _send_blueprint() -> None:
                         "/observation.feetech.right_width_mm",
                     ],
                     name="gripper_width_mm",
+                    axis_y=rrb.ScalarAxis(range=(0.0, 90.0)),
+                    time_ranges=recent,
+                    plot_legend=rrb.Corner2D.LeftTop,
                 ),
-                rrb.TimeSeriesView(
-                    origin="/", contents=["/tracking.fps", "/tracking.offset_s"], name="tracking",
-                ),
-                row_shares=[2, 1, 1],
+                row_shares=[3, 2],
             ),
             column_shares=[2, 3],
         ),
@@ -387,6 +426,11 @@ def parse_args() -> argparse.Namespace:
         "the robot base sits on the floor plate.",
     )
     p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
+    p.add_argument(
+        "--no-robot-browser",
+        action="store_true",
+        help="Don't auto-open the Viser robot view in a browser tab (e.g. headless/SSH).",
+    )
     p.add_argument("--compress-images", action="store_true")
     p.add_argument("--display-ip", type=str, default=None)
     p.add_argument("--display-port", type=int, default=None)
@@ -419,6 +463,7 @@ def main() -> None:
             port=args.robot_port,
             z_lift=args.robot_z_lift,
             x_shift=args.robot_x_shift,
+            open_browser=not args.no_robot_browser,
         )
 
     receiver = MetaQuestReceiver(config)

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import webbrowser
 
 import numpy as np
 
@@ -85,6 +86,7 @@ class RobotFollower:
         z_lift: float = 0.55,
         x_shift: float = 0.0,
         gripper_max_width_m: float = DEFAULT_GRIPPER_MAX_WIDTH_M,
+        open_browser: bool = True,
     ) -> None:
         from handumi.robots.registry import load_embodiment
 
@@ -103,7 +105,10 @@ class RobotFollower:
         self._aio = asyncio.new_event_loop()
         self._aio.run_until_complete(self._sim.enable())
         resolved_port = port if port is not None else runtime.default_port
-        log.info("Robot view ready: http://localhost:%d", resolved_port)
+        url = f"http://localhost:{resolved_port}"
+        log.info("Robot view ready: %s", url)
+        if open_browser:
+            webbrowser.open(url)
 
     def step(
         self,
