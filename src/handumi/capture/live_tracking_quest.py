@@ -52,12 +52,10 @@ from handumi.tracking.transforms import (
 
 log = logging.getLogger("handumi.live_tracking_quest")
 
-# Pastel palette (warm cream/mustard/taupe), kept saturated enough on the
-# cream 3D background to stay readable at a glance.
-BACKGROUND_COLOR = (238, 233, 220)  # warm cream — the 3D view background
+BACKGROUND_COLOR = (40, 8, 8)  # dark red — the 3D view background
 LEFT_COLOR = (240, 189, 63)  # mustard gold — matches Feetech left series
-RIGHT_COLOR = (150, 130, 110)  # warm taupe — matches Feetech right series
-ORIGIN_COLOR = (70, 58, 46)  # dark warm brown — the workspace origin (HMD pose at last reset)
+RIGHT_COLOR = (90, 200, 110)  # green — matches Feetech right series
+ORIGIN_COLOR = (255, 255, 255)  # white — the workspace origin (HMD pose at last reset)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +81,51 @@ class TrajectoryTrail:
         if not self._points:
             return np.zeros((0, 3), dtype=np.float32)
         return np.asarray(self._points, dtype=np.float32)
+
+
+class DoubleClapDetector:
+    """Reset gesture: squeeze either gripper shut twice in quick succession.
+
+    Each side is tracked independently. A "clap" fires when that side's width
+    drops below ``close_mm``; it must reopen past ``open_mm`` (hysteresis)
+    before its next clap counts. Two claps of the *same* gripper at most
+    ``window_s`` apart trigger. Lets the wearer reset hands-free instead of
+    reaching for the controller buttons under the HandUMI shell (and will
+    later double as the start/stop-recording gesture).
+    """
+
+    def __init__(
+        self,
+        *,
+        close_mm: float = 8.0,
+        open_mm: float = 25.0,
+        window_s: float = 1.2,
+    ) -> None:
+        self._close_mm = close_mm
+        self._open_mm = open_mm
+        self._window_s = window_s
+        self._armed = {"left": True, "right": True}  # seen open since last clap
+        self._last_clap_t: dict[str, float | None] = {"left": None, "right": None}
+
+    def update(self, left_mm: float, right_mm: float, now_s: float) -> bool:
+        """Feed one width sample; returns True when either side double-claps."""
+        triggered = False
+        for side, mm in (("left", left_mm), ("right", right_mm)):
+            if mm > self._open_mm:
+                self._armed[side] = True
+                last = self._last_clap_t[side]
+                if last is not None and now_s - last > self._window_s:
+                    self._last_clap_t[side] = None  # first clap expired
+                continue
+            if mm < self._close_mm and self._armed[side]:
+                self._armed[side] = False
+                last = self._last_clap_t[side]
+                if last is not None and now_s - last <= self._window_s:
+                    self._last_clap_t[side] = None
+                    triggered = True
+                else:
+                    self._last_clap_t[side] = now_s
+        return triggered
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +177,18 @@ def _send_styles() -> None:
         rr.log(path, rr.SeriesLines(colors=[color], widths=[2.5], names=[name]), static=True)
     # handumi_workspace is right-handed, X forward / Y left / Z up.
     rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+    # Faint corner markers spanning the working volume. The blueprint API can't
+    # pin the 3D camera, but the viewer auto-fits to the data bounds — logging
+    # these statically keeps the initial framing zoomed out enough to show the
+    # whole trajectory instead of hugging the first few points.
+    half = 0.9  # meters — half-extent of the framed working volume
+    corners = [[sx * half, sy * half, sz * half]
+               for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
+    rr.log(
+        "tracking/bounds",
+        rr.Points3D(corners, colors=[[128, 100, 100, 90]] * len(corners), radii=0.004),
+        static=True,
+    )
 
 
 def _recent_window():
@@ -272,6 +327,7 @@ def run_live_tracking(
     workspace = WorkspaceCalibration.identity()
     workspace_set = False
     prev_reset_pressed = False
+    clap_detector = DoubleClapDetector()
     last_state = np.zeros(HANDUMI_RAW_STATE_SIZE, dtype=np.float32)
 
     control_interval = 1.0 / fps
@@ -294,12 +350,18 @@ def run_live_tracking(
             cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
 
         widths = _read_widths(grippers)
+        # Hands-free reset: double-clap both grippers shut (only meaningful
+        # with real Feetech widths — skipped rigs read a constant 0).
+        clap_reset = grippers is not None and clap_detector.update(
+            widths["left_mm"], widths["right_mm"], loop_start
+        )
 
         left_tracked = right_tracked = False
         if frame is not None:
-            # Reset edge: left X re-centers the workspace on the current HMD pose.
+            # Reset edge: left X re-centers the workspace on the current HMD
+            # pose; a gripper double clap does the same without buttons.
             reset_pressed = frame.left.buttons.primary
-            reset_edge = reset_pressed and not prev_reset_pressed
+            reset_edge = (reset_pressed and not prev_reset_pressed) or clap_reset
             prev_reset_pressed = reset_pressed
 
             if frame.hmd.tracked and (reset_edge or not workspace_set):
@@ -309,7 +371,11 @@ def run_live_tracking(
                 right_trail.clear()
                 if rerun_enabled:
                     _log_workspace_origin()
-                log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
+                if robot_follower is not None:
+                    robot_follower.reset()
+                source = "double clap" if clap_reset else ("button" if reset_edge else "startup")
+                log.info("Workspace %s on HMD pose (%s).",
+                         "reset" if reset_edge else "initialized", source)
 
             left_tracked = frame.left.tracked and frame.left.valid
             right_tracked = frame.right.tracked and frame.right.valid

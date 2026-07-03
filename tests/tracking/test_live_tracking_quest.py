@@ -5,7 +5,11 @@ import unittest
 
 import numpy as np
 
-from handumi.capture.live_tracking_quest import TrajectoryTrail, run_live_tracking
+from handumi.capture.live_tracking_quest import (
+    DoubleClapDetector,
+    TrajectoryTrail,
+    run_live_tracking,
+)
 from handumi.dataset.raw import (
     HANDUMI_RAW_STATE_SIZE,
     LEFT_GRIPPER_INDEX,
@@ -66,6 +70,47 @@ class TrajectoryTrailTest(unittest.TestCase):
         trail.append([1, 2, 3])
         trail.clear()
         self.assertEqual(trail.points().shape, (0, 3))
+
+
+class DoubleClapDetectorTest(unittest.TestCase):
+    def _clap(self, det, t, left=True, right=True):
+        """One clap: open -> closed -> (returns result of the closed sample)."""
+        det.update(50.0, 50.0, t)
+        return det.update(2.0 if left else 50.0, 3.0 if right else 50.0, t + 0.05)
+
+    def test_double_clap_left_only_triggers(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertFalse(self._clap(det, 0.0, right=False))
+        self.assertTrue(self._clap(det, 0.5, right=False))
+
+    def test_double_clap_right_only_triggers(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertFalse(self._clap(det, 0.0, left=False))
+        self.assertTrue(self._clap(det, 0.5, left=False))
+
+    def test_double_clap_both_triggers(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertFalse(self._clap(det, 0.0))
+        self.assertTrue(self._clap(det, 0.5))
+
+    def test_single_clap_does_not_trigger(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertFalse(self._clap(det, 0.0))
+        # stays closed — no re-arm, no second clap
+        self.assertFalse(det.update(2.0, 2.0, 0.5))
+        self.assertFalse(det.update(2.0, 2.0, 1.0))
+
+    def test_slow_claps_do_not_trigger(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertFalse(self._clap(det, 0.0))
+        self.assertFalse(self._clap(det, 3.0))  # too late — counts as a new first clap
+        self.assertTrue(self._clap(det, 3.5))  # ...which a quick follow-up completes
+
+    def test_alternating_sides_do_not_trigger(self):
+        det = DoubleClapDetector(window_s=1.2)
+        # one clap left, then one clap right — neither side double-clapped
+        self.assertFalse(self._clap(det, 0.0, right=False))
+        self.assertFalse(self._clap(det, 0.5, left=False))
 
 
 class CalibrationHelpersTest(unittest.TestCase):

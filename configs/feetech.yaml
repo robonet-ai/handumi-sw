@@ -17,4 +17,4 @@ left:
   port: /dev/ttyACM0
 right:
   servo_id: 1
-  port: /dev/ttyACM1
+  port: /dev/ttyACM2

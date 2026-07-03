@@ -101,6 +101,16 @@ class RobotFollower:
         self._gripper_index = runtime.command_size - 1
         self._q = np.zeros(self._solver.num_joints, dtype=np.float32)
 
+        # Rest-pose EE positions (q = 0): each workspace reset re-anchors the
+        # tracked targets here, so the arms always start from position 0 and
+        # follow relative hand motion from there.
+        left_rest, right_rest = self._solver.fk(self._q)
+        self._rest_ee = {
+            "left": np.asarray(left_rest.translation(), dtype=np.float32),
+            "right": np.asarray(right_rest.translation(), dtype=np.float32),
+        }
+        self._anchor: dict[str, np.ndarray | None] = {"left": None, "right": None}
+
         self._sim = runtime.make_sim(port=port)
         self._aio = asyncio.new_event_loop()
         self._aio.run_until_complete(self._sim.enable())
@@ -109,6 +119,18 @@ class RobotFollower:
         log.info("Robot view ready: %s", url)
         if open_browser:
             webbrowser.open(url)
+
+    def reset(self) -> None:
+        """Return the arms to the rest pose (used on workspace reset).
+
+        Also drops the position anchors: the next tracked frame per side
+        re-anchors that hand to the arm's rest EE position, so tracking
+        always resumes from position 0.
+        """
+        self._q = np.zeros(self._solver.num_joints, dtype=np.float32)
+        self._anchor = {"left": None, "right": None}
+        rest = np.zeros(self._command_size, dtype=np.float32)
+        self._aio.run_until_complete(self._sim.motion_control(left=rest, right=rest))
 
     def step(
         self,
@@ -128,6 +150,16 @@ class RobotFollower:
             x_shift=self._x_shift,
             gripper_max_width_m=self._gripper_max_width_m,
         )
+        # Re-anchor each side on its first tracked frame (after start/reset):
+        # the hand pose at that instant maps to the arm's rest EE position, and
+        # everything after is relative motion from there.
+        for side, tracked in (("left", left_tracked), ("right", right_tracked)):
+            if not tracked:
+                continue
+            pos, rot = targets[side]
+            if self._anchor[side] is None:
+                self._anchor[side] = self._rest_ee[side] - pos
+            targets[side] = (pos + self._anchor[side], rot)
         self._q = self._solver.ik(
             self._q,
             left_pose=targets["left"] if left_tracked else None,

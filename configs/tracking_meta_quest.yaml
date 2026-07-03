@@ -66,11 +66,11 @@ calibration:
   controller_to_gripper_tcp:
     left:
       {
-        position: [0.200, 0, -0.60],
-        quaternion: [0.2000, 0.4875, 0.3000, 0.8499],
+        position: [0.200, 0.0, 0.0],
+        quaternion: [0.2000, 0.4875, 0.0000, 0.8499],
       }
     right:
       {
-        position: [0.200, 0, -0.60],
-        quaternion: [-0.2000, 0.4875, -0.3000, 0.8499],
+        position: [0.200, 0.0, 0.0],
+        quaternion: [-0.2000, 0.4875, 0.0000, 0.8499],
       }

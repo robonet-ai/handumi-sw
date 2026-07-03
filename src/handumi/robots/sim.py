@@ -156,6 +156,13 @@ class ViserSim:
         viser_urdf.update_cfg(_to_viser(q0))
         server.scene.add_grid("/grid", width=2.0, height=2.0, position=(0.0, 0.0, 0.0))
 
+        @server.on_client_connect
+        def _set_initial_camera(client: viser.ClientHandle) -> None:
+            # Front-ish, slightly elevated view that frames both arms without
+            # needing to manually orbit/zoom on every session.
+            client.camera.position = (-1.6, 0.0, 1.1)
+            client.camera.look_at = (0.0, 0.0, 0.5)
+
         while True:
             with self._condition:
                 self._condition.wait()

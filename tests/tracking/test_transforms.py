@@ -169,8 +169,8 @@ class MountingOffsetsTest(unittest.TestCase):
         m = MountingOffsets.from_yaml(CONFIG)
         # Position: X (forward) + Z (vertical) are the same on both sides;
         # only Y (lateral) would need mirroring, and it's currently 0.
-        self.assertTrue(np.allclose(m.left.position, [0.200, 0.0, -0.60]))
-        self.assertTrue(np.allclose(m.right.position, [0.200, 0.0, -0.60]))
+        self.assertTrue(np.allclose(m.left.position, [0.200, 0.0, 0.0]))
+        self.assertTrue(np.allclose(m.right.position, [0.200, 0.0, 0.0]))
         # Rotation: measured empirically (print_controller_pose.py), each side a
         # unit quaternion — not identity, since the controller mounts vertically.
         self.assertAlmostEqual(float(np.linalg.norm(m.left.quaternion)), 1.0, places=5)
