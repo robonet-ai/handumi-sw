@@ -69,17 +69,6 @@ python -m handumi.capture.record_handumi_pico \
   --fps 30
 ```
 
-Or use the launcher (wraps the PICO recorder):
-
-```bash
-bash bin/record_pico.sh \
-  --repo-id local/handumi_width_test \
-  --output-dir outputs/datasets/handumi_width_test \
-  --task "gripper width hardware test" \
-  --num-episodes 1 \
-  --episode-time-s 20
-```
-
 ### Meta Quest (Phase 2)
 
 First set up and smoke-test per [README_quest.md](README_quest.md), then:
