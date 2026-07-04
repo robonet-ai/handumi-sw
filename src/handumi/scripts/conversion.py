@@ -12,25 +12,20 @@ All video streams are preserved unchanged (the last frame of each episode is
 dropped from the parquet data to produce ``action = state[t+1]``, but the
 video files themselves are copied as-is).
 
-Quick start
------------
+Usage
+-----
 ::
 
-    # Axol embodiment (default settings)
-    python scripts/process_handumi_to_lerobot.py \
+    # Axol embodiment (output defaults to NONHUMAN-RESEARCH/handumi-dataset-v2-axol)
+    handumi-convert \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --dataset-root outputs/datasets/handumi-dataset-v2 \
-        --embodiment axol \
-        --output-name handumi-dataset-v2-axol \
-        --output-root outputs/datasets/handumi-dataset-v2-axol
+        --embodiment axol
 
-    # Piper embodiment, push to hub afterwards
-    python scripts/process_handumi_to_lerobot.py \
+    # Piper embodiment, custom output repo-id, push to hub afterwards
+    handumi-convert \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --dataset-root outputs/datasets/handumi-dataset-v2 \
         --embodiment piper \
-        --output-name handumi-dataset-v2-piper \
-        --output-root outputs/datasets/handumi-dataset-v2-piper \
+        --output-repo-id NONHUMAN-RESEARCH/my-piper-dataset \
         --push-to-hub
 """
 
@@ -42,6 +37,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import numpy as np
+
+from handumi.dataset.ref import dataset_root_from_repo_id
 
 load_dotenv()
 
@@ -60,30 +57,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
-    # Source dataset
+    # Source / output datasets
     # ------------------------------------------------------------------
-    src = parser.add_argument_group("Source dataset")
-    src.add_argument(
+    ds = parser.add_argument_group("Dataset I/O")
+    ds.add_argument(
         "--repo-id",
         default="NONHUMAN-RESEARCH/handumi-dataset-v2",
-        help="HuggingFace repo-id of the source dataset.",
+        help="HuggingFace repo-id of the source HandUMI dataset.",
     )
-    src.add_argument(
-        "--dataset-root",
-        default="outputs/datasets/handumi-dataset-v2",
-        help="Local root directory of the source dataset.",
+    ds.add_argument(
+        "--root",
+        default=None,
+        help=(
+            "Local root of the source dataset. "
+            "Defaults to outputs/datasets/<repo-name>."
+        ),
     )
-    src.add_argument(
+    ds.add_argument(
+        "--output-repo-id",
+        default=None,
+        help=(
+            "HuggingFace repo-id for the converted dataset. "
+            "Defaults to <source-repo-id>-<embodiment> "
+            "(e.g. NONHUMAN-RESEARCH/handumi-dataset-v2-piper). "
+            "The local output directory is always outputs/datasets/<output-repo-name>."
+        ),
+    )
+    ds.add_argument(
         "--revision",
         default="main",
         help="Git revision of the source dataset.",
     )
-    src.add_argument(
+    ds.add_argument(
         "--column",
         default="observation.pico.body_joints_pose",
         help="Feature column containing PICO body joint poses.",
     )
-    src.add_argument(
+    ds.add_argument(
         "--episodes",
         default=None,
         help=(
@@ -91,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: all episodes)."
         ),
     )
-    src.add_argument(
+    ds.add_argument(
         "--task",
         default=None,
         help=(
@@ -100,38 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
             "dataset's tasks.parquet."
         ),
     )
-
-    # ------------------------------------------------------------------
-    # Output dataset
-    # ------------------------------------------------------------------
-    out = parser.add_argument_group("Output dataset")
-    out.add_argument(
-        "--output-name",
-        default=None,
-        help=(
-            "Dataset name on HuggingFace Hub (e.g. handumi-dataset-v2-axol).  "
-            "Defaults to <source-dataset-name>-<embodiment>."
-        ),
-    )
-    out.add_argument(
-        "--output-prefix",
-        default="NONHUMAN-RESEARCH/",
-        help="Hub organisation/user prefix prepended to --output-name.",
-    )
-    out.add_argument(
-        "--output-root",
-        default=None,
-        help=(
-            "Local directory to write the new dataset.  "
-            "Defaults to outputs/datasets/<output-name>."
-        ),
-    )
-    out.add_argument(
+    ds.add_argument(
         "--push-to-hub",
         action="store_true",
         help="Push the resulting dataset to the HuggingFace Hub after writing.",
     )
-    out.add_argument(
+    ds.add_argument(
         "--hub-token",
         default=None,
         help="HuggingFace API token (uses HF_TOKEN env var if not set).",
@@ -204,6 +188,15 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _default_output_repo_id(source_repo_id: str, embodiment: str) -> str:
+    """Derive ``{namespace}/{source_name}-{embodiment}`` from the source repo id."""
+    repo_id = source_repo_id.rstrip("/")
+    if "/" in repo_id:
+        namespace, name = repo_id.rsplit("/", 1)
+        return f"{namespace}/{name}-{embodiment}"
+    return f"{repo_id}-{embodiment}"
 
 
 def _parse_episode_list(value: str | None, max_episodes: int) -> list[int]:
@@ -365,14 +358,14 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Resolve paths and names
     # ------------------------------------------------------------------
-    source_root = Path(args.dataset_root)
-    source_name = source_root.name
+    source_repo_id = args.repo_id
+    source_root = Path(args.root) if args.root else dataset_root_from_repo_id(source_repo_id)
+    output_repo_id = args.output_repo_id or _default_output_repo_id(
+        source_repo_id, args.embodiment
+    )
+    output_root = dataset_root_from_repo_id(output_repo_id)
 
-    output_name = args.output_name or f"{source_name}-{args.embodiment}"
-    output_repo_id = f"{args.output_prefix.rstrip('/')}/{output_name}"
-    output_root = Path(args.output_root) if args.output_root else Path("outputs/datasets") / output_name
-
-    print(f"Source  : {source_root}  ({args.repo_id})")
+    print(f"Source  : {source_root}  ({source_repo_id})")
     print(f"Output  : {output_root}  ({output_repo_id})")
     print(f"Embodiment: {args.embodiment}")
 
@@ -382,7 +375,7 @@ def main() -> None:
     from handumi.dataset import ensure_metadata
 
     source_info = ensure_metadata(
-        repo_id=args.repo_id,
+        repo_id=source_repo_id,
         root=source_root,
         revision=args.revision,
     )
@@ -393,7 +386,7 @@ def main() -> None:
         parser.error(
             f"Could not determine total_episodes from "
             f"{source_root / 'meta' / 'info.json'}. "
-            "Check --repo-id, --dataset-root, and --revision."
+            "Check --repo-id, --root, and --revision."
         )
 
     try:
@@ -428,7 +421,7 @@ def main() -> None:
         print(f"\nEpisode {out_idx + 1}/{len(episode_indices)}  (source ep {src_idx})")
         try:
             poses, ep_fps = load_pico_body_poses(
-                repo_id=args.repo_id,
+                repo_id=source_repo_id,
                 root=source_root,
                 episode=src_idx,
                 column=args.column,

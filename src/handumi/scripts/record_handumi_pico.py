@@ -18,7 +18,7 @@ No follower robot is required. Action currently mirrors the raw HandUMI state.
 
 Usage
 ─────
-  python scripts/record_handumi_pico.py \
+  handumi-record-pico \
       --repo-id local/my_dataset \
       --output-dir datasets/my_dataset \
       --task "Pick and place cube" \

@@ -28,7 +28,7 @@ Check:
 
 ```bash
 python --version
-python -m handumi.capture.record_handumi_pico --help
+handumi-record-pico --help
 ```
 
 ## Setup (one-time)
@@ -60,7 +60,7 @@ matching your tracking source.
 ### PICO / XRoboToolkit
 
 ```bash
-python -m handumi.capture.record_handumi_pico \
+handumi-record-pico \
   --repo-id local/handumi_width_test \
   --output-dir outputs/datasets/handumi_width_test \
   --task "gripper width hardware test" \
@@ -75,14 +75,14 @@ First set up and smoke-test per [README_quest.md](README_quest.md), then:
 
 ```bash
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
-python -m handumi.capture.live_tracking_quest
+handumi-live-tracking-quest
 
 # same, plus a live Piper robot following your hands via IK
 # (Viser at http://localhost:8003; first launch JIT-compiles for ~30s)
-python -m handumi.capture.live_tracking_quest --robot piper
+handumi-live-tracking-quest --robot piper
 
 # record a dataset (16D state + observation.quest.* poses/clocks)
-python -m handumi.capture.record_handumi_quest \
+handumi-record-quest \
   --repo-id local/handumi_quest_test \
   --output-dir outputs/datasets/handumi_quest_test \
   --task "quest tracking test" --num-episodes 1 --episode-time-s 20

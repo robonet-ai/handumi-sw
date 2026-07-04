@@ -16,10 +16,19 @@ The left X button captures a workspace reset (re-centers on the current HMD
 pose); the workspace also auto-initializes on the first tracked frame. Python
 owns the (minimal) state machine — the device only forwards button states.
 
-Run with the mock Quest for a dry run:
+Usage
+-----
+::
 
+    # live Rerun view (quest_ip from config/tracking.yaml)
+    handumi-live-tracking-quest
+
+    # live Piper robot following your hands via IK
+    handumi-live-tracking-quest --robot piper
+
+    # dry run with the mock Quest sender
     python -m handumi.tracking.mock_quest_sender
-    python -m handumi.capture.live_tracking_quest --skip-cameras --skip-feetech
+    handumi-live-tracking-quest --skip-cameras --skip-feetech
 """
 
 from __future__ import annotations

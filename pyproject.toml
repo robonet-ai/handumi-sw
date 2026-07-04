@@ -33,6 +33,12 @@ piper = [
     "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
 ]
 
+[project.scripts]
+handumi-convert = "handumi.scripts.conversion:main"
+handumi-record-pico = "handumi.scripts.record_handumi_pico:main"
+handumi-live-tracking-quest = "handumi.scripts.live_tracking_quest:main"
+handumi-record-quest = "handumi.scripts.record_handumi_quest:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

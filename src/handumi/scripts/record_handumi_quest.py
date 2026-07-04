@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Record HandUMI raw data with Meta Quest tracking (Phase 2A recording path).
 
-Companion to the PICO recorder (`record_handumi_pico.py`). This one sources left/right
+Companion to the PICO recorder (`handumi-record-pico`). This one sources left/right
 gripper poses from the native Quest app (TCP/JSON, see
 `handumi.tracking.meta_quest`), calibrates them into `handumi_workspace`
 (`handumi.tracking.transforms`), merges Feetech gripper width, and writes the
@@ -26,6 +26,17 @@ camera/Feetech frames in post-processing (see docs/phase-2-motion-tracking.md).
 Controls (workstation has the only UI; the headset has none):
   left X   reset workspace on the current HMD pose (auto-inits on first frame)
   right A  start / stop an episode   (with --button-control)
+
+Usage
+-----
+::
+
+    handumi-record-quest \
+        --repo-id local/handumi_quest_test \
+        --output-dir outputs/datasets/handumi_quest_test \
+        --task "quest tracking test" \
+        --num-episodes 1 \
+        --episode-time-s 20
 """
 
 from __future__ import annotations
