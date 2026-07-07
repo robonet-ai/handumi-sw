@@ -209,6 +209,18 @@ class RobotFollower:
                 self._sim.motion_control(left=left_cmd, right=right_cmd)
             )
 
+        # TCP marker + trail (see ViserSim.set_tcp_pose): always the IK-solved
+        # FK, not MuJoCo's physically-settled pose, since the point is to
+        # visually sanity-check calibration/IK against the tracked hand
+        # motion, independent of contact dynamics.
+        left_fk, right_fk = self._solver.fk(self._q)
+        self._aio.run_until_complete(
+            self._sim.set_tcp_pose("left", np.asarray(left_fk.translation(), dtype=np.float32))
+        )
+        self._aio.run_until_complete(
+            self._sim.set_tcp_pose("right", np.asarray(right_fk.translation(), dtype=np.float32))
+        )
+
     def _push_physics_state_to_viser(self) -> None:
         """Read the current MuJoCo state (arms + every dynamic scene body)
         and render it in Viser. Generic over the scene: whatever task asset

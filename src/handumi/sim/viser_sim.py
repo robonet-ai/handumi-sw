@@ -30,6 +30,15 @@ except ImportError as e:
     ) from e
 
 from handumi.sim.mujoco_sim import SceneBody
+from handumi.utils.trajectory import TrajectoryTrail
+
+# Same palette as the Rerun controller trails in live_tracking_quest.py, so
+# "which arm" reads the same color in both views.
+LEFT_TCP_COLOR = (240, 189, 63)  # mustard gold
+RIGHT_TCP_COLOR = (90, 200, 110)  # green
+
+_TCP_SPHERE_RADIUS_M = 0.012
+_DEFAULT_TCP_TRAIL_MAX_POINTS = 150
 
 
 def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, int, int]:
@@ -114,6 +123,7 @@ class ViserSim:
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
         scene_bodies: list[SceneBody] | None = None,
+        tcp_trail_max_points: int = _DEFAULT_TCP_TRAIL_MAX_POINTS,
         port: int,
     ) -> None:
         self._urdf_path = urdf_path
@@ -131,6 +141,8 @@ class ViserSim:
         self._last_left: np.ndarray = np.zeros(command_size, dtype=np.float32)
         self._last_right: np.ndarray = np.zeros(command_size, dtype=np.float32)
         self._latest_body_poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._tcp_trail_max_points = tcp_trail_max_points
+        self._latest_tcp: dict[str, np.ndarray] = {}
 
     def _arm_q(self, command: np.ndarray) -> np.ndarray:
         """Map one arm command (shape ``(command_size,)``) to its URDF joint sub-vector."""
@@ -173,6 +185,14 @@ class ViserSim:
         truth for joint state instead of a directly-solved IK command."""
         with self._condition:
             self._latest_q = np.asarray(q_robot_order, dtype=np.float32)
+            self._condition.notify()
+
+    async def set_tcp_pose(self, side: str, position: np.ndarray) -> None:
+        """Move the TCP marker + append to its trail (``side`` is ``"left"``
+        or ``"right"``). Helps eyeball whether calibration/IK is behaving —
+        the sphere should trace a path matching the real hand motion."""
+        with self._condition:
+            self._latest_tcp[side] = np.asarray(position, dtype=np.float32)
             self._condition.notify()
 
     async def set_body_pose(self, name: str, position: np.ndarray, quaternion_wxyz: np.ndarray) -> None:
@@ -240,6 +260,28 @@ class ViserSim:
             body.name: _add_scene_body(server, body) for body in self._scene_bodies
         }
 
+        # TCP marker + trail per side — hidden until the first real pose
+        # arrives, so nothing shows at the origin before tracking starts.
+        tcp_spheres = {
+            side: server.scene.add_icosphere(
+                f"/tcp/{side}/marker",
+                radius=_TCP_SPHERE_RADIUS_M,
+                color=color,
+                visible=False,
+            )
+            for side, color in (("left", LEFT_TCP_COLOR), ("right", RIGHT_TCP_COLOR))
+        }
+        tcp_trails = {side: TrajectoryTrail(self._tcp_trail_max_points) for side in ("left", "right")}
+        tcp_trail_handles = {
+            side: server.scene.add_line_segments(
+                f"/tcp/{side}/trail",
+                points=np.zeros((0, 2, 3), dtype=np.float32),
+                colors=color,
+                line_width=2.0,
+            )
+            for side, color in (("left", LEFT_TCP_COLOR), ("right", RIGHT_TCP_COLOR))
+        }
+
         @server.on_client_connect
         def _set_initial_camera(client: viser.ClientHandle) -> None:
             # Front-ish, slightly elevated view that frames both arms without
@@ -253,6 +295,8 @@ class ViserSim:
                 q = self._latest_q
                 body_poses = self._latest_body_poses
                 self._latest_body_poses = {}
+                tcp_positions = self._latest_tcp
+                self._latest_tcp = {}
             if q is not None and q.size > 0:
                 viser_urdf.update_cfg(_to_viser(np.asarray(q, dtype=float)))
             for name, (position, quaternion_wxyz) in body_poses.items():
@@ -260,3 +304,15 @@ class ViserSim:
                 if frame is not None:
                     frame.position = tuple(position.tolist())
                     frame.wxyz = tuple(quaternion_wxyz.tolist())
+            for side, position in tcp_positions.items():
+                sphere = tcp_spheres.get(side)
+                trail = tcp_trails.get(side)
+                trail_handle = tcp_trail_handles.get(side)
+                if sphere is None or trail is None or trail_handle is None:
+                    continue
+                sphere.position = tuple(position.tolist())
+                sphere.visible = True
+                trail.append(position)
+                points = trail.points()
+                if len(points) >= 2:
+                    trail_handle.points = np.stack([points[:-1], points[1:]], axis=1)

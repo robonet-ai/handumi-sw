@@ -38,14 +38,13 @@ import logging
 import signal
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 import numpy as np
-import numpy.typing as npt
 
 from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, pose_to_state_vector
 from handumi.feetech import PORTS_PATH
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
@@ -53,12 +52,12 @@ from handumi.tracking.meta_quest import (
     controller_pose_in_workspace,
     workspace_from_hmd,
 )
-from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,
     WorkspaceCalibration,
 )
+from handumi.utils.trajectory import TrajectoryTrail
 
 log = logging.getLogger("handumi.live_tracking_quest")
 
@@ -71,26 +70,9 @@ ORIGIN_COLOR = (255, 255, 255)  # white — the workspace origin (HMD pose at la
 # ---------------------------------------------------------------------------
 # Pure helpers (no I/O — unit-tested).
 # Quest pose->workspace math lives in handumi.tracking.meta_quest; the 16D raw
-# state assembly lives in handumi.dataset.raw. Only the Rerun trail is local.
+# state assembly lives in handumi.dataset.raw. TrajectoryTrail lives in
+# handumi.utils.trajectory (shared with the Viser TCP trail).
 # ---------------------------------------------------------------------------
-
-
-class TrajectoryTrail:
-    """Rolling buffer of recent 3D positions for one controller."""
-
-    def __init__(self, max_points: int) -> None:
-        self._points: deque[np.ndarray] = deque(maxlen=max(1, max_points))
-
-    def append(self, position: npt.ArrayLike) -> None:
-        self._points.append(np.asarray(position, dtype=np.float32).reshape(3))
-
-    def clear(self) -> None:
-        self._points.clear()
-
-    def points(self) -> np.ndarray:
-        if not self._points:
-            return np.zeros((0, 3), dtype=np.float32)
-        return np.asarray(self._points, dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
