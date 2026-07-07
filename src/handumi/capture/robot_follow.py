@@ -22,12 +22,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import webbrowser
+from pathlib import Path
 
 import numpy as np
 
 from handumi.retargeting.handumi_to_robot import raw_state_target_poses
 
 log = logging.getLogger("handumi.robot_follow")
+
+DEFAULT_SCENE_CONFIG_PATH = Path("configs/scene.yaml")
 
 # Identity controller orientation (gripper X-forward, workspace frame) -> Piper
 # EE rest orientation (EE Z axis forward, X axis down). Columns are the EE
@@ -87,12 +90,16 @@ class RobotFollower:
         x_shift: float = 0.0,
         gripper_max_width_m: float = DEFAULT_GRIPPER_MAX_WIDTH_M,
         open_browser: bool = True,
+        scene_config_path: Path = DEFAULT_SCENE_CONFIG_PATH,
     ) -> None:
+        from handumi.sim.mujoco_sim import SceneConfig
         from handumi.robots.registry import load_embodiment
 
         self._z_lift = z_lift
         self._x_shift = x_shift
         self._gripper_max_width_m = gripper_max_width_m
+
+        scene_config = SceneConfig.from_yaml(scene_config_path)
 
         log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU)...", embodiment)
         runtime = load_embodiment(embodiment)
@@ -111,8 +118,18 @@ class RobotFollower:
         }
         self._anchor: dict[str, np.ndarray | None] = {"left": None, "right": None}
 
-        self._sim = runtime.make_sim(port=port)
         self._aio = asyncio.new_event_loop()
+
+        # Real rigid-body physics (contact/grasp) is only available for
+        # embodiments that ship an MJCF (runtime.mjcf_path) — make_physics()
+        # returns None otherwise (e.g. axol, which only has a URDF today),
+        # and Viser then stays kinematics-only, same as before physics existed.
+        self._physics = runtime.make_physics(scene_config=scene_config)
+        if self._physics is not None:
+            self._aio.run_until_complete(self._physics.enable())
+
+        scene_bodies = self._physics.scene_bodies if self._physics is not None else None
+        self._sim = runtime.make_sim(port=port, scene_bodies=scene_bodies)
         self._aio.run_until_complete(self._sim.enable())
         resolved_port = port if port is not None else runtime.default_port
         url = f"http://localhost:{resolved_port}"
@@ -130,7 +147,11 @@ class RobotFollower:
         self._q = np.zeros(self._solver.num_joints, dtype=np.float32)
         self._anchor = {"left": None, "right": None}
         rest = np.zeros(self._command_size, dtype=np.float32)
-        self._aio.run_until_complete(self._sim.motion_control(left=rest, right=rest))
+        if self._physics is not None:
+            self._aio.run_until_complete(self._physics.reset())
+            self._push_physics_state_to_viser()
+        else:
+            self._aio.run_until_complete(self._sim.motion_control(left=rest, right=rest))
 
     def step(
         self,
@@ -172,9 +193,40 @@ class RobotFollower:
         right_cmd[: len(self._solver.right_indices)] = self._q[self._solver.right_indices]
         left_cmd[self._gripper_index] = targets["left_grip"]
         right_cmd[self._gripper_index] = targets["right_grip"]
-        self._aio.run_until_complete(
-            self._sim.motion_control(left=left_cmd, right=right_cmd)
-        )
+
+        if self._physics is not None:
+            # IK targets become actuator setpoints; MuJoCo's own background
+            # thread steps contact physics toward them independently of this
+            # call. Viser then renders whatever MuJoCo actually settled on
+            # (which may lag/differ from the IK command under contact), not
+            # the raw IK solution.
+            self._aio.run_until_complete(
+                self._physics.motion_control(left=left_cmd, right=right_cmd)
+            )
+            self._push_physics_state_to_viser()
+        else:
+            self._aio.run_until_complete(
+                self._sim.motion_control(left=left_cmd, right=right_cmd)
+            )
+
+    def _push_physics_state_to_viser(self) -> None:
+        """Read the current MuJoCo state (arms + every dynamic scene body)
+        and render it in Viser. Generic over the scene: whatever task asset
+        was loaded (see configs/scene.yaml), each of its dynamic bodies gets
+        forwarded by name — no per-task code here."""
+        arm_qpos = self._aio.run_until_complete(self._physics.get_arm_qpos())
+        self._aio.run_until_complete(self._sim.set_actual_joint_positions(arm_qpos))
+        for scene_body in self._physics.scene_bodies:
+            if not scene_body.dynamic:
+                continue
+            pose = self._aio.run_until_complete(self._physics.get_body_pose(scene_body.name))
+            if pose is not None:
+                position, quaternion_wxyz = pose
+                self._aio.run_until_complete(
+                    self._sim.set_body_pose(scene_body.name, position, quaternion_wxyz)
+                )
 
     def close(self) -> None:
+        if self._physics is not None:
+            self._physics.close()
         self._aio.close()

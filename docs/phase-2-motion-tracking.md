@@ -262,7 +262,7 @@ the mock and the real headset.
 Already in `handumi-sw`:
 
 - `python -m handumi.capture.teleoperate_handumi` streams USB cameras + Feetech width to Rerun.
-- `src/handumi/robots/sim.py` contains `ViserSim`.
+- `src/handumi/sim/viser_sim.py` contains `ViserSim`.
 - `src/handumi/robots/registry.py` exposes `runtime.make_sim()`.
 - `src/handumi/replay/pico_ik.py --visualize` can update a Viser robot.
 - `src/handumi/retargeting/compare_axis.py` uses Viser diagnostics.

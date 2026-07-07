@@ -29,6 +29,62 @@ except ImportError as e:
         "viser is required for simulation. Install project dependencies with: uv sync"
     ) from e
 
+from handumi.sim.mujoco_sim import SceneBody
+
+
+def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, int, int]:
+    return tuple(int(round(c * 255)) for c in rgba[:3])
+
+
+def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
+    """Render one :class:`~handumi.sim.mujoco_sim.SceneGeom` as a viser
+    primitive, nested under its parent body's frame so local pos/quat compose
+    automatically."""
+    color = _rgba_to_viser_color(geom.rgba)
+    if geom.kind == "box":
+        # MuJoCo box size is half-extents; viser add_box wants full dimensions.
+        server.scene.add_box(
+            path,
+            dimensions=tuple(2.0 * s for s in geom.size),
+            color=color,
+            position=geom.local_position,
+            wxyz=geom.local_quaternion_wxyz,
+        )
+    elif geom.kind == "sphere":
+        server.scene.add_icosphere(
+            path,
+            radius=geom.size[0],
+            color=color,
+            position=geom.local_position,
+        )
+    elif geom.kind == "cylinder":
+        server.scene.add_cylinder(
+            path,
+            radius=geom.size[0],
+            height=2.0 * geom.size[1],
+            color=color,
+            position=geom.local_position,
+            wxyz=geom.local_quaternion_wxyz,
+        )
+    else:
+        _logger.warning("Unsupported scene geom kind %r at %s; skipping render.", geom.kind, path)
+
+
+def _add_scene_body(server: "viser.ViserServer", body: SceneBody):
+    """Render one :class:`~handumi.sim.mujoco_sim.SceneBody`: a parent
+    frame at its rest pose plus one viser primitive per geom. Returns the
+    frame handle so dynamic bodies can be repositioned each frame (static
+    bodies just keep their rest pose forever)."""
+    frame = server.scene.add_frame(
+        f"/scene/{body.name}",
+        position=body.rest_position,
+        wxyz=body.rest_quaternion_wxyz,
+        show_axes=False,
+    )
+    for i, geom in enumerate(body.geoms):
+        _add_scene_geom(server, f"/scene/{body.name}/g{i}", geom)
+    return frame
+
 
 class ViserSim:
     """Shared async bimanual simulation backed by a viser web server.
@@ -57,6 +113,7 @@ class ViserSim:
         arm_q_fn: Callable[[np.ndarray], np.ndarray],
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
+        scene_bodies: list[SceneBody] | None = None,
         port: int,
     ) -> None:
         self._urdf_path = urdf_path
@@ -66,12 +123,14 @@ class ViserSim:
         self._arm_q_fn = arm_q_fn
         self._joint_names = joint_names
         self._default_q = default_q
+        self._scene_bodies = scene_bodies or []
         self._port = port
         self._latest_q: np.ndarray | None = None
         self._condition = threading.Condition()
         self._thread: threading.Thread | None = None
         self._last_left: np.ndarray = np.zeros(command_size, dtype=np.float32)
         self._last_right: np.ndarray = np.zeros(command_size, dtype=np.float32)
+        self._latest_body_poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     def _arm_q(self, command: np.ndarray) -> np.ndarray:
         """Map one arm command (shape ``(command_size,)``) to its URDF joint sub-vector."""
@@ -106,6 +165,24 @@ class ViserSim:
         q = self._build_q()
         with self._condition:
             self._latest_q = q
+            self._condition.notify()
+
+    async def set_actual_joint_positions(self, q_robot_order: np.ndarray) -> None:
+        """Push already-URDF-order joint positions straight through, bypassing
+        ``arm_q_fn`` — used when a physics sim (e.g. MuJoCo) is the source of
+        truth for joint state instead of a directly-solved IK command."""
+        with self._condition:
+            self._latest_q = np.asarray(q_robot_order, dtype=np.float32)
+            self._condition.notify()
+
+    async def set_body_pose(self, name: str, position: np.ndarray, quaternion_wxyz: np.ndarray) -> None:
+        """Move a dynamic scene body prop (no-op if ``name`` wasn't configured
+        as a scene body — see :attr:`ViserSim._scene_bodies`)."""
+        with self._condition:
+            self._latest_body_poses[name] = (
+                np.asarray(position, dtype=np.float32),
+                np.asarray(quaternion_wxyz, dtype=np.float32),
+            )
             self._condition.notify()
 
     def _build_q(self) -> np.ndarray:
@@ -156,6 +233,13 @@ class ViserSim:
         viser_urdf.update_cfg(_to_viser(q0))
         server.scene.add_grid("/grid", width=2.0, height=2.0, position=(0.0, 0.0, 0.0))
 
+        # Scene body frames, keyed by name — only dynamic ones ever get moved
+        # after this; static ones (no <freejoint> in the scene asset) just
+        # render once at their rest pose.
+        body_frames = {
+            body.name: _add_scene_body(server, body) for body in self._scene_bodies
+        }
+
         @server.on_client_connect
         def _set_initial_camera(client: viser.ClientHandle) -> None:
             # Front-ish, slightly elevated view that frames both arms without
@@ -167,5 +251,12 @@ class ViserSim:
             with self._condition:
                 self._condition.wait()
                 q = self._latest_q
+                body_poses = self._latest_body_poses
+                self._latest_body_poses = {}
             if q is not None and q.size > 0:
                 viser_urdf.update_cfg(_to_viser(np.asarray(q, dtype=float)))
+            for name, (position, quaternion_wxyz) in body_poses.items():
+                frame = body_frames.get(name)
+                if frame is not None:
+                    frame.position = tuple(position.tolist())
+                    frame.wxyz = tuple(quaternion_wxyz.tolist())

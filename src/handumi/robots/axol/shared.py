@@ -6,7 +6,7 @@ should hard-code Axol URDF strings; they should call the helpers below instead.
 
 Downstream consumers:
 - ``axol/solver.py``   — builds ``AXOL_KINEMATICS_SPEC`` from these names.
-- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~handumi.robots.sim.ViserSim`.
+- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~handumi.sim.viser_sim.ViserSim`.
 """
 
 from __future__ import annotations

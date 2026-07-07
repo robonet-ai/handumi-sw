@@ -198,10 +198,19 @@ Shared robot logic lives once:
 
 ```text
 robots/kinematics.py     # BimanualPyrokiSolver
-robots/sim.py            # ViserSim
 robots/registry.py       # load_embodiment("piper" | "axol")
 retargeting/pico_to_robot.py
 retargeting/handumi_to_robot.py
+```
+
+Simulation/visualization is robot-agnostic and lives in its own package
+(``robots/registry.py`` wires a specific embodiment's data into it, but
+neither engine hard-codes any robot):
+
+```text
+sim/viser_sim.py         # ViserSim — kinematics-only web rendering
+sim/mujoco_sim.py        # MujocoSim — headless real physics (contact/grasp)
+assets/scenes/<name>/    # task scene assets (MJCF), e.g. cube_in_box
 ```
 
 Per-arm command vectors are `(8,)`:

@@ -1,0 +1,41 @@
+<!--
+  Task scene: a skyblue cube (30mm) that fits in a white open-top box
+  (40x40x35mm outer, 5mm walls) — a pick-and-place target.
+
+  This is a plain MJCF fragment, not a standalone robot: handumi.sim.mujoco_sim
+  loads it as its own MjSpec and attaches it into whichever embodiment's MJCF at
+  a configurable offset (see configs/scene.yaml), so it is robot-agnostic.
+
+  Body/geom names are prefixed with the scene folder name ("cube_in_box_") to
+  avoid clashing with any robot's own body/geom names once attached.
+
+  To add a new task scene: copy this folder, rename it, and edit the geometry
+  below — no Python changes needed. Any body containing a <freejoint> is
+  treated as dynamic (its pose is read back from physics every frame); bodies
+  without one are static set dressing. Only "box"-type geoms are supported by
+  the generic Viser renderer today (see handumi.sim.viser_sim); extend the type
+  map there if a scene needs spheres/cylinders.
+-->
+<mujoco model="cube_in_box">
+  <worldbody>
+    <body name="cube_in_box_box" pos="0 0 0">
+      <geom name="cube_in_box_box_floor" type="box"
+            size="0.02 0.02 0.0025" pos="0 0 0.0025" rgba="1 1 1 1"/>
+      <geom name="cube_in_box_box_wall_front" type="box"
+            size="0.02 0.0025 0.015" pos="0 0.0175 0.02" rgba="1 1 1 1"/>
+      <geom name="cube_in_box_box_wall_back" type="box"
+            size="0.02 0.0025 0.015" pos="0 -0.0175 0.02" rgba="1 1 1 1"/>
+      <geom name="cube_in_box_box_wall_left" type="box"
+            size="0.0025 0.02 0.015" pos="0.0175 0 0.02" rgba="1 1 1 1"/>
+      <geom name="cube_in_box_box_wall_right" type="box"
+            size="0.0025 0.02 0.015" pos="-0.0175 0 0.02" rgba="1 1 1 1"/>
+    </body>
+
+    <body name="cube_in_box_cube" pos="-0.15 0 0.015">
+      <freejoint name="cube_in_box_cube_freejoint"/>
+      <geom name="cube_in_box_cube_geom" type="box"
+            size="0.015 0.015 0.015" rgba="0.529 0.808 0.922 1"
+            mass="0.02" friction="1.0 0.005 0.0001"/>
+    </body>
+  </worldbody>
+</mujoco>

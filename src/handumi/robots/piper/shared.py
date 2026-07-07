@@ -6,7 +6,7 @@ should hard-code Piper URDF strings; they should call the helpers below instead.
 
 Downstream consumers:
 - ``piper/solver.py``    — builds ``PIPER_KINEMATICS_SPEC`` from these names.
-- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~handumi.robots.sim.ViserSim`.
+- ``robots/registry.py`` — wires ``command_to_arm_q`` into :class:`~handumi.sim.viser_sim.ViserSim`.
 """
 
 from __future__ import annotations
@@ -146,6 +146,37 @@ def urdf_arm_joint_names(*, is_left: bool) -> list[str]:
 
     prefix = "left" if is_left else "right"
     return [f"{prefix}_joint{i}" for i in range(1, 9)]
+
+
+def mujoco_arm_joint_names(*, is_left: bool) -> list[str]:
+    """All MJCF actuator/joint names for one arm (``assets/piper/piper.xml``),
+    in the same joint1..joint8 order as :func:`urdf_arm_joint_names`.
+
+    The MJCF was authored independently in Spanish (izq = izquierdo/left,
+    der = derecho/right); this is the one place that maps back to the
+    left/right convention the rest of the codebase uses.
+    """
+
+    prefix = "izq" if is_left else "der"
+    return [f"{prefix}_joint{i}" for i in range(1, 9)]
+
+
+def _resolve_mjcf_path() -> Path:
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parents[2] / "assets" / "piper" / "piper.xml",
+        here.parents[4] / "assets" / "piper" / "piper.xml",
+    )
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise FileNotFoundError(
+        "Could not find piper.xml; expected it under handumi/assets/piper "
+        "or repo assets/piper"
+    )
+
+
+MJCF_PATH: Path = _resolve_mjcf_path()
 
 
 def urdf_revolute_body_names(*, is_left: bool) -> list[str]:

@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from handumi.capture.live_tracking_quest import (
+from handumi.scripts.live_tracking_quest import (
     DoubleClapDetector,
     TrajectoryTrail,
     run_live_tracking,
@@ -191,7 +191,7 @@ class LiveLoopSmokeTest(unittest.TestCase):
         import rerun as rr
 
         rr.init("handumi_live_tracking_test")  # memory recording, no viewer
-        from handumi.capture import live_tracking_quest as live_tracking
+        from handumi.scripts import live_tracking_quest as live_tracking
 
         live_tracking._send_styles()
         live_tracking._send_blueprint()

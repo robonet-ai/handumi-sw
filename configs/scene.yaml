@@ -1,0 +1,10 @@
+# Which task scene to load into the physics sim, and where to place it in
+# the dual-arm robot-world frame (the same frame RobotFollower solves IK in).
+#
+# Scene geometry (dimensions, colors, mass, friction) lives entirely in
+# assets/scenes/<name>/scene.xml. To switch tasks or add a new one, add a
+# folder under assets/scenes/ and point `name` at it — nothing here or in
+# code needs to know what shape the task is.
+scene:
+  name: cube_in_box
+  position: [0.35, 0.0, 0.0]

@@ -19,7 +19,8 @@ from typing import Any
 import numpy as np
 
 from handumi.robots.kinematics import KinematicsConfig
-from handumi.robots.sim import ViserSim
+from handumi.sim.mujoco_sim import MujocoSim, SceneConfig
+from handumi.sim.viser_sim import ViserSim
 
 DEFAULT_COMPARE_AXIS_MAPS: dict[str, tuple[str, ...]] = {
     "piper": (
@@ -68,6 +69,12 @@ class EmbodimentRuntime:
     wrist_forward: float
     wrist_height: float
     wrist_lateral: float
+    # MuJoCo physics is optional per embodiment: an embodiment with no MJCF
+    # (e.g. axol today, which only has a URDF) leaves these None, and
+    # make_physics() returns None — Viser then stays kinematics-only for it,
+    # same as before physics existed at all.
+    mjcf_path: Path | None = None
+    mujoco_arm_joint_names: Callable[..., list[str]] | None = None
 
     def make_sim(
         self,
@@ -75,8 +82,9 @@ class EmbodimentRuntime:
         port: int | None = None,
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
+        scene_bodies: list | None = None,
     ) -> ViserSim:
-        """Build a :class:`~handumi.robots.sim.ViserSim` for this embodiment."""
+        """Build a :class:`~handumi.sim.viser_sim.ViserSim` for this embodiment."""
         return ViserSim(
             urdf_path=self.urdf_path,
             left_joint_names=self.urdf_arm_joint_names(is_left=True),
@@ -85,7 +93,25 @@ class EmbodimentRuntime:
             arm_q_fn=self.command_to_arm_q,
             joint_names=joint_names,
             default_q=default_q,
+            scene_bodies=scene_bodies,
             port=self.default_port if port is None else port,
+        )
+
+    def make_physics(
+        self,
+        *,
+        scene_config: SceneConfig | None = None,
+    ) -> MujocoSim | None:
+        """Build a :class:`~handumi.sim.mujoco_sim.MujocoSim` for this
+        embodiment, or ``None`` if it has no MJCF (no real physics available)."""
+        if self.mjcf_path is None or self.mujoco_arm_joint_names is None:
+            return None
+        return MujocoSim(
+            mjcf_path=self.mjcf_path,
+            left_joint_names=self.mujoco_arm_joint_names(is_left=True),
+            right_joint_names=self.mujoco_arm_joint_names(is_left=False),
+            command_to_arm_q_fn=self.command_to_arm_q,
+            scene_config=scene_config,
         )
 
 
@@ -99,8 +125,10 @@ def load_embodiment(name: str) -> EmbodimentRuntime:
         )
         from handumi.robots.piper.shared import (
             COMMAND_SIZE,
+            MJCF_PATH,
             URDF_PATH,
             command_to_arm_q,
+            mujoco_arm_joint_names,
             urdf_arm_joint_names,
         )
         from handumi.robots.piper.solver import KinematicsSolver
@@ -123,6 +151,8 @@ def load_embodiment(name: str) -> EmbodimentRuntime:
             wrist_forward=0.34,
             wrist_height=0.24,
             wrist_lateral=0.23,
+            mjcf_path=MJCF_PATH,
+            mujoco_arm_joint_names=mujoco_arm_joint_names,
         )
 
     if name == "axol":

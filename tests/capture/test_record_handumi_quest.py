@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from handumi.capture.record_handumi_quest import (
+from handumi.scripts.record_handumi_quest import (
     WorkspaceState,
     build_features,
     build_observation,
