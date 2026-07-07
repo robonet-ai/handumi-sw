@@ -25,7 +25,19 @@ camera/Feetech frames in post-processing (see docs/phase-2-motion-tracking.md).
 
 Controls (workstation has the only UI; the headset has none):
   left X   reset workspace on the current HMD pose (auto-inits on first frame)
-  right A  start / stop an episode   (with --button-control)
+  right A  start / stop an episode              (with --button-control)
+  clap x2  start / stop an episode, hands-free   (with --clap-control)
+
+By default (neither flag), episodes start on ENTER and stop after
+--episode-time-s. Without --output-dir, each run creates a fresh
+outputs/<YYYYMMDD_HHMMSS>/ folder named after when recording started
+(outputs/ is gitignored — never committed).
+
+Pass --robot piper to mirror each episode live in Viser (real MuJoCo physics,
+same as live_tracking_quest.py --robot) while it's being recorded, so the
+collector can watch the robot follow their hands during the real HandUMI
+task. Spoken status announcements ("Recording episode 3", "Episode 3 saved,
+812 frames", ...) are on by default — pass --no-sounds to disable them.
 
 Usage
 -----
@@ -47,6 +59,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +75,7 @@ from handumi.feetech import (
     zero_gripper_widths,
 )
 from handumi.feetech.bus import FeetechUnavailableError
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
@@ -75,6 +89,7 @@ from handumi.tracking.transforms import (
     WorkspaceCalibration,
     unity_pose_to_handumi,
 )
+from handumi.utils.speech import log_say
 
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s - %(message)s", datefmt="%H:%M:%S"
@@ -206,9 +221,10 @@ class WorkspaceState:
     def is_set(self) -> bool:
         return self._set
 
-    def update(self, frame: QuestFrame | None) -> None:
+    def update(self, frame: QuestFrame | None) -> bool:
+        """Update the calibration; returns True if it was (re)initialized this call."""
         if frame is None or not frame.hmd.tracked:
-            return
+            return False
         reset_pressed = frame.left.buttons.primary
         reset_edge = reset_pressed and not self._prev_reset
         self._prev_reset = reset_pressed
@@ -216,6 +232,8 @@ class WorkspaceState:
             self.calibration = workspace_from_hmd(frame.hmd)
             self._set = True
             log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
+            return True
+        return False
 
 
 # ── Recording loop ──────────────────────────────────────────────────────────
@@ -237,25 +255,37 @@ def record_episode(
     cam_height: int,
     button_control: bool,
     stop_event: threading.Event,
+    clap_control: bool = False,
+    clap_detector: DoubleClapDetector | None = None,
+    robot_follower=None,
 ) -> tuple[int, str]:
-    """Record one episode. Returns (n_frames, status)."""
+    """Record one episode. Returns (n_frames, status).
+
+    ``robot_follower`` (see ``handumi.capture.robot_follow.RobotFollower``) is
+    optional and mirrors this episode's tracked poses into the Viser/MuJoCo
+    sim live, exactly like ``live_tracking_quest.py --robot`` does — so the
+    collector can watch the robot (and, if configured, the task scene) follow
+    their hands while HandUMI data is being recorded.
+    """
     from handumi.cameras.usb import read_camera_frames
 
     control_interval = 1.0 / fps
     n_frames = 0
     start_t = time.perf_counter()
     prev_stop_button = _right_a(receiver)
+    timed = not button_control and not clap_control
 
     while True:
         loop_start = time.perf_counter()
         elapsed = loop_start - start_t
         if stop_event.is_set():
             return n_frames, "finish"
-        if not button_control and elapsed >= episode_time_s:
+        if timed and elapsed >= episode_time_s:
             return n_frames, "recorded"
 
         frame = receiver.latest()
-        workspace.update(frame)
+        if workspace.update(frame) and robot_follower is not None:
+            robot_follower.reset()
 
         if button_control:
             pressed = _right_a(receiver)
@@ -265,9 +295,24 @@ def record_episode(
 
         cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
         widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+
+        if clap_control and clap_detector is not None:
+            if clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
+                return n_frames, "recorded"
+
         observation = build_observation(
             frame, mounts=mounts, workspace=workspace.calibration, widths=widths
         )
+
+        if robot_follower is not None and workspace.is_set:
+            left_tracked = bool(observation["observation.quest.left_tracked"][0])
+            right_tracked = bool(observation["observation.quest.right_tracked"][0])
+            robot_follower.step(
+                observation["observation.state"],
+                left_tracked=left_tracked,
+                right_tracked=right_tracked,
+            )
+
         dataset.add_frame({**cam_frames, **observation, "task": task})
         n_frames += 1
 
@@ -310,24 +355,69 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_quest")
-    p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Dataset root. Defaults to outputs/<YYYYMMDD_HHMMSS>/ named after "
+        "when recording started (outputs/ is gitignored).",
+    )
     p.add_argument("--task", type=str, default="Quest teleoperation recording")
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--vcodec", type=str, default="h264")
-    p.add_argument(
+    control_group = p.add_mutually_exclusive_group()
+    control_group.add_argument(
         "--button-control",
         action="store_true",
         help="Use right A to start/stop each episode (otherwise ENTER + timer).",
     )
+    control_group.add_argument(
+        "--clap-control",
+        action="store_true",
+        help="Double-clap either gripper shut to start/stop each episode, "
+        "hands-free (otherwise ENTER + timer). Requires Feetech (not --skip-feetech).",
+    )
     p.add_argument("--push-to-hub", action="store_true")
+    p.add_argument(
+        "--robot",
+        choices=["piper"],
+        default=None,
+        help="Mirror this episode live in Viser, IK-following the tracked poses "
+        "while recording (same as live_tracking_quest.py --robot).",
+    )
+    p.add_argument("--robot-port", type=int, default=None, help="Viser port (default 8003).")
+    p.add_argument(
+        "--robot-z-lift",
+        type=float,
+        default=0.55,
+        help="Meters added to workspace Z: HMD-origin poses sit below the head; "
+        "the robot base sits on the floor plate.",
+    )
+    p.add_argument("--robot-x-shift", type=float, default=0.0, help="Meters added to workspace X.")
+    p.add_argument(
+        "--no-robot-browser",
+        action="store_true",
+        help="Don't auto-open the Viser robot view in a browser tab (e.g. headless/SSH).",
+    )
+    p.add_argument(
+        "--no-sounds",
+        action="store_true",
+        help="Disable spoken episode-status announcements (start/save/discard/stop).",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.clap_control and args.skip_feetech:
+        raise SystemExit(
+            "--clap-control needs real Feetech gripper widths to detect claps; "
+            "cannot combine with --skip-feetech."
+        )
+    output_dir = args.output_dir or _default_output_dir()
     config = _resolve_config(args)
     mounts = (
         MountingOffsets.from_yaml(args.tracking_config)
@@ -340,6 +430,19 @@ def main() -> None:
 
     log.info("─── Feetech setup ───")
     grippers = _connect_feetech(args)
+
+    robot_follower = None
+    if args.robot:
+        from handumi.capture.robot_follow import RobotFollower
+
+        log.info("─── Robot sim setup (%s) ───", args.robot)
+        robot_follower = RobotFollower(
+            embodiment=args.robot,
+            port=args.robot_port,
+            z_lift=args.robot_z_lift,
+            x_shift=args.robot_x_shift,
+            open_browser=not args.no_robot_browser,
+        )
 
     log.info("─── Quest receiver ───")
     receiver = MetaQuestReceiver(config)
@@ -354,7 +457,7 @@ def main() -> None:
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
         fps=args.fps,
-        root=args.output_dir,
+        root=output_dir,
         robot_type="handumi_raw",
         features=features,
         use_videos=use_videos,
@@ -365,6 +468,7 @@ def main() -> None:
     log.info("Dataset created at: %s", dataset.root)
 
     workspace = WorkspaceState()
+    clap_detector = DoubleClapDetector()
     stop_event = threading.Event()
 
     def _on_signal(signum, frame):
@@ -382,11 +486,15 @@ def main() -> None:
                 log.info("Episode %d: press right A to start ...", ep_num)
                 if not _wait_for_right_a(receiver, stop_event):
                     break
+            elif args.clap_control:
+                log.info("Episode %d: double-clap either gripper to start ...", ep_num)
+                if not _wait_for_clap(grippers, clap_detector, stop_event):
+                    break
             else:
                 input(f"  Press ENTER to start episode {ep_num} (Ctrl+C to stop) ...")
             stop_event.clear()
 
-            log.info("  Recording ...")
+            log_say(f"Recording episode {ep_num}", play_sounds=not args.no_sounds)
             n_frames, status = record_episode(
                 dataset=dataset,
                 cameras=cameras,
@@ -402,18 +510,22 @@ def main() -> None:
                 cam_height=args.cam_height,
                 button_control=args.button_control,
                 stop_event=stop_event,
+                clap_control=args.clap_control,
+                clap_detector=clap_detector,
+                robot_follower=robot_follower,
             )
             print()
             if n_frames == 0:
-                log.warning("  No frames recorded - discarding episode.")
+                log_say("No frames recorded, discarding episode", play_sounds=not args.no_sounds)
                 dataset.clear_episode_buffer()
             else:
-                log.info("  Saving %d frames ...", n_frames)
+                log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=not args.no_sounds)
                 dataset.save_episode()
                 recorded += 1
             if status == "finish":
                 break
     finally:
+        log_say("Stop recording", play_sounds=not args.no_sounds, blocking=True)
         log.info("─── Finalising ───")
         dataset.finalize()
         receiver.stop()
@@ -423,9 +535,12 @@ def main() -> None:
             disconnect_cameras(cameras)
         if grippers is not None:
             grippers.close()
+        if robot_follower is not None:
+            robot_follower.close()
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         if args.push_to_hub:
             dataset.push_to_hub()
+        log_say("Exiting", play_sounds=not args.no_sounds)
 
 
 def _wait_for_right_a(receiver: MetaQuestReceiver, stop_event: threading.Event) -> bool:
@@ -437,6 +552,28 @@ def _wait_for_right_a(receiver: MetaQuestReceiver, stop_event: threading.Event) 
         prev = pressed
         time.sleep(0.02)
     return False
+
+
+def _wait_for_clap(
+    grippers: FeetechGripperPair | None,
+    clap_detector: DoubleClapDetector,
+    stop_event: threading.Event,
+) -> bool:
+    """Poll Feetech widths until a double-clap fires (or ``stop_event`` sets)."""
+    while not stop_event.is_set():
+        widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+        if clap_detector.update(widths.left_mm, widths.right_mm, time.perf_counter()):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def _default_output_dir() -> Path:
+    """``outputs/<YYYYMMDD_HHMMSS>/`` named after the moment recording starts.
+
+    ``outputs/`` is gitignored — datasets never get committed by accident.
+    """
+    return Path("outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def _resolve_config(args) -> MetaQuestConfig:

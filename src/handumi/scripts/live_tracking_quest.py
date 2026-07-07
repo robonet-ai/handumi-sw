@@ -53,6 +53,7 @@ from handumi.tracking.meta_quest import (
     controller_pose_in_workspace,
     workspace_from_hmd,
 )
+from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.transforms import (
     MountingOffsets,
     Pose,
@@ -90,51 +91,6 @@ class TrajectoryTrail:
         if not self._points:
             return np.zeros((0, 3), dtype=np.float32)
         return np.asarray(self._points, dtype=np.float32)
-
-
-class DoubleClapDetector:
-    """Reset gesture: squeeze either gripper shut twice in quick succession.
-
-    Each side is tracked independently. A "clap" fires when that side's width
-    drops below ``close_mm``; it must reopen past ``open_mm`` (hysteresis)
-    before its next clap counts. Two claps of the *same* gripper at most
-    ``window_s`` apart trigger. Lets the wearer reset hands-free instead of
-    reaching for the controller buttons under the HandUMI shell (and will
-    later double as the start/stop-recording gesture).
-    """
-
-    def __init__(
-        self,
-        *,
-        close_mm: float = 8.0,
-        open_mm: float = 25.0,
-        window_s: float = 1.2,
-    ) -> None:
-        self._close_mm = close_mm
-        self._open_mm = open_mm
-        self._window_s = window_s
-        self._armed = {"left": True, "right": True}  # seen open since last clap
-        self._last_clap_t: dict[str, float | None] = {"left": None, "right": None}
-
-    def update(self, left_mm: float, right_mm: float, now_s: float) -> bool:
-        """Feed one width sample; returns True when either side double-claps."""
-        triggered = False
-        for side, mm in (("left", left_mm), ("right", right_mm)):
-            if mm > self._open_mm:
-                self._armed[side] = True
-                last = self._last_clap_t[side]
-                if last is not None and now_s - last > self._window_s:
-                    self._last_clap_t[side] = None  # first clap expired
-                continue
-            if mm < self._close_mm and self._armed[side]:
-                self._armed[side] = False
-                last = self._last_clap_t[side]
-                if last is not None and now_s - last <= self._window_s:
-                    self._last_clap_t[side] = None
-                    triggered = True
-                else:
-                    self._last_clap_t[side] = now_s
-        return triggered
 
 
 # ---------------------------------------------------------------------------
