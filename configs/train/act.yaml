@@ -1,0 +1,18 @@
+# Default ACT training hyperparameters for HandUMI datasets.
+#
+# Keys are draccus dotted paths into lerobot's TrainPipelineConfig
+# (see `lerobot-train --help`); handumi-train turns each entry into a
+# `--<key>=<value>` flag, so anything lerobot-train accepts is valid here.
+# CLI flags passed to handumi-train after `--` override these values.
+policy.type: act
+policy.push_to_hub: false
+
+batch_size: 8
+steps: 100000
+num_workers: 4
+
+log_freq: 200
+save_freq: 20000
+
+wandb.enable: true
+wandb.project: handumi

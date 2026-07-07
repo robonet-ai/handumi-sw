@@ -42,6 +42,7 @@ handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
 handumi-home-servos = "handumi.scripts.setup.home_servos:main"
 handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
 handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
+handumi-train = "handumi.training.train:main"
 
 [dependency-groups]
 dev = [
