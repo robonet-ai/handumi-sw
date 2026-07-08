@@ -16,13 +16,18 @@ Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.12.
 ```bash
 git clone <repo-url> handumi-sw
 cd handumi-sw
-bash bin/install.sh
+bash install.sh              # Meta Quest only: bash install.sh --skip-xrt
 source .venv/bin/activate
 ```
 
-`bin/install.sh` creates the venv, runs `uv sync`, fetches/builds the XRoboToolkit
+`install.sh` creates the venv, runs `uv sync`, fetches/builds the XRoboToolkit
 native SDK (needed for PICO), and installs `xrobotoolkit_sdk`. Re-run it safely
 after pulling changes.
+
+Use `--skip-xrt` if you only track with **Meta Quest** — XRoboToolkit is PICO-only
+tracking software, so building it is wasted time/dependencies on a Quest-only
+setup (see [README_quest.md](README_quest.md)). Without the flag, install.sh
+builds it for PICO support (see [README_pico.md](README_pico.md)).
 
 Check:
 
@@ -74,6 +79,10 @@ handumi-record-pico \
 First set up and smoke-test per [README_quest.md](README_quest.md), then:
 
 ```bash
+# tracking check only (no cameras/sim): expect fps ~120 and both trk=1;
+# trk=0 = controllers asleep or out of the headset cameras' view
+python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
+
 # live visualization — Rerun 3D trajectory (uses quest_ip from the config)
 handumi-live-tracking-quest
 
@@ -81,16 +90,29 @@ handumi-live-tracking-quest
 # (Viser at http://localhost:8003; first launch JIT-compiles for ~30s)
 handumi-live-tracking-quest --robot piper
 
-# record a dataset (16D state + observation.quest.* poses/clocks)
-handumi-record-quest \
-  --repo-id local/handumi_quest_test \
-  --output-dir outputs/datasets/handumi_quest_test \
-  --task "quest tracking test" --num-episodes 1 --episode-time-s 20
+# add a task scene with real physics (assets/scenes/cube_in_box)
+handumi-live-tracking-quest --robot piper --scene cube_in_box
+
+# record a dataset (16D state + observation.quest.* poses/clocks),
+# hands-free: double-clap starts/stops each episode, voice announcements,
+# saved to outputs/<timestamp>/
+handumi-record-quest --robot piper --scene cube_in_box --clap-control
 ```
 
 Add `--skip-cameras` / `--skip-feetech` to run without that hardware. Controls
 (no headset UI): **left X** resets the workspace on the current HMD pose;
-**right A** starts/stops an episode with `--button-control`.
+**right A** starts/stops an episode with `--button-control`; a double clap
+(close both grippers twice within ~1.2s) does the same with `--clap-control`.
+
+## Train
+
+Datasets in `outputs/` train directly with lerobot (config in
+`configs/train/act.yaml`, checkpoints in `outputs/train/`):
+
+```bash
+handumi-train --latest                              # newest dataset, ACT + wandb
+handumi-train --dataset outputs/<ts> --steps=50000  # explicit dataset, overrides
+```
 
 ## Inspect Dataset
 
