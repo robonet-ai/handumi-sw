@@ -145,33 +145,13 @@ Viser (http://localhost:8003; first launch JIT-compiles for ~30s).
 Once this looks right, mount the headset on the neck and use the full
 live/record commands (with cameras + Feetech) in [README.md](README.md).
 
-## 7. Calibrate (one-time, in this order)
+## 7. Calibrate
 
-Teleop is absolute: real HandUMI motion replays 1:1 on the simulated arms,
-so a task scene (`--scene cube_in_box`) placed at the same coordinates in
-sim and reality stays aligned. That requires three calibrations, each
-feeding the next:
-
-1. **Mount rotation** (controller → gripper TCP orientation,
-   `configs/tracking_meta_quest.yaml`): two-stance method with
-   `handumi-print-controller-pose` — hold the bare controller naturally,
-   then mounted; the offset is `conj(q_mounted) * q_bare`.
-2. **Mount position** (controller → gripper TCP translation, same config):
-   pivot calibration with `handumi-calibrate-tcp-offset --side left` —
-   pin the gripper tip on a fixed point and rotate the device ~25s; the
-   script solves the offset by least squares and prints the YAML (aim for
-   RMS < 5mm). Repeat per side (or verify the printed mirror).
-3. **Workspace → robot world** (`configs/teleop.yaml`):
-   `handumi-calibrate-workspace` — touch one or more points with known
-   robot-world coordinates (e.g. the scene origin from
-   `configs/scene.yaml`) with the gripper tip; one point solves the
-   translation, two+ also solve the yaw.
-
-Verify: in Rerun each hand shows two trails — faint = raw controller,
-solid = estimated TCP; they must differ only by a rigid offset (a shape
-mismatch under wrist rotations = redo 1-2). In Viser, the TCP sphere must
-sit on the gripper tip and touch the sim scene exactly where the real tip
-touches the real scene (off = redo 3).
+Follow **[README_offset.md](README_offset.md)** — the full step-by-step for
+the three calibrations (mount rotation, mount position via pivot
+calibration, workspace → robot world), with per-step checkpoints and
+troubleshooting. Do it before recording datasets: steps 1-2 affect the
+recorded data itself.
 
 ## Troubleshooting
 

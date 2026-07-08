@@ -155,6 +155,8 @@ in meters.
 
 - [README_gripper.md](README_gripper.md) — gripper + camera setup and calibration
 - [README_quest.md](README_quest.md) — Meta Quest tracking setup (Phase 2)
+- [README_offset.md](README_offset.md) — controller→TCP→robot-world calibration
+  (do before recording datasets)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md) — Meta Quest
   motion tracking (body-worn, no-UI), Rerun trajectory rendering, yubi-sw/axol-vr
