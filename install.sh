@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+
+SKIP_XRT=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-xrt) SKIP_XRT=1 ;;
+    *)
+      echo "error: unknown argument: $arg" >&2
+      echo "       usage: $0 [--skip-xrt]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 XROBO_DIR="external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"
 SIBLING_XROBO="$ROOT/../GR00T-WholeBodyControl/external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"
@@ -147,25 +159,36 @@ ensure_xrobotoolkit_python_package() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-ensure_xrobotoolkit_sources
-ensure_xrobotoolkit_native_lib
+if [[ "$SKIP_XRT" -eq 1 ]]; then
+  echo "==> --skip-xrt: skipping XRoboToolkit (PICO) sources/build/package"
+else
+  ensure_xrobotoolkit_sources
+  ensure_xrobotoolkit_native_lib
+fi
 ensure_venv
 ensure_project_deps
-ensure_xrobotoolkit_python_package
+if [[ "$SKIP_XRT" -ne 1 ]]; then
+  ensure_xrobotoolkit_python_package
+fi
 
 echo "==> Installation complete"
 echo "Activate the environment with: source $VENV_DIR/bin/activate"
 echo ""
 
 # ── Runtime note: XRoboToolkit service ───────────────────────────────────────
-SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
-if [[ -f "$SERVICE_SCRIPT" ]]; then
-  echo "NOTE: XRoboToolkit PC service found at $SERVICE_SCRIPT"
-  echo "      Start it before running any xrobotoolkit_sdk scripts:"
-  echo "        bash $SERVICE_SCRIPT"
+if [[ "$SKIP_XRT" -eq 1 ]]; then
+  echo "NOTE: XRoboToolkit (PICO) was skipped (--skip-xrt). Using Meta Quest"
+  echo "      tracking needs no PC service — see README_quest.md."
 else
-  echo "WARNING: XRoboToolkit PC service not found at $SERVICE_SCRIPT"
-  echo "         xrt.init() will crash (core dump) if the service is not running."
-  echo "         Install the XRoboToolkit PC service from:"
-  echo "           https://github.com/XR-Robotics/XRoboToolkit-PC-Service"
+  SERVICE_SCRIPT="/opt/apps/roboticsservice/runService.sh"
+  if [[ -f "$SERVICE_SCRIPT" ]]; then
+    echo "NOTE: XRoboToolkit PC service found at $SERVICE_SCRIPT"
+    echo "      Start it before running any xrobotoolkit_sdk scripts:"
+    echo "        bash $SERVICE_SCRIPT"
+  else
+    echo "WARNING: XRoboToolkit PC service not found at $SERVICE_SCRIPT"
+    echo "         xrt.init() will crash (core dump) if the service is not running."
+    echo "         Install the XRoboToolkit PC service from:"
+    echo "           https://github.com/XR-Robotics/XRoboToolkit-PC-Service"
+  fi
 fi

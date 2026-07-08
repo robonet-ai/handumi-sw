@@ -4,8 +4,10 @@ One-time setup to stream PICO body/controller poses to the workstation via
 **XRoboToolkit** (PC service + headset app + Python SDK). Run recording commands
 live in [README.md](README.md); PICO data lands in `observation.pico.*` fields.
 
-`bin/install.sh` already builds and installs `xrobotoolkit_sdk`; you still need
-the **PC service** (workstation) and **PICO app** (headset) below.
+`install.sh` (without `--skip-xrt`) already builds and installs `xrobotoolkit_sdk`;
+you still need the **PC service** (workstation) and **PICO app** (headset) below.
+If you only track with Meta Quest, use `bash install.sh --skip-xrt` instead —
+see [README_quest.md](README_quest.md).
 
 ## 1. Install XRoboToolkit (one-time)
 
@@ -171,5 +173,5 @@ start/stop episodes from PICO buttons (**A** = start/stop, **B** = repeat,
   USB mode, check `adb reverse --list` shows `tcp:63901`.
 - **Body joints empty** — enable body tracking in the PICO app, or pass
   `--pico-mandos` if you only need controller poses.
-- **SDK import error** — re-run `bash bin/install.sh` to build
+- **SDK import error** — re-run `bash install.sh` (without `--skip-xrt`) to build
   `xrobotoolkit_sdk`.

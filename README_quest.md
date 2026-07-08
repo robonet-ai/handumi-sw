@@ -6,6 +6,10 @@ tracking base** (no headset UI), a controller mounted on each gripper. Run
 commands live in [README.md](README.md); design details in
 [docs/phase-2-motion-tracking.md](docs/phase-2-motion-tracking.md).
 
+Quest tracking does not use XRoboToolkit (that's PICO-only, see
+[README_pico.md](README_pico.md)) — install with `bash install.sh --skip-xrt`
+to skip fetching/building it entirely.
+
 We reuse the prebuilt **YubiQuestApp** from
 [yubi-sw](https://github.com/airoa-org/yubi-sw) (no custom headset app); it
 streams poses in the exact format `handumi.tracking.meta_quest` parses.
@@ -44,16 +48,22 @@ adb devices
 
 ## 3. Install the YubiQuestApp (one-time)
 
+Downloaded into `external_dependencies/` (gitignored, same convention as the
+PICO SDK build) — never into the repo root:
+
 ```bash
+mkdir -p external_dependencies/quest-app
+cd external_dependencies/quest-app
 wget https://releases.dev.airoa.io/yubi/quest-app/yubi-quest-app-v0.1.0.apk
 adb install -r yubi-quest-app-v0.1.0.apk        # -r upgrades in place
+cd -
 ```
 
 On `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (different-signed build present):
 
 ```bash
 adb uninstall com.UnityTechnologies.com.unity.template.urpblank
-adb install -r yubi-quest-app-v0.1.0.apk
+adb install -r external_dependencies/quest-app/yubi-quest-app-v0.1.0.apk
 ```
 
 Appears in *Library → Unknown Sources → YubiQuestApp*. GUI alternative:
