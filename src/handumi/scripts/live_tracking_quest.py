@@ -128,8 +128,12 @@ def _send_styles() -> None:
     # pin the 3D camera, but the viewer auto-fits to the data bounds — logging
     # these statically keeps the initial framing zoomed out enough to show the
     # whole trajectory instead of hugging the first few points.
-    half = 0.9  # meters — half-extent of the framed working volume
-    corners = [[sx * half, sy * half, sz * half]
+    # Anisotropic on purpose: wide horizontally (arms sweep sideways), short
+    # vertically, and smaller overall than the old 0.9m cube so the initial
+    # auto-fit starts closer in (less zoomed out).
+    half_xy = 0.75  # meters — horizontal half-extent of the framed volume
+    half_z = 0.4  # meters — vertical half-extent
+    corners = [[sx * half_xy, sy * half_xy, sz * half_z]
                for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
     rr.log(
         "tracking/bounds",
