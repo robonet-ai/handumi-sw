@@ -48,7 +48,6 @@ class RobotRuntime:
     wrist_forward: float = 0.34
     wrist_height: float = 0.24
     wrist_lateral: float = 0.23
-    tcp_offset_ee: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def urdf_arm_joint_names(self, *, is_left: bool) -> list[str]:
         side = "left" if is_left else "right"
@@ -190,7 +189,6 @@ def load_embodiment(name: str) -> RobotRuntime:
         solver_cls=_Solver,
         command_size=command_size,
         default_port=8002 if name == "axol" else 8003,
-        tcp_offset_ee=(0.0, 0.0, 0.1358) if name == "piper" else (0.0, 0.0, 0.0),
     )
 
 
