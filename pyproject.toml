@@ -26,8 +26,6 @@ dependencies = [
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",
     "scipy>=1.17.1",
-    # MuJoCo URDF viewer / local robot validation.
-    "mujoco>=3.9.0",
 ]
 
 [project.optional-dependencies]

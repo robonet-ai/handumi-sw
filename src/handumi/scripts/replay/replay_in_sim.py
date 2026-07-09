@@ -15,9 +15,15 @@ from handumi.calibration.control_tcp import (
     calibration_path_for_device,
     load_controller_tcp_calibration,
 )
-from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
-from handumi.dataset.reader import DatasetRef, open_dataset
+from handumi.dataset import (
+    DatasetRef,
+    ensure_metadata,
+    open_dataset,
+    validate_raw_state_metadata,
+)
+from handumi.dataset.raw import HANDUMI_RAW_STATE_SIZE, LEFT_POSE_SLICE, RIGHT_POSE_SLICE
 from handumi.retargeting.handumi_to_robot import (
+    HANDUMI_POSE_ONLY_STATE_SIZE,
     local_frame_adapter,
     local_relative_robot_target_pose7,
     raw_state_pose7_pair,
@@ -104,20 +110,44 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def load_episode_states(args: argparse.Namespace) -> tuple[np.ndarray, float]:
+    """Load replay states, accepting current 16D raw and legacy 14D pose-only data."""
     ref = DatasetRef.from_repo_id(
         args.repo_id,
         root=args.dataset_root,
         revision=args.revision,
     )
+    source_info = ensure_metadata(ref)
+    validate_raw_state_metadata(source_info)
     dataset = open_dataset(ref, episode=args.episode)
     fps = float(getattr(dataset, "fps", 30) or 30)
     states: list[np.ndarray] = []
+    observed_sizes: set[int] = set()
+
     for item in dataset:
         if args.source not in item:
             raise ValueError(f"Dataset item has no {args.source!r} feature.")
-        states.append(np.asarray(item[args.source], dtype=np.float32))
+        state = np.asarray(item[args.source], dtype=np.float32).reshape(-1)
+        observed_sizes.add(len(state))
+        if len(state) not in (HANDUMI_RAW_STATE_SIZE, HANDUMI_POSE_ONLY_STATE_SIZE):
+            raise ValueError(
+                f"Expected HandUMI state length {HANDUMI_RAW_STATE_SIZE} "
+                f"(poses + grippers) or {HANDUMI_POSE_ONLY_STATE_SIZE} "
+                f"(legacy poses only) in {args.source!r}, got {len(state)}."
+            )
+        states.append(state)
+
     if not states:
         raise ValueError(f"Episode {args.episode} is empty.")
+    if len(observed_sizes) > 1:
+        raise ValueError(
+            f"Episode {args.episode} mixes incompatible state sizes: "
+            f"{sorted(observed_sizes)}."
+        )
+    if HANDUMI_POSE_ONLY_STATE_SIZE in observed_sizes:
+        print(
+            "[replay] input state: legacy 14D pose-only format "
+            "(left pose7 + right pose7; no gripper widths)"
+        )
     return np.stack(states, axis=0), fps
 
 

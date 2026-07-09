@@ -29,7 +29,7 @@ except ImportError as e:
         "viser is required for simulation. Install project dependencies with: uv sync"
     ) from e
 
-from handumi.sim.mujoco_sim import SceneBody
+from handumi.sim.scene import SceneBody
 from handumi.utils.trajectory import TrajectoryTrail
 
 # Same palette as the Rerun controller trails in live_tracking_quest.py, so
@@ -46,15 +46,12 @@ def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, 
 
 
 def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
-    """Render one :class:`~handumi.sim.mujoco_sim.SceneGeom` as a viser
-    primitive, nested under its parent body's frame so local pos/quat compose
-    automatically."""
+    """Render one scene geometry as a viser primitive under its parent frame."""
     color = _rgba_to_viser_color(geom.rgba)
     if geom.kind == "box":
-        # MuJoCo box size is half-extents; viser add_box wants full dimensions.
         server.scene.add_box(
             path,
-            dimensions=tuple(2.0 * s for s in geom.size),
+            dimensions=tuple(geom.size),
             color=color,
             position=geom.local_position,
             wxyz=geom.local_quaternion_wxyz,
@@ -70,7 +67,7 @@ def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
         server.scene.add_cylinder(
             path,
             radius=geom.size[0],
-            height=2.0 * geom.size[1],
+            height=geom.size[1],
             color=color,
             position=geom.local_position,
             wxyz=geom.local_quaternion_wxyz,
@@ -80,10 +77,7 @@ def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
 
 
 def _add_scene_body(server: "viser.ViserServer", body: SceneBody):
-    """Render one :class:`~handumi.sim.mujoco_sim.SceneBody`: a parent
-    frame at its rest pose plus one viser primitive per geom. Returns the
-    frame handle so dynamic bodies can be repositioned each frame (static
-    bodies just keep their rest pose forever)."""
+    """Render a scene body and return its frame handle."""
     frame = server.scene.add_frame(
         f"/scene/{body.name}",
         position=body.rest_position,
@@ -181,8 +175,7 @@ class ViserSim:
 
     async def set_actual_joint_positions(self, q_robot_order: np.ndarray) -> None:
         """Push already-URDF-order joint positions straight through, bypassing
-        ``arm_q_fn`` — used when a physics sim (e.g. MuJoCo) is the source of
-        truth for joint state instead of a directly-solved IK command."""
+        ``arm_q_fn``."""
         with self._condition:
             self._latest_q = np.asarray(q_robot_order, dtype=np.float32)
             self._condition.notify()
@@ -253,9 +246,8 @@ class ViserSim:
         viser_urdf.update_cfg(_to_viser(q0))
         server.scene.add_grid("/grid", width=2.0, height=2.0, position=(0.0, 0.0, 0.0))
 
-        # Scene body frames, keyed by name — only dynamic ones ever get moved
-        # after this; static ones (no <freejoint> in the scene asset) just
-        # render once at their rest pose.
+        # Scene body frames, keyed by name. Bodies only move when callers push
+        # a new pose with set_body_pose().
         body_frames = {
             body.name: _add_scene_body(server, body) for body in self._scene_bodies
         }

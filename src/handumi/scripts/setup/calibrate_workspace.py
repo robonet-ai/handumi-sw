@@ -35,14 +35,6 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.devices.meta_quest import (
-    MetaQuestConfig,
-    MetaQuestReceiver,
-    controller_pose_in_workspace,
-    workspace_from_hmd,
-)
-from handumi.devices.transforms import MountingOffsets
-
 
 def solve_transform(
     workspace_points: np.ndarray, robot_points: np.ndarray, *, solve_yaw: bool
@@ -66,6 +58,8 @@ def solve_transform(
 def _average_tcp(receiver: MetaQuestReceiver, side: str, mounts: MountingOffsets,
                  workspace, seconds: float = 1.0) -> np.ndarray | None:
     """Average the tracked TCP workspace position over ``seconds``."""
+    from handumi.tracking.meta_quest import controller_pose_in_workspace
+
     samples: list[np.ndarray] = []
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -85,6 +79,9 @@ def _average_tcp(receiver: MetaQuestReceiver, side: str, mounts: MountingOffsets
 
 
 def main() -> None:
+    from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver, workspace_from_hmd
+    from handumi.tracking.transforms import MountingOffsets
+
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
