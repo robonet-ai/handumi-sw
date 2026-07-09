@@ -12,6 +12,7 @@ dependencies = [
     "pybind11>=2.13",
     "setuptools>=71",
     "python-dotenv==1.2.2",
+    "pyyaml>=6.0",
     # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
     "jax[cuda13]>=0.4.0",
@@ -46,6 +47,7 @@ handumi-print-tcp-offset = "handumi.scripts.setup.print_tcp_offset:main"
 handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
 handumi-calibrate-workspace = "handumi.scripts.setup.calibrate_workspace:main"
 handumi-train = "handumi.training.train:main"
+handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
 
 [dependency-groups]
 dev = [
@@ -64,6 +66,8 @@ packages = ["src/handumi"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "assets/axol" = "handumi/assets/axol"
+"assets/piper" = "handumi/assets/piper"
+"configs/robots" = "handumi/configs/robots"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/handumi"]

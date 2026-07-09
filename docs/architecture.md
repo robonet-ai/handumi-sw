@@ -269,9 +269,7 @@ Piper/arm path, not part of capture):
 
 ```text
 scripts/process_handumi_to_lerobot.py  -> handumi.dataset.conversion
-scripts/replay_pico_ik.py              -> handumi.replay.pico_ik
-scripts/compare_axis.py                -> handumi.retargeting.compare_axis
-scripts/piper/replay_from_dataset.py   -> handumi.replay.piper
+handumi-replay-in-sim                  -> handumi.scripts.replay.replay_in_sim
 ```
 
 `python -m handumi.capture.teleoperate_handumi` is the LeRobot-style live

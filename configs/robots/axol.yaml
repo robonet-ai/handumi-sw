@@ -1,0 +1,11 @@
+kind: axol
+urdf: assets/axol/urdf/axol.urdf
+pkg_root: assets/axol/urdf
+ee_links:
+  left: left_gripper
+  right: right_gripper
+home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+ik_weights:
+  pos: 100.0
+  ori: 15.0
+  rest: 2.0

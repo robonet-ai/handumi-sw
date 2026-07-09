@@ -16,7 +16,7 @@ def load_pico_body_poses(
     root: str | Path | None = None,
     episode: int = 0,
     column: str = "observation.pico.body_joints_pose",
-    revision: str | None = "main",
+    revision: str | None = None,
 ) -> tuple[Any, int]:
     """Load PICO body joint poses from a LeRobot dataset episode.
 

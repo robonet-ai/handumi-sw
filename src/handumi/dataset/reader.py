@@ -53,7 +53,7 @@ def ensure_metadata(
     *,
     repo_id: str | None = None,
     root: str | Path | None = None,
-    revision: str | None = "main",
+    revision: str | None = None,
 ) -> dict[str, Any]:
     """Ensure ``meta/info.json`` exists locally, downloading ``meta/`` from Hub if needed."""
     resolved = _resolve_ref(ref, repo_id=repo_id, root=root, revision=revision)
@@ -96,7 +96,7 @@ def open_dataset(
     root: str | Path | None = None,
     episode: int | None = None,
     episodes: list[int] | None = None,
-    revision: str | None = "main",
+    revision: str | None = None,
 ) -> Any:
     """Open a local or remote LeRobot dataset, downloading missing files as needed."""
     if episode is not None and episodes is not None:
@@ -132,7 +132,7 @@ def download_dataset(
     *,
     repo_id: str | None = None,
     output_dir: str | Path | None = None,
-    revision: str | None = "main",
+    revision: str | None = None,
     episodes: str | None = None,
     force_cache_sync: bool = False,
 ) -> DatasetDownloadResult:

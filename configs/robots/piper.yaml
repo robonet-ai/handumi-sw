@@ -1,0 +1,12 @@
+kind: piper
+urdf: assets/piper/piper.urdf
+pkg_root: assets/piper
+ee_links:
+  left: left_tcp
+  right: right_tcp
+home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+ik_weights:
+  pos: 100.0
+  ori: 15.0
+  rest: 2.0
+  max_reach: 0.45

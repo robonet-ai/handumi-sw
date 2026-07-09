@@ -130,6 +130,18 @@ def load_robot_config(name: str) -> RobotConfig:
             pos_weight=float(weights.get("pos", 100.0)),
             ori_weight=float(weights.get("ori", 15.0)),
             rest_weight=float(weights.get("rest", 2.0)),
+            posture_weight=float(weights.get("posture", 0.0)),
+            manipulability_weight=float(weights.get("manipulability", 0.0)),
+            max_joint_delta=(
+                None
+                if weights.get("max_joint_delta") is None
+                else float(weights["max_joint_delta"])
+            ),
+            max_reach=(
+                None
+                if weights.get("max_reach") is None
+                else float(weights["max_reach"])
+            ),
         ),
     )
 

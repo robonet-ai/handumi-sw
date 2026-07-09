@@ -135,6 +135,11 @@ class BimanualKinematicsSolver:
         fk = self.robot.forward_kinematics(jnp.asarray(q, dtype=jnp.float32))
         return jaxlie.SE3(fk[self.l_ee_idx]), jaxlie.SE3(fk[self.r_ee_idx])
 
+    def fk_pose7(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return left/right FK as ``[x, y, z, qx, qy, qz, qw]`` poses."""
+        left, right = self.fk(q)
+        return se3_to_pose7(left), se3_to_pose7(right)
+
     def link_positions(self, q: np.ndarray, link_indices: list[int]) -> np.ndarray:
         fk = self.robot.forward_kinematics(jnp.asarray(q, dtype=jnp.float32))
         return np.asarray(
@@ -165,7 +170,9 @@ class BimanualKinematicsSolver:
             else:
                 pos, rot = pose
                 tgt_pos.append(np.asarray(pos, dtype=np.float32))
-                tgt_wxyz.append(_rot_3x3_to_wxyz(np.asarray(rot, dtype=np.float32)))
+                tgt_wxyz.append(
+                    _pose_rotation_to_wxyz(np.asarray(rot, dtype=np.float32))
+                )
 
         return solve_bimanual(
             self.robot,
@@ -185,6 +192,87 @@ def _side_indices(robot: pk.Robot, side: str) -> list[int]:
         for i, name in enumerate(robot.joints.actuated_names)
         if name.startswith(f"{side}_")
     ]
+
+
+def se3_to_pose7(transform: jaxlie.SE3) -> np.ndarray:
+    """Convert a JAXLie SE3 to ``[x, y, z, qx, qy, qz, qw]``."""
+    translation = np.asarray(transform.translation(), dtype=np.float32)
+    wxyz = np.asarray(transform.rotation().wxyz, dtype=np.float32)
+    quat = np.array([wxyz[1], wxyz[2], wxyz[3], wxyz[0]], dtype=np.float32)
+    norm = float(np.linalg.norm(quat))
+    if norm < 1e-8:
+        quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    else:
+        quat = (quat / norm).astype(np.float32)
+    return np.concatenate([translation, quat]).astype(np.float32)
+
+
+def rotation_error_deg(target_pose7: np.ndarray, achieved_pose7: np.ndarray) -> np.ndarray:
+    """Shortest quaternion angular distance between pose7 arrays, in degrees."""
+    target_quat = np.asarray(target_pose7, dtype=np.float32)[..., 3:7]
+    achieved_quat = np.asarray(achieved_pose7, dtype=np.float32)[..., 3:7]
+    target_quat = target_quat / np.maximum(
+        np.linalg.norm(target_quat, axis=-1, keepdims=True),
+        1e-8,
+    )
+    achieved_quat = achieved_quat / np.maximum(
+        np.linalg.norm(achieved_quat, axis=-1, keepdims=True),
+        1e-8,
+    )
+    dot = np.abs(np.sum(target_quat * achieved_quat, axis=-1))
+    return np.degrees(2.0 * np.arccos(np.clip(dot, -1.0, 1.0))).astype(np.float32)
+
+
+def pose_error_arrays(
+    target_left_pose7: np.ndarray,
+    target_right_pose7: np.ndarray,
+    achieved_left_pose7: np.ndarray,
+    achieved_right_pose7: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Return per-frame EE position and orientation errors for both arms."""
+    target_left_pose7 = np.asarray(target_left_pose7, dtype=np.float32)
+    target_right_pose7 = np.asarray(target_right_pose7, dtype=np.float32)
+    achieved_left_pose7 = np.asarray(achieved_left_pose7, dtype=np.float32)
+    achieved_right_pose7 = np.asarray(achieved_right_pose7, dtype=np.float32)
+    return {
+        "left_pos_error_m": np.linalg.norm(
+            target_left_pose7[:, :3] - achieved_left_pose7[:, :3], axis=1
+        ).astype(np.float32),
+        "right_pos_error_m": np.linalg.norm(
+            target_right_pose7[:, :3] - achieved_right_pose7[:, :3], axis=1
+        ).astype(np.float32),
+        "left_rot_error_deg": rotation_error_deg(target_left_pose7, achieved_left_pose7),
+        "right_rot_error_deg": rotation_error_deg(target_right_pose7, achieved_right_pose7),
+    }
+
+
+def optimization_score_from_errors(
+    pos_mean_cm: float,
+    pos_max_cm: float,
+    rot_mean_deg: float,
+    rot_max_deg: float,
+) -> float:
+    """Single scalar useful for comparing IK weight sweeps."""
+    return float(
+        pos_mean_cm
+        + 0.35 * pos_max_cm
+        + 0.25 * rot_mean_deg
+        + 0.08 * rot_max_deg
+    )
+
+
+def _pose_rotation_to_wxyz(rot: np.ndarray) -> np.ndarray:
+    if rot.shape == (3, 3):
+        return _rot_3x3_to_wxyz(rot)
+    if rot.shape == (4,):
+        norm = float(np.linalg.norm(rot))
+        if norm < 1e-8:
+            return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        xyzw = (rot / norm).astype(np.float32)
+        return np.array([xyzw[3], xyzw[0], xyzw[1], xyzw[2]], dtype=np.float32)
+    raise ValueError(
+        f"Expected rotation as 3x3 matrix or xyzw quaternion, got {rot.shape}."
+    )
 
 
 def _rot_3x3_to_wxyz(rot: np.ndarray) -> np.ndarray:

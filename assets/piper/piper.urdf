@@ -4,7 +4,7 @@
   <joint name="world_to_left" type="fixed">
     <parent link="world" />
     <child link="left_dummy_link" />
-    <origin xyz="0.0 0.3 0.0" rpy="0 0 0" />
+    <origin xyz="0.0 0.35 0.0" rpy="0 0 0" />
   </joint>
   <link name="left_dummy_link" />
   <joint name="left_base_to_dummy" type="fixed">
@@ -21,7 +21,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/base_link.STL" />
+        <mesh filename="package://piper_description/meshes/base_link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -30,7 +30,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/base_link.STL" />
+        <mesh filename="package://piper_description/meshes/base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -43,7 +43,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link1.STL" />
+        <mesh filename="package://piper_description/meshes/link1.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -52,7 +52,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link1.STL" />
+        <mesh filename="package://piper_description/meshes/link1.STL" />
       </geometry>
     </collision>
   </link>
@@ -72,7 +72,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link2.STL" />
+        <mesh filename="package://piper_description/meshes/link2.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -81,7 +81,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link2.STL" />
+        <mesh filename="package://piper_description/meshes/link2.STL" />
       </geometry>
     </collision>
   </link>
@@ -101,7 +101,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link3.STL" />
+        <mesh filename="package://piper_description/meshes/link3.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -110,7 +110,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link3.STL" />
+        <mesh filename="package://piper_description/meshes/link3.STL" />
       </geometry>
     </collision>
   </link>
@@ -130,7 +130,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link4.STL" />
+        <mesh filename="package://piper_description/meshes/link4.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -139,7 +139,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link4.STL" />
+        <mesh filename="package://piper_description/meshes/link4.STL" />
       </geometry>
     </collision>
   </link>
@@ -159,7 +159,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link5.STL" />
+        <mesh filename="package://piper_description/meshes/link5.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -168,7 +168,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link5.STL" />
+        <mesh filename="package://piper_description/meshes/link5.STL" />
       </geometry>
     </collision>
   </link>
@@ -188,7 +188,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link6.STL" />
+        <mesh filename="package://piper_description/meshes/link6.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -197,7 +197,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link6.STL" />
+        <mesh filename="package://piper_description/meshes/link6.STL" />
       </geometry>
     </collision>
   </link>
@@ -217,7 +217,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/gripper_base.STL" />
+        <mesh filename="package://piper_description/meshes/gripper_base.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -226,7 +226,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/gripper_base.STL" />
+        <mesh filename="package://piper_description/meshes/gripper_base.STL" />
       </geometry>
     </collision>
   </link>
@@ -244,7 +244,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link7.STL" />
+        <mesh filename="package://piper_description/meshes/link7.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -253,7 +253,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link7.STL" />
+        <mesh filename="package://piper_description/meshes/link7.STL" />
       </geometry>
     </collision>
   </link>
@@ -273,7 +273,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link8.STL" />
+        <mesh filename="package://piper_description/meshes/link8.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -282,7 +282,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link8.STL" />
+        <mesh filename="package://piper_description/meshes/link8.STL" />
       </geometry>
     </collision>
   </link>
@@ -293,10 +293,16 @@
     <axis xyz="0 0 -1" />
     <limit lower="-0.035" upper="0" effort="10" velocity="1" />
   </joint>
+  <link name="left_tcp" />
+  <joint name="left_link6_to_tcp" type="fixed">
+    <origin xyz="0 0 0.145" rpy="0 0 0" />
+    <parent link="left_link6" />
+    <child link="left_tcp" />
+  </joint>
   <joint name="world_to_right" type="fixed">
     <parent link="world" />
     <child link="right_dummy_link" />
-    <origin xyz="0.0 -0.3 0.0" rpy="0 0 0" />
+    <origin xyz="0.0 -0.35 0.0" rpy="0 0 0" />
   </joint>
   <link name="right_dummy_link" />
   <joint name="right_base_to_dummy" type="fixed">
@@ -313,7 +319,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/base_link.STL" />
+        <mesh filename="package://piper_description/meshes/base_link.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -322,7 +328,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/base_link.STL" />
+        <mesh filename="package://piper_description/meshes/base_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -335,7 +341,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link1.STL" />
+        <mesh filename="package://piper_description/meshes/link1.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -344,7 +350,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link1.STL" />
+        <mesh filename="package://piper_description/meshes/link1.STL" />
       </geometry>
     </collision>
   </link>
@@ -364,7 +370,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link2.STL" />
+        <mesh filename="package://piper_description/meshes/link2.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -373,7 +379,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link2.STL" />
+        <mesh filename="package://piper_description/meshes/link2.STL" />
       </geometry>
     </collision>
   </link>
@@ -393,7 +399,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link3.STL" />
+        <mesh filename="package://piper_description/meshes/link3.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -402,7 +408,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link3.STL" />
+        <mesh filename="package://piper_description/meshes/link3.STL" />
       </geometry>
     </collision>
   </link>
@@ -422,7 +428,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link4.STL" />
+        <mesh filename="package://piper_description/meshes/link4.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -431,7 +437,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link4.STL" />
+        <mesh filename="package://piper_description/meshes/link4.STL" />
       </geometry>
     </collision>
   </link>
@@ -451,7 +457,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link5.STL" />
+        <mesh filename="package://piper_description/meshes/link5.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -460,7 +466,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link5.STL" />
+        <mesh filename="package://piper_description/meshes/link5.STL" />
       </geometry>
     </collision>
   </link>
@@ -480,7 +486,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link6.STL" />
+        <mesh filename="package://piper_description/meshes/link6.STL" />
       </geometry>
       <material name="">
         <color rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
@@ -489,7 +495,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link6.STL" />
+        <mesh filename="package://piper_description/meshes/link6.STL" />
       </geometry>
     </collision>
   </link>
@@ -509,7 +515,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/gripper_base.STL" />
+        <mesh filename="package://piper_description/meshes/gripper_base.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -518,7 +524,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/gripper_base.STL" />
+        <mesh filename="package://piper_description/meshes/gripper_base.STL" />
       </geometry>
     </collision>
   </link>
@@ -536,7 +542,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link7.STL" />
+        <mesh filename="package://piper_description/meshes/link7.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -545,7 +551,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link7.STL" />
+        <mesh filename="package://piper_description/meshes/link7.STL" />
       </geometry>
     </collision>
   </link>
@@ -565,7 +571,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link8.STL" />
+        <mesh filename="package://piper_description/meshes/link8.STL" />
       </geometry>
       <material name="">
         <color rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
@@ -574,7 +580,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <mesh filename="meshes/link8.STL" />
+        <mesh filename="package://piper_description/meshes/link8.STL" />
       </geometry>
     </collision>
   </link>
@@ -584,5 +590,11 @@
     <child link="right_link8" />
     <axis xyz="0 0 -1" />
     <limit lower="-0.035" upper="0" effort="10" velocity="1" />
+  </joint>
+  <link name="right_tcp" />
+  <joint name="right_link6_to_tcp" type="fixed">
+    <origin xyz="0 0 0.145" rpy="0 0 0" />
+    <parent link="right_link6" />
+    <child link="right_tcp" />
   </joint>
 </robot>
