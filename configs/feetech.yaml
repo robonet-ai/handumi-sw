@@ -14,7 +14,7 @@ baudrate: 1000000
 protocol_version: 0
 left:
   servo_id: 0
-  port: /dev/ttyACM1
+  port: /dev/ttyACM0
 right:
   servo_id: 1
-  port: /dev/ttyACM0
+  port: /dev/ttyACM1

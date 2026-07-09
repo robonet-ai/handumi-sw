@@ -1,40 +1,30 @@
 # Calibration
 
-Everything measurable on a HandUMI rig, in one place. Two calibrations:
-
 | What | Tool | Stored at | Redo when |
 |------|------|-----------|-----------|
 | Gripper widths (ticks → mm) | `handumi-calibrate-grippers` | `~/.cache/handumi/calibration.yaml` (per machine, never committed) | Gripper hardware changes |
 | Controller → gripper TCP (mount pose) | `handumi-calibrate-tcp-offset` | `configs/calibration/{meta,pico}_controller_tcp.yaml` (committed) | The 3D-printed mount changes |
 
-Why two homes: gripper widths are a property of **your physical servos** —
-committing them would let a `git pull` clobber your rig. The mount transform
-is a property of the **HandUMI design**, shared by every contributor, so it
-lives in the repo per device.
-
-Hardware prerequisites (ports, homing): [README_gripper.md](README_gripper.md).
+Widths are per-rig (cache, outside git); the mount transform is per-design
+(repo). Hardware prerequisites: [README_gripper.md](README_gripper.md).
 
 ## 1. Gripper widths
 
 ```bash
-handumi-calibrate-grippers calibrate            # both sides
-handumi-calibrate-grippers calibrate --side right
+handumi-calibrate-grippers calibrate            # both sides, or --side right
 ```
 
 Per side: enter the max opening in mm, open fully (ENTER), close fully
-(ENTER). Verify anytime with `handumi-calibrate-grippers monitor` — ticks
-must move when you squeeze.
+(ENTER). Verify with `handumi-calibrate-grippers monitor`.
 
 ## 2. Controller → gripper TCP
 
 Recordings store raw controller poses; this transform
 (`T_world_tcp = T_world_controller @ T_controller_tcp`) is applied
-post-hoc by replay/conversion. A bad one twists every wrist motion and
-shifts the tip by centimeters exactly during grasps.
+post-hoc by replay/conversion.
 
-**Translation** — pivot method: pin the gripper TIP on a fixed point
-(a dimple it can't slide out of) and rotate the whole device in all
-directions for ~25s while recording:
+**Translation** — pivot method: pin the gripper TIP on a fixed point and
+rotate the whole device in all directions for ~25s while recording:
 
 ```bash
 handumi-record --device meta --skip-feetech \
