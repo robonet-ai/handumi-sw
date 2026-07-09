@@ -10,8 +10,9 @@ from pathlib import Path
 import numpy as np
 
 from handumi.calibration.control_tcp import (
-    DEFAULT_CALIBRATION as DEFAULT_CONTROLLER_TCP_CALIBRATION,
+    DEFAULT_DEVICE as DEFAULT_CONTROLLER_DEVICE,
     apply_controller_tcp_calibration,
+    calibration_path_for_device,
     load_controller_tcp_calibration,
 )
 from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
@@ -77,12 +78,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Scale local-relative translation deltas after frame adaptation.",
     )
     parser.add_argument(
+        "--controller-device",
+        choices=("pico", "meta"),
+        default=DEFAULT_CONTROLLER_DEVICE,
+        help="Controller calibration device used to derive the default YAML path.",
+    )
+    parser.add_argument(
         "--controller-tcp-calibration",
         type=Path,
-        default=DEFAULT_CONTROLLER_TCP_CALIBRATION,
+        default=None,
         help=(
-            "YAML with PICO controller->HandUMI TCP transforms. "
-            "Applied by default before retargeting."
+            "YAML with controller->HandUMI TCP transforms. "
+            "Defaults to configs/calibration/{controller_device}_controller_tcp.yaml."
         ),
     )
     parser.add_argument(
@@ -452,6 +459,8 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.controller_tcp_calibration is None:
+        args.controller_tcp_calibration = calibration_path_for_device(args.controller_device)
     if args.stride < 1:
         raise ValueError("--stride must be >= 1.")
     rollout = solve_episode(args)

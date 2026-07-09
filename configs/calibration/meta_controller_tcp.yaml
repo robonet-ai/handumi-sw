@@ -1,0 +1,23 @@
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  controller_to_gripper_tcp:
+    left:
+      position:
+      - -0.0136
+      - -0.0559
+      - -0.0606
+      quaternion:
+      - -0.1464
+      - 0.3536
+      - -0.3536
+      - 0.8536
+    right:
+      position:
+      - -0.0136
+      - 0.0559
+      - -0.0606
+      quaternion:
+      - 0.1464
+      - 0.3536
+      - 0.3536
+      - 0.8536
