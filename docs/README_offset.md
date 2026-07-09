@@ -108,6 +108,11 @@ The replayed TCP motion must match what the real gripper tip did:
 - Shapes (the air-square) must come out the same shape, not rotated or
   sheared (wrong rotation, step 3).
 
+Faster iteration: `handumi-live --device meta` runs the same
+calibration + retargeting + IK pipeline live (Viser robot + Rerun TCP
+trails, no recording) — do the wrist-rotation and air-square checks in
+real time, then confirm with a recorded replay.
+
 ## Troubleshooting
 
 - **High pivot RMS** → the tip slipped; use a dimple/cradle and re-record.

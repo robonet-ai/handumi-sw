@@ -35,6 +35,7 @@ piper = [
 
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
+handumi-live = "handumi.scripts.live:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
 handumi-home-servos = "handumi.scripts.setup.home_servos:main"

@@ -49,6 +49,20 @@ Before recording, configure and calibrate the hardware once:
 - [docs/README_offset.md](docs/README_offset.md) - controller to TCP / robot
   calibration.
 
+## Live Preview (no recording)
+
+`handumi-live` opens Viser with the robot IK-following your HandUMI motion in
+real time, plus a Rerun view of the calibrated TCP trails (`--no-rerun` to
+disable). Same calibration + retargeting the replay uses, so what you see is
+what a recording would replay — handy before a session to check tracking
+health and TCP calibration:
+
+```bash
+handumi-live --device meta            # or --device pico
+```
+
+Episode control features (double-clap, voice) live in the recorder below.
+
 ## Record Data
 
 Use `handumi-record` ([src/handumi/scripts/record.py](src/handumi/scripts/record.py))

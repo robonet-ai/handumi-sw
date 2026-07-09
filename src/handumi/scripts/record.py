@@ -302,7 +302,7 @@ def main() -> None:
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-    tracker = _build_tracker(args, calibration)
+    tracker = build_tracker(args, calibration)
     tracker.start()
 
     log.info("--- Camera setup ---")
@@ -439,7 +439,7 @@ def main() -> None:
         log_say("Exiting", play_sounds=play_sounds)
 
 
-def _build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
+def build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
     if args.device == "pico":
         transport = "wifi" if args.pico_wifi else "adb"
         return PicoTrackingProvider(
