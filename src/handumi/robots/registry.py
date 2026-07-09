@@ -1,85 +1,66 @@
-"""Embodiment registry — load robot specs and Viser simulators by name.
-
-Typical usage::
-
-    from handumi.robots.registry import load_embodiment
-
-    runtime = load_embodiment("axol")
-    solver = runtime.solver_cls()
-    sim = runtime.make_sim()
-"""
+"""Robot registry backed only by ``configs/robots/*.yaml``."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pyroki as pk
+import yaml
+import yourdfpy
 
-from handumi.robots.kinematics import KinematicsConfig
-from handumi.sim.mujoco_sim import MujocoSim, SceneConfig
+from handumi.robots.kinematics import BimanualKinematicsSolver, KinematicsConfig
 from handumi.sim.viser_sim import ViserSim
 
-DEFAULT_COMPARE_AXIS_MAPS: dict[str, tuple[str, ...]] = {
-    "piper": (
-        "x,z,y",
-        "x,z,-y",
-        "x,-z,y",
-        "x,-z,-y",
-        "-x,z,y",
-        "-x,z,-y",
-        "-x,-z,y",
-        "-x,-z,-y",
-    ),
-    "axol": (
-        "z,x,y",
-        "z,x,-y",
-        "z,-x,y",
-        "z,-x,-y",
-        "-z,x,y",
-        "-z,x,-y",
-        "-z,-x,y",
-        "-z,-x,-y",
-    ),
-}
-
-EMBODIMENT_NAMES: tuple[str, ...] = ("piper", "axol")
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CONFIG_DIR = REPO_ROOT / "configs" / "robots"
+EMBODIMENT_NAMES: tuple[str, ...] = ("axol", "piper")
 
 
 @dataclass(frozen=True)
-class EmbodimentRuntime:
-    """Resolved embodiment configuration for IK, retargeting, and visualization."""
+class RobotConfig:
+    kind: str
+    urdf: Path
+    pkg_root: Path
+    ee_links: dict[str, str]
+    home_q: np.ndarray
+    ik_weights: KinematicsConfig
+
+
+@dataclass(frozen=True)
+class RobotRuntime:
+    """Resolved robot config plus constructors used by scripts."""
 
     name: str
-    config_cls: type
-    solver_cls: type
-    retargeter_cls: type
-    move_to_front_workspace: Any
-    settle_first_frame: Any
+    config: RobotConfig
     urdf_path: Path
-    urdf_arm_joint_names: Callable[..., list[str]]
-    command_size: int
-    command_to_arm_q: Callable[[np.ndarray], np.ndarray]
-    default_port: int
-    default_axis_map: str
-    default_compare_axis_maps: tuple[str, ...]
-    default_workspace: str
-    wrist_forward: float
-    wrist_height: float
-    wrist_lateral: float
-    # MuJoCo physics is optional per embodiment: an embodiment with no MJCF
-    # (e.g. axol today, which only has a URDF) leaves these None, and
-    # make_physics() returns None — Viser then stays kinematics-only for it,
-    # same as before physics existed at all.
-    mjcf_path: Path | None = None
-    mujoco_arm_joint_names: Callable[..., list[str]] | None = None
-    # Fixed translation from the IK solver's EE link frame to the gripper
-    # tip (the TCP), in that EE frame. The solver's FK stops at the wrist
-    # flange; anything drawn or measured "at the TCP" must add this.
-    # Derive/verify it with: handumi-print-tcp-offset
+    robot: pk.Robot
+    ee_indices: tuple[int, int]
+    solver_cls: type
+    config_cls: type = KinematicsConfig
+    command_size: int = 0
+    default_port: int = 8003
+    default_axis_map: str = "x,z,y"
+    default_compare_axis_maps: tuple[str, ...] = ("x,z,y",)
+    default_workspace: str = "rest"
+    wrist_forward: float = 0.34
+    wrist_height: float = 0.24
+    wrist_lateral: float = 0.23
     tcp_offset_ee: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def urdf_arm_joint_names(self, *, is_left: bool) -> list[str]:
+        side = "left" if is_left else "right"
+        return [
+            name
+            for name in self.robot.joints.actuated_names
+            if name.startswith(f"{side}_")
+        ]
+
+    def command_to_arm_q(self, command: np.ndarray) -> np.ndarray:
+        names = self.urdf_arm_joint_names(is_left=True)
+        return np.asarray(command[: len(names)], dtype=float)
 
     def make_sim(
         self,
@@ -89,7 +70,6 @@ class EmbodimentRuntime:
         default_q: np.ndarray | None = None,
         scene_bodies: list | None = None,
     ) -> ViserSim:
-        """Build a :class:`~handumi.sim.viser_sim.ViserSim` for this embodiment."""
         return ViserSim(
             urdf_path=self.urdf_path,
             left_joint_names=self.urdf_arm_joint_names(is_left=True),
@@ -102,110 +82,116 @@ class EmbodimentRuntime:
             port=self.default_port if port is None else port,
         )
 
-    def make_physics(
-        self,
-        *,
-        scene_config: SceneConfig | None = None,
-    ) -> MujocoSim | None:
-        """Build a :class:`~handumi.sim.mujoco_sim.MujocoSim` for this
-        embodiment, or ``None`` if it has no MJCF (no real physics available)."""
-        if self.mjcf_path is None or self.mujoco_arm_joint_names is None:
-            return None
-        return MujocoSim(
-            mjcf_path=self.mjcf_path,
-            left_joint_names=self.mujoco_arm_joint_names(is_left=True),
-            right_joint_names=self.mujoco_arm_joint_names(is_left=False),
-            command_to_arm_q_fn=self.command_to_arm_q,
-            scene_config=scene_config,
-        )
+    def make_physics(self, *, scene_config=None):
+        del scene_config
+        return None
 
 
-def load_embodiment(name: str) -> EmbodimentRuntime:
-    """Return the runtime bundle for ``name`` (``"piper"`` or ``"axol"``)."""
-    if name == "piper":
-        from handumi.robots.piper.retargeting import (
-            PicoToPiperArmRetargeter,
-            move_retargeter_to_front_workspace,
-            settle_first_frame,
-        )
-        from handumi.robots.piper.shared import (
-            COMMAND_SIZE,
-            MJCF_PATH,
-            URDF_PATH,
-            command_to_arm_q,
-            mujoco_arm_joint_names,
-            urdf_arm_joint_names,
-        )
-        from handumi.robots.piper.solver import KinematicsSolver
+def yourdfpy_handler(pkg_root: str | Path):
+    """Resolve ``package://PKG/rest`` relative to a configured package root."""
 
-        return EmbodimentRuntime(
-            name="piper",
-            config_cls=KinematicsConfig,
-            solver_cls=KinematicsSolver,
-            retargeter_cls=PicoToPiperArmRetargeter,
-            move_to_front_workspace=move_retargeter_to_front_workspace,
-            settle_first_frame=settle_first_frame,
-            urdf_path=URDF_PATH,
-            urdf_arm_joint_names=urdf_arm_joint_names,
-            command_size=COMMAND_SIZE,
-            command_to_arm_q=command_to_arm_q,
-            default_port=8003,
-            default_axis_map="x,z,y",
-            default_compare_axis_maps=DEFAULT_COMPARE_AXIS_MAPS["piper"],
-            default_workspace="rest",
-            wrist_forward=0.34,
-            wrist_height=0.24,
-            wrist_lateral=0.23,
-            mjcf_path=MJCF_PATH,
-            mujoco_arm_joint_names=mujoco_arm_joint_names,
-            # URDF joint7/joint8 origin: fingertip sits 135.8mm along the EE
-            # Z axis from link6 (verified against the finger meshes with
-            # handumi-print-tcp-offset).
-            tcp_offset_ee=(0.0, 0.0, 0.1358),
-        )
+    root = Path(pkg_root)
 
-    if name == "axol":
-        from handumi.robots.axol.retargeting import (
-            PicoToAxolArmRetargeter,
-            move_retargeter_to_front_workspace,
-            settle_first_frame,
-        )
-        from handumi.robots.axol.shared import (
-            COMMAND_SIZE,
-            URDF_PATH,
-            command_to_arm_q,
-            urdf_arm_joint_names,
-        )
-        from handumi.robots.axol.solver import KinematicsSolver
+    def h(fname: str) -> str:
+        if fname.startswith("package://"):
+            rest = fname.split("package://", 1)[1]
+            direct = root / rest
+            if direct.exists():
+                return str(direct)
+            parts = Path(rest).parts
+            if len(parts) >= 2:
+                fallback = root / Path(*parts[1:])
+                if fallback.exists():
+                    return str(fallback)
+            return str(direct)
+        return fname
 
-        return EmbodimentRuntime(
-            name="axol",
-            config_cls=KinematicsConfig,
-            solver_cls=KinematicsSolver,
-            retargeter_cls=PicoToAxolArmRetargeter,
-            move_to_front_workspace=move_retargeter_to_front_workspace,
-            settle_first_frame=settle_first_frame,
-            urdf_path=URDF_PATH,
-            urdf_arm_joint_names=urdf_arm_joint_names,
-            command_size=COMMAND_SIZE,
-            command_to_arm_q=command_to_arm_q,
-            default_port=8002,
-            default_axis_map="x,z,y",
-            default_compare_axis_maps=DEFAULT_COMPARE_AXIS_MAPS["axol"],
-            default_workspace="rest",
-            wrist_forward=0.28,
-            wrist_height=0.28,
-            wrist_lateral=0.20,
-        )
+    return h
 
-    raise ValueError(
-        f"Unsupported embodiment: {name!r}. Choose from {', '.join(EMBODIMENT_NAMES)}."
+
+def load_robot_config(name: str) -> RobotConfig:
+    path = CONFIG_DIR / f"{name}.yaml"
+    if not path.exists():
+        raise ValueError(f"Unsupported robot {name!r}. Expected config at {path}.")
+    with path.open("r", encoding="utf-8") as fh:
+        data: dict[str, Any] = yaml.safe_load(fh) or {}
+
+    weights = data.get("ik_weights") or {}
+    urdf = _resolve_path(data["urdf"])
+    pkg_root = _resolve_path(data["pkg_root"])
+    home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
+    return RobotConfig(
+        kind=str(data.get("kind") or name),
+        urdf=urdf,
+        pkg_root=pkg_root,
+        ee_links=dict(data["ee_links"]),
+        home_q=home_q,
+        ik_weights=KinematicsConfig(
+            pos_weight=float(weights.get("pos", 100.0)),
+            ori_weight=float(weights.get("ori", 15.0)),
+            rest_weight=float(weights.get("rest", 2.0)),
+        ),
     )
 
 
+def load_embodiment(name: str) -> RobotRuntime:
+    cfg = load_robot_config(name)
+    urdf = yourdfpy.URDF.load(
+        str(cfg.urdf),
+        filename_handler=yourdfpy_handler(cfg.pkg_root),
+        mesh_dir=str(cfg.urdf.parent),
+        load_meshes=False,
+    )
+    robot = pk.Robot.from_urdf(urdf)
+    ee_indices = (
+        robot.links.names.index(cfg.ee_links["left"]),
+        robot.links.names.index(cfg.ee_links["right"]),
+    )
+    home_q = cfg.home_q
+    if home_q.size == 0:
+        home_q = np.zeros(robot.joints.num_actuated_joints, dtype=np.float32)
+    if len(home_q) != robot.joints.num_actuated_joints:
+        raise ValueError(
+            f"{name} home_q has {len(home_q)} values, expected "
+            f"{robot.joints.num_actuated_joints}."
+        )
+
+    class _Solver(BimanualKinematicsSolver):
+        def __init__(self, config: KinematicsConfig | None = None) -> None:
+            super().__init__(
+                robot=robot,
+                ee_indices=ee_indices,
+                home_q=home_q,
+                config=config or cfg.ik_weights,
+            )
+
+    command_size = max(
+        sum(j.startswith("left_") for j in robot.joints.actuated_names),
+        sum(j.startswith("right_") for j in robot.joints.actuated_names),
+    )
+    return RobotRuntime(
+        name=name,
+        config=cfg,
+        urdf_path=cfg.urdf,
+        robot=robot,
+        ee_indices=ee_indices,
+        solver_cls=_Solver,
+        command_size=command_size,
+        default_port=8002 if name == "axol" else 8003,
+        tcp_offset_ee=(0.0, 0.0, 0.1358) if name == "piper" else (0.0, 0.0, 0.0),
+    )
+
+
+def _resolve_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
 __all__ = [
-    "DEFAULT_COMPARE_AXIS_MAPS",
     "EMBODIMENT_NAMES",
-    "EmbodimentRuntime",
+    "RobotConfig",
+    "RobotRuntime",
     "load_embodiment",
+    "load_robot_config",
+    "yourdfpy_handler",
 ]
