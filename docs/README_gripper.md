@@ -69,9 +69,17 @@ A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, s
 an un-homed range is fine as long as recording **starts with the grippers roughly
 closed**.
 
-## 4. Calibrate
+## 4. Calibrate Gripper Width
 
-Hardware done — calibrate the gripper widths (and, once per mount design,
-the controller → TCP transform) per
-[README_calibration.md](README_calibration.md), then head back to
-[README.md](README.md) to record.
+```bash
+handumi-calibrate-grippers calibrate            # both sides
+handumi-calibrate-grippers calibrate --side right
+```
+
+For each side: enter the max opening in mm, open fully (ENTER), close fully
+(ENTER). This writes to the per-user cache
+(`~/.cache/handumi/calibration.yaml`), never to the repo.
+
+Setup done — head back to [README.md](README.md) to record. The other
+calibration (controller → gripper TCP, once per mount design) is in
+[README_calibration.md](README_calibration.md).
