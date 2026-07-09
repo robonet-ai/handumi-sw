@@ -164,6 +164,22 @@ handumi-replay-in-sim \
   --headless
 ```
 
+## Train
+
+Datasets in `outputs/` train directly with lerobot via the thin
+`handumi-train` wrapper (hyperparameters versioned in
+[configs/train/act.yaml](configs/train/act.yaml); checkpoints land in
+lerobot's default `outputs/train/`, gitignored):
+
+```bash
+handumi-train --latest                              # newest dataset in outputs/
+handumi-train --dataset outputs/<ts> --steps=50000  # explicit dataset + overrides
+handumi-train --latest --policy <name>              # configs/train/<name>.yaml
+```
+
+Extra flags pass straight through to `lerobot-train` and override the YAML.
+wandb logging is enabled by default (`wandb.enable` in the config).
+
 ## Dataset Fields
 
 Raw HandUMI datasets include:
@@ -191,5 +207,5 @@ widths in meters.
 - [docs/README_gripper.md](docs/README_gripper.md) - gripper and camera setup.
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_quest.md](docs/README_quest.md) - Quest setup.
-- [docs/README_offset.md](docs/README_offset.md) - TCP and workspace
+- [docs/README_offset.md](docs/README_offset.md) - controller to gripper-TCP
   calibration.
