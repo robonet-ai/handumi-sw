@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from handumi.dataset.pico import load_pico_body_poses
+from handumi.devices.pico import load_pico_body_poses
 from handumi.dataset.reader import (
     DatasetDownloadResult,
     download_dataset,

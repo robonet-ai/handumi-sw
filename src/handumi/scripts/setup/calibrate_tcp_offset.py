@@ -34,8 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
-from handumi.tracking.transforms import quat_to_matrix, unity_pose_to_handumi
+from handumi.devices.meta_quest import MetaQuestConfig, MetaQuestReceiver
+from handumi.devices.transforms import quat_to_matrix, unity_pose_to_handumi
 
 
 def solve_pivot(positions: np.ndarray, rotations: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:

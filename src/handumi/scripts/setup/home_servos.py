@@ -29,8 +29,8 @@ import select
 import sys
 from pathlib import Path
 
-from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import (
+from handumi.devices.feetech.bus import FeetechBus
+from handumi.devices.feetech.calibration import (
     PORTS_PATH,
     FeetechConfig,
     GripperCalibration,

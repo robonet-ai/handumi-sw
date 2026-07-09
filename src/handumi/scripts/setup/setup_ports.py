@@ -21,8 +21,8 @@ import subprocess
 import time
 from datetime import datetime
 
-from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import PORTS_PATH, default_config
+from handumi.devices.feetech.bus import FeetechBus
+from handumi.devices.feetech.calibration import PORTS_PATH, default_config
 
 
 def main() -> None:

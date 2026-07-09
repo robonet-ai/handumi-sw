@@ -7,6 +7,8 @@ import logging
 import socket
 import subprocess
 import time
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -426,3 +428,41 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
 
     return frame
 
+
+def load_pico_body_poses(
+    ref: Any | None = None,
+    *,
+    repo_id: str | None = None,
+    root: str | Path | None = None,
+    episode: int = 0,
+    column: str = "observation.pico.body_joints_pose",
+    revision: str | None = None,
+) -> tuple[Any, int]:
+    """Load PICO body joint poses from a LeRobot dataset episode."""
+    from handumi.dataset.reader import open_dataset
+
+    dataset = open_dataset(
+        ref,
+        repo_id=repo_id,
+        root=root,
+        episode=episode,
+        revision=revision,
+    )
+
+    if column not in dataset.features:
+        available = "\n".join(f"  - {name}" for name in dataset.features)
+        raise KeyError(f"Column {column!r} not found. Available features:\n{available}")
+
+    frames = []
+    for idx in range(len(dataset)):
+        item = dataset.get_raw_item(idx)
+        frames.append(np.asarray(item[column], dtype=np.float32))
+
+    if not frames:
+        raise ValueError(f"No frames found for episode {episode}.")
+
+    poses = np.stack(frames, axis=0)
+    if poses.ndim != 3 or poses.shape[1:] != (24, 7):
+        raise ValueError(f"Expected poses with shape (T, 24, 7), got {poses.shape}.")
+
+    return poses, int(dataset.fps)

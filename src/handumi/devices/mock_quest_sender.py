@@ -12,8 +12,8 @@ pose stream + UDP NTP-style time-sync — can be exercised on the workstation:
 
 Run this in one terminal, then the receiver in another:
 
-    PYTHONPATH=src python -m handumi.tracking.mock_quest_sender
-    PYTHONPATH=src python -m handumi.tracking.meta_quest
+    PYTHONPATH=src python -m handumi.devices.mock_quest_sender
+    PYTHONPATH=src python -m handumi.devices.meta_quest
 
 See docs/phase-2-motion-tracking.md → TCP/JSON Payload for the field layout.
 """
@@ -29,7 +29,7 @@ import struct
 import threading
 import time
 
-log = logging.getLogger("handumi.tracking.mock_quest_sender")
+log = logging.getLogger("handumi.devices.mock_quest_sender")
 
 _PING = struct.Struct("<BQ")  # (msg_type=1, t1_pc_ns)
 _PONG = struct.Struct("<BQQ")  # (msg_type=2, t1_echo, t2_quest_ns)

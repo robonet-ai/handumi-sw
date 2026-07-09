@@ -7,7 +7,7 @@ frame in a buffer. A companion UDP NTP-style loop estimates the Quest<->PC clock
 offset so poses can be aligned with camera/Feetech frames in post-processing.
 
 This step does NOT transform coordinates — poses are kept as raw Unity values.
-``handumi.tracking.transforms`` (Step 2) converts them.
+``handumi.devices.transforms`` (Step 2) converts them.
 
 Reference:
   ../yubi-sw/airoa_quest/airoa_quest_bridge/transport/tcp_json.py
@@ -36,14 +36,14 @@ from typing import Any, Callable
 import numpy as np
 import yaml
 
-from handumi.tracking.transforms import (
+from handumi.devices.transforms import (
     Pose,
     WorkspaceCalibration,
     apply_mounting_offset,
     unity_pose_to_handumi,
 )
 
-log = logging.getLogger("handumi.tracking.meta_quest")
+log = logging.getLogger("handumi.devices.meta_quest")
 
 # UDP sync wire formats.
 _PING = struct.Struct("<BQ")  # (msg_type=1, t1_pc_ns)

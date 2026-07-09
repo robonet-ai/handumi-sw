@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import FeetechConfig, GripperCalibration
+from handumi.devices.feetech.bus import FeetechBus
+from handumi.devices.feetech.calibration import FeetechConfig, GripperCalibration
 
 
 _ENCODER_RESOLUTION = 4096

@@ -35,13 +35,13 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.tracking.meta_quest import (
+from handumi.devices.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
     controller_pose_in_workspace,
     workspace_from_hmd,
 )
-from handumi.tracking.transforms import MountingOffsets
+from handumi.devices.transforms import MountingOffsets
 
 
 def solve_transform(

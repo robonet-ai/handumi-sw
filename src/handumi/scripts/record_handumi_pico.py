@@ -38,8 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
-from handumi.cameras.preview import LaptopPreview, draw_laptop_overlay
-from handumi.cameras.usb import (
+from handumi.devices.cameras import LaptopPreview, draw_laptop_overlay
+from handumi.devices.cameras import (
     build_camera_specs,
     connect_cameras,
     disconnect_cameras,
@@ -53,7 +53,7 @@ from handumi.capture.reach import (
     update_episode_reach_flags,
 )
 from handumi.dataset.raw import raw_state_feature
-from handumi.feetech import (
+from handumi.devices.feetech import (
     PORTS_PATH,
     FeetechGripperPair,
     GripperWidths,
@@ -62,8 +62,8 @@ from handumi.feetech import (
     user_calibration_path,
     zero_gripper_widths,
 )
-from handumi.feetech.bus import FeetechUnavailableError
-from handumi.tracking.pico import (
+from handumi.devices.feetech.bus import FeetechUnavailableError
+from handumi.devices.pico import (
     MAX_MOTION_TRACKERS,
     START_BUTTON_CHOICES,
     empty_pico_frame,

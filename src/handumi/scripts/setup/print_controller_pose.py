@@ -9,7 +9,7 @@ Two-stance method for ``configs/tracking_meta_quest.yaml``'s
      SAME forward direction. Record ``q_B``.
 
 The offset is ``conj(q_B) * q_A`` (``quat_multiply`` from
-``handumi.tracking.transforms``): the mounted controller then reads as a
+``handumi.devices.transforms``): the mounted controller then reads as a
 naturally-held one. Using the *difference* between the stances cancels the
 tracking frame's arbitrary yaw and the OVR frame's built-in tilt, so
 neither stance needs to be aligned with the tracking origin.
@@ -32,8 +32,8 @@ import sys
 import time
 from pathlib import Path
 
-from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
-from handumi.tracking.transforms import unity_pose_to_handumi
+from handumi.devices.meta_quest import MetaQuestConfig, MetaQuestReceiver
+from handumi.devices.transforms import unity_pose_to_handumi
 
 
 def main() -> None:

@@ -23,8 +23,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import (
+from handumi.devices.feetech.bus import FeetechBus
+from handumi.devices.feetech.calibration import (
     PORTS_PATH,
     FeetechConfig,
     GripperCalibration,

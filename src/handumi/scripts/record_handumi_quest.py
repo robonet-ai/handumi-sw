@@ -3,8 +3,8 @@
 
 Companion to the PICO recorder (`handumi-record-pico`). This one sources left/right
 gripper poses from the native Quest app (TCP/JSON, see
-`handumi.tracking.meta_quest`), calibrates them into `handumi_workspace`
-(`handumi.tracking.transforms`), merges Feetech gripper width, and writes the
+`handumi.devices.meta_quest`), calibrates them into `handumi_workspace`
+(`handumi.devices.transforms`), merges Feetech gripper width, and writes the
 **same 16D HandUMI raw state** the rest of the pipeline expects.
 
 Per-frame schema
@@ -65,7 +65,7 @@ from pathlib import Path
 import numpy as np
 
 from handumi.dataset.raw import pose_to_state_vector, raw_state_feature
-from handumi.feetech import (
+from handumi.devices.feetech import (
     PORTS_PATH,
     FeetechGripperPair,
     GripperWidths,
@@ -74,16 +74,16 @@ from handumi.feetech import (
     user_calibration_path,
     zero_gripper_widths,
 )
-from handumi.feetech.bus import FeetechUnavailableError
-from handumi.tracking.gestures import DoubleClapDetector
-from handumi.tracking.meta_quest import (
+from handumi.devices.feetech.bus import FeetechUnavailableError
+from handumi.devices.gestures import DoubleClapDetector
+from handumi.devices.meta_quest import (
     MetaQuestConfig,
     MetaQuestReceiver,
     QuestFrame,
     controller_pose_in_workspace,
     workspace_from_hmd,
 )
-from handumi.tracking.transforms import (
+from handumi.devices.transforms import (
     MountingOffsets,
     Pose,
     WorkspaceCalibration,
@@ -267,7 +267,7 @@ def record_episode(
     collector can watch the robot (and, if configured, the task scene) follow
     their hands while HandUMI data is being recorded.
     """
-    from handumi.cameras.usb import read_camera_frames
+    from handumi.devices.cameras import read_camera_frames
 
     control_interval = 1.0 / fps
     n_frames = 0
@@ -535,7 +535,7 @@ def main() -> None:
         dataset.finalize()
         receiver.stop()
         if cameras:
-            from handumi.cameras.usb import disconnect_cameras
+            from handumi.devices.cameras import disconnect_cameras
 
             disconnect_cameras(cameras)
         if grippers is not None:
@@ -596,7 +596,7 @@ def _resolve_config(args) -> MetaQuestConfig:
 
 
 def _connect_cameras(args):
-    from handumi.cameras.usb import build_camera_specs, connect_cameras, resolve_camera_ids
+    from handumi.devices.cameras import build_camera_specs, connect_cameras, resolve_camera_ids
 
     cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
     camera_specs, _ = build_camera_specs(

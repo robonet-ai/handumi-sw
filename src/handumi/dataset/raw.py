@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 if TYPE_CHECKING:
-    from handumi.tracking.transforms import Pose
+    from handumi.devices.transforms import Pose
 
 HANDUMI_RAW_STATE_NAMES: tuple[str, ...] = (
     "left_x",
