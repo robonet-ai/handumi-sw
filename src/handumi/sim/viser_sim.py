@@ -42,7 +42,8 @@ _DEFAULT_TCP_TRAIL_MAX_POINTS = 150
 
 
 def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, int, int]:
-    return tuple(int(round(c * 255)) for c in rgba[:3])
+    r, g, b = (int(round(c * 255)) for c in rgba[:3])
+    return (r, g, b)
 
 
 def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:

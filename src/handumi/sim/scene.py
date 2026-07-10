@@ -38,6 +38,11 @@ class SceneBody:
     )
 
 
+def _rgba4(text: str) -> tuple[float, float, float, float]:
+    r, g, b, a = (float(v) for v in text.split())
+    return (r, g, b, a)
+
+
 SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
 
 
@@ -68,7 +73,7 @@ def load_scene(name: str, *, position=(0.0, 0.0, 0.0)) -> list[SceneBody]:
                 SceneGeom(
                     kind="box",
                     size=tuple(float(v) for v in geom.get("size", "0.01").split()),
-                    rgba=tuple(float(v) for v in geom.get("rgba", "0.8 0.8 0.8 1").split()),
+                    rgba=_rgba4(geom.get("rgba", "0.8 0.8 0.8 1")),
                     local_position=np.fromstring(
                         geom.get("pos", "0 0 0"), sep=" ", dtype=np.float32
                     ),

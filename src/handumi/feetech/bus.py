@@ -200,7 +200,12 @@ def _comm_success(result: Any, sdk: Any | None) -> bool:
     if isinstance(result, bool):
         return result
     if isinstance(result, tuple):
-        comm_result = result[-2] if len(result) >= 2 else result[-1]
+        if len(result) >= 2:
+            comm_result = result[-2]
+        elif result:
+            comm_result = result[-1]
+        else:
+            return False
     else:
         comm_result = result
     success = getattr(sdk, "COMM_SUCCESS", 0)

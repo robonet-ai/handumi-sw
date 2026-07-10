@@ -396,10 +396,12 @@ def main() -> None:
             )
             scene_frames[body.name] = frame
             for i, geom in enumerate(body.geoms):
+                sx, sy, sz = (2.0 * s for s in geom.size)
+                cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
                 server.scene.add_box(
                     f"/scene/{body.name}/g{i}",
-                    dimensions=tuple(2.0 * s for s in geom.size),
-                    color=tuple(int(round(c * 255)) for c in geom.rgba[:3]),
+                    dimensions=(sx, sy, sz),
+                    color=(cr, cg, cb),
                     position=tuple(geom.local_position),
                 )
         if runtime.config.mjcf is not None:

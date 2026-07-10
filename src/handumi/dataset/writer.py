@@ -179,7 +179,7 @@ def _compute_feature_stats(values: np.ndarray) -> dict[str, Any]:
     max_vals = flat.max(axis=0).tolist()
     mean_vals = flat.mean(axis=0).tolist()
     std_vals = flat.std(axis=0).tolist()
-    count = [int(len(flat))] * flat.shape[1] if flat.shape[1] > 1 else [int(len(flat))]
+    count = [int(len(flat))] * int(flat.shape[-1])
     q01 = np.percentile(flat, 1, axis=0).tolist()
     q10 = np.percentile(flat, 10, axis=0).tolist()
     q50 = np.percentile(flat, 50, axis=0).tolist()
