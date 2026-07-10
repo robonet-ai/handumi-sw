@@ -18,7 +18,6 @@ import argparse
 import json
 import logging
 import signal
-import sys
 import threading
 import time
 from datetime import datetime
@@ -31,10 +30,12 @@ from handumi.cameras import (
     build_camera_specs,
     connect_cameras,
     disconnect_cameras,
-    read_camera_frames,
+    read_camera_samples,
     resolve_camera_ids,
 )
 from handumi.dataset.raw import (
+    camera_health_features,
+    capture_timing_features,
     feetech_features,
     pose_to_state_vector,
     raw_state_feature,
@@ -43,6 +44,7 @@ from handumi.dataset.raw import (
 from handumi.feetech import (
     PORTS_PATH,
     FeetechGripperPair,
+    FeetechGripperSampler,
     GripperWidths,
     assert_calibrated,
     load_config,
@@ -51,6 +53,13 @@ from handumi.feetech import (
 )
 from handumi.feetech.bus import FeetechUnavailableError
 from handumi.robots.utils import IDENTITY_POSE7
+from handumi.synchronization import (
+    SustainedHealthGate,
+    capture_timing_frame,
+    synchronized_gripper_frame,
+    tracking_sample_at,
+    tracking_timing_frame,
+)
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
@@ -90,6 +99,8 @@ def build_features(
     features["action"] = _tuple_shape(raw_state_feature())
     features.update(feetech_features())
     features.update(raw_tracking_features())
+    features.update(capture_timing_features())
+    features.update(camera_health_features(cam_names))
     return features
 
 
@@ -167,7 +178,7 @@ def record_episode(
     cameras: list,
     cam_names: list[str],
     tracker: TrackingProvider,
-    grippers: FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | FeetechGripperPair | None,
     episode_time_s: float,
     fps: int,
     task: str,
@@ -181,6 +192,11 @@ def record_episode(
     start_threshold: float,
     clap_detector: DoubleClapDetector | None = None,
     tracking_loss_timeout_s: float = 1.0,
+    sync_lag_s: float = 0.04,
+    max_sync_skew_s: float = 0.06,
+    camera_stale_timeout_s: float = 0.25,
+    gripper_stale_timeout_s: float = 0.10,
+    sensor_loss_timeout_s: float = 1.0,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -208,10 +224,16 @@ def record_episode(
     timed = not manual_control and not clap_control
     tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
     tracking_lost_since_ns: int | None = None
+    episode_start_ns: int | None = None
+    sync_lag_ns = int(sync_lag_s * 1e9)
+    max_sync_skew_ns = int(max_sync_skew_s * 1e9)
+    health_gate = SustainedHealthGate(sensor_loss_timeout_s)
 
     while True:
         loop_start = time.perf_counter()
         tracking_now_ns = time.monotonic_ns()
+        if episode_start_ns is None:
+            episode_start_ns = tracking_now_ns
         elapsed = loop_start - start_t
         if (timed and elapsed >= episode_time_s) or stop_event.is_set():
             if (
@@ -244,10 +266,32 @@ def record_episode(
                 status = "recorded"
                 break
 
-        cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
-        widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
-        sample = tracker.latest()
-        if _tracking_healthy(sample):
+        target_time_ns = max(episode_start_ns, tracking_now_ns - sync_lag_ns)
+        cam_frames, camera_health = read_camera_samples(
+            cameras,
+            cam_names,
+            target_time_ns=target_time_ns,
+            record_time_ns=tracking_now_ns,
+            width=cam_width,
+            height=cam_height,
+            stale_timeout_s=camera_stale_timeout_s,
+            max_sync_skew_s=max_sync_skew_s,
+        )
+        gripper_frame = synchronized_gripper_frame(
+            grippers,
+            target_time_ns=target_time_ns,
+            record_time_ns=tracking_now_ns,
+            stale_timeout_s=gripper_stale_timeout_s,
+            max_sync_skew_s=max_sync_skew_s,
+        )
+        widths = gripper_frame.widths
+        sample = tracking_sample_at(tracker, target_time_ns)
+        sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
+        tracking_sync_ok = bool(
+            sample_time_ns > 0
+            and abs(sample_time_ns - target_time_ns) <= max_sync_skew_ns
+        )
+        if _tracking_healthy(sample) and tracking_sync_ok:
             if tracking_lost_since_ns is not None:
                 log.info("Controller tracking recovered before the episode timeout.")
             tracking_lost_since_ns = None
@@ -275,9 +319,40 @@ def record_episode(
             )
             break
 
+        sensor_health = {
+            **camera_health,
+            "feetech": gripper_frame.healthy_for_gate,
+        }
+        recovered, timed_out_sensors = health_gate.update(
+            sensor_health, tracking_now_ns
+        )
+        for sensor in recovered:
+            log.info("Sensor health recovered before timeout: %s.", sensor)
+        if timed_out_sensors:
+            status = "sensor_unhealthy"
+            log.error(
+                "Sensor health unavailable for %.2fs (%s); discarding episode.",
+                sensor_loss_timeout_s,
+                ", ".join(sorted(timed_out_sensors)),
+            )
+            break
+
         if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
             break
-        dataset.add_frame({**cam_frames, **build_observation(sample, widths), "task": task})
+        dataset.add_frame(
+            {
+                **cam_frames,
+                **build_observation(sample, widths),
+                **gripper_frame.frame,
+                **capture_timing_frame(target_time_ns, tracking_now_ns),
+                **tracking_timing_frame(
+                    sample,
+                    target_time_ns=target_time_ns,
+                    record_time_ns=tracking_now_ns,
+                ),
+                "task": task,
+            }
+        )
         n_frames += 1
 
         dt = time.perf_counter() - loop_start
@@ -319,6 +394,27 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Discard an episode when either controller remains untracked for this long.",
     )
+    p.add_argument(
+        "--sync-lag-s",
+        type=float,
+        default=0.04,
+        help="Capture rows this far behind real time so native sensor buffers can align.",
+    )
+    p.add_argument(
+        "--max-sync-skew-s",
+        type=float,
+        default=0.06,
+        help="Maximum source-to-row timestamp difference considered healthy.",
+    )
+    p.add_argument("--camera-stale-timeout-s", type=float, default=0.25)
+    p.add_argument("--gripper-stale-timeout-s", type=float, default=0.10)
+    p.add_argument(
+        "--sensor-loss-timeout-s",
+        type=float,
+        default=1.0,
+        help="Discard after a camera or encoder remains unhealthy for this long.",
+    )
+    p.add_argument("--feetech-sample-hz", type=float, default=100.0)
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
@@ -371,6 +467,16 @@ def main() -> None:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
+    for name in (
+        "sync_lag_s",
+        "max_sync_skew_s",
+        "camera_stale_timeout_s",
+        "gripper_stale_timeout_s",
+        "sensor_loss_timeout_s",
+        "feetech_sample_hz",
+    ):
+        if getattr(args, name) <= 0:
+            raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
@@ -399,7 +505,14 @@ def main() -> None:
     )
 
     log.info("--- Feetech setup ---")
-    grippers = connect_feetech(args)
+    gripper_pair = connect_feetech(args)
+    grippers = None
+    if gripper_pair is not None:
+        grippers = FeetechGripperSampler(
+            gripper_pair,
+            sample_hz=args.feetech_sample_hz,
+        )
+        grippers.start()
 
     log.info("--- Dataset setup ---")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -437,6 +550,7 @@ def main() -> None:
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if args.clap_control:
                 log.info("  Double-clap both grippers to start episode %d ...", ep_num)
+                assert clap_detector is not None
                 if not _wait_for_clap(grippers, clap_detector, stop_event):
                     break
                 # Same clap semantics as handumi-live's re-anchor ("homing"):
@@ -490,8 +604,13 @@ def main() -> None:
                 start_threshold=args.start_threshold,
                 clap_detector=clap_detector,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                sync_lag_s=args.sync_lag_s,
+                max_sync_skew_s=args.max_sync_skew_s,
+                camera_stale_timeout_s=args.camera_stale_timeout_s,
+                gripper_stale_timeout_s=args.gripper_stale_timeout_s,
+                sensor_loss_timeout_s=args.sensor_loss_timeout_s,
             )
-            if n_frames == 0 or status in {"repeat", "tracking_lost"}:
+            if n_frames == 0 or status in {"repeat", "tracking_lost", "sensor_unhealthy"}:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
@@ -512,15 +631,22 @@ def main() -> None:
             Path(dataset.root),
             {
                 "recording_device": args.device,
-                "tracking_schema": "controller_raw_v1",
+                "tracking_schema": "controller_raw_v2",
                 "state_semantics": "raw_controller_pose7_plus_gripper_widths",
+                "capture_schema": "synchronized_sources_v1",
+                "sync_lag_s": args.sync_lag_s,
+                "max_sync_skew_s": args.max_sync_skew_s,
+                "camera_stale_timeout_s": args.camera_stale_timeout_s,
+                "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
             },
         )
         if args.push_to_hub:
             dataset.push_to_hub()
         disconnect_cameras(cameras)
         if grippers is not None:
-            grippers.close()
+            grippers.stop()
+        if gripper_pair is not None:
+            gripper_pair.close()
         tracker.stop()
         log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
         log_say("Exiting", play_sounds=play_sounds)
@@ -578,17 +704,28 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
 
 
 def _wait_for_clap(
-    grippers: FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | FeetechGripperPair | None,
     clap_detector: DoubleClapDetector,
     stop_event: threading.Event,
 ) -> bool:
     """Poll Feetech widths until a double-clap fires (or ``stop_event`` sets)."""
     while not stop_event.is_set():
-        widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+        widths = _latest_gripper_widths(grippers)
         if clap_detector.update(widths.left_mm, widths.right_mm, time.perf_counter()):
             return True
         time.sleep(0.02)
     return False
+
+
+def _latest_gripper_widths(
+    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+) -> GripperWidths:
+    if grippers is None:
+        return zero_gripper_widths()
+    if isinstance(grippers, FeetechGripperSampler):
+        sample = grippers.latest()
+        return zero_gripper_widths() if sample is None else sample.widths
+    return grippers.read_normalized_widths()
 
 
 def _default_output_dir() -> Path:
@@ -599,7 +736,7 @@ def _default_output_dir() -> Path:
     return Path("outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def _update_info_json(root: Path, handumi: dict[str, str]) -> None:
+def _update_info_json(root: Path, handumi: dict[str, object]) -> None:
     path = root / "meta" / "info.json"
     if not path.exists():
         log.warning("Cannot write HandUMI metadata; missing %s", path)

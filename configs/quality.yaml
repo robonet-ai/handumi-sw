@@ -1,0 +1,16 @@
+# Offline acceptance thresholds for raw HandUMI episodes.
+quality:
+  min_duration_s: 1.0
+  max_bad_tracking_fraction: 0.01
+  max_bad_sensor_fraction: 0.01
+  max_bad_sync_fraction: 0.01
+  max_sync_error_ms: 60.0
+  max_translation_speed_m_s: 5.0
+  max_rotation_step_deg: 90.0
+  max_pose_freeze_s: 1.0
+  max_signal_freeze_s: 0.5
+  freeze_translation_epsilon_m: 0.00001
+  freeze_rotation_epsilon_deg: 0.02
+  aperture_range_epsilon_mm: 0.05
+  reject_single_side_pose_freeze: false
+  reject_aperture_freeze: false

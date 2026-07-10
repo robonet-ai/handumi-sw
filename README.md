@@ -109,11 +109,33 @@ Useful options:
 - `--manual-control` lets PICO buttons start/repeat/finish episodes.
 - `--tracking-loss-timeout-s` sets how long tracking may remain lost before
   the current episode is discarded (default: 1 second).
+- `--sync-lag-s` selects samples from the native sensor buffers against one
+  shared target timestamp (default: 40 ms behind real time).
+- `--sensor-loss-timeout-s` discards an episode after sustained camera or
+  encoder health failure (default: 1 second).
 - `--no-video` stores image frames instead of encoded video.
 
 By default, each episode starts when you press ENTER in the terminal. Recording
 then waits for fresh, valid poses from both controllers. If either controller
 remains untracked beyond the loss timeout, the whole episode is discarded.
+Camera capture timestamps, Quest clock alignment, encoder timestamps, source
+age, synchronization error, and health flags are stored on every row.
+
+## Validate Recordings
+
+Run offline validation before training or conversion:
+
+```bash
+handumi-validate \
+  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --root outputs/datasets/handumi-demo
+```
+
+This writes `meta/handumi_quality.json` without deleting raw data. It rejects
+episodes with excessive tracking loss, stale sensors, synchronization errors,
+source or pose freezes, implausible translation jumps, rotations over 90
+degrees per frame, or insufficient duration. Thresholds are in
+`configs/quality.yaml`; see [docs/README_quality.md](docs/README_quality.md).
 
 ## Push to Hugging Face
 
@@ -131,6 +153,10 @@ huggingface-cli upload NONHUMAN-RESEARCH/handumi-demo \
 ([src/handumi/scripts/conversion.py](src/handumi/scripts/conversion.py))
 converts the raw 16D HandUMI dataset into a robot-specific joint dataset using
 the robot configuration in `configs/robots/`.
+
+Conversion runs the same offline quality filter by default, skips rejected
+episodes, and writes `meta/source_quality.json` in the converted dataset.
+`--skip-quality-filter` is available only for debugging bad captures.
 
 Minimal conversion:
 
@@ -200,10 +226,25 @@ observation.feetech.left_width_mm
 observation.feetech.right_width_mm
 observation.feetech.left_normalized
 observation.feetech.right_normalized
+observation.feetech.sample_time_ns
+observation.feetech.healthy
+observation.tracking.left_tracked
+observation.tracking.right_tracked
+observation.tracking.left_device_tracked
+observation.tracking.left_pose_valid
+observation.tracking.hmd_pose
+observation.tracking.aligned_time_ns
+observation.tracking.clock_synced
+observation.tracking.streaming
+observation.sync.target_time_ns
+observation.sync.record_time_ns
+observation.camera.<name>.sample_time_ns
+observation.camera.<name>.healthy
 ```
 
 `observation.state[14]` and `observation.state[15]` are the left/right gripper
-widths in meters.
+widths in meters. Camera, Feetech, and tracking diagnostics also include
+`age_ms` and `sync_error_ms`.
 
 ## More Docs
 
@@ -213,3 +254,5 @@ widths in meters.
 - [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
+- [docs/README_quality.md](docs/README_quality.md) - synchronization, sensor health,
+  and offline episode filtering.

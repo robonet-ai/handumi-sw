@@ -4,10 +4,12 @@ from typing import Any
 
 from handumi.dataset.reader import (
     DatasetDownloadResult,
+    RawEpisode,
     download_dataset,
     ensure_metadata,
     handumi_metadata,
     load_raw_episode_states,
+    load_raw_episode,
     open_dataset,
     recording_device,
     validate_raw_state_metadata,
@@ -24,6 +26,13 @@ from handumi.dataset.raw import (
     validate_raw_state_shape,
 )
 from handumi.dataset.reader import DatasetRef, dataset_root_from_repo_id
+from handumi.dataset.quality import (
+    EpisodeQualityConfig,
+    EpisodeQualityReport,
+    QualityFinding,
+    validate_episode,
+    write_quality_report,
+)
 
 
 def __getattr__(name: str) -> Any:
@@ -57,6 +66,10 @@ __all__ = [
     "DatasetDownloadResult",
     "DatasetRef",
     "EpisodeResult",
+    "EpisodeQualityConfig",
+    "EpisodeQualityReport",
+    "RawEpisode",
+    "QualityFinding",
     "HANDUMI_RAW_IMAGE_KEYS",
     "HANDUMI_RAW_STATE_NAMES",
     "HANDUMI_RAW_STATE_SIZE",
@@ -72,11 +85,14 @@ __all__ = [
     "info_path",
     "load_info",
     "load_raw_episode_states",
+    "load_raw_episode",
     "open_dataset",
     "raw_state_feature",
     "recording_device",
     "update_handumi_metadata",
     "validate_raw_state_metadata",
     "validate_raw_state_shape",
+    "validate_episode",
+    "write_quality_report",
     "write_dataset",
 ]

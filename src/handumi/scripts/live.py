@@ -28,6 +28,12 @@ side is tracked.
 Both arms start parked at home until their first anchor. Spoken feedback
 ("left anchored", ...) — --no-sounds to mute.
 
+--anchor-z <m> enables the table-anchor ritual: anchor with the gripper tip
+RESTING ON THE TABLE and that pose maps to the given robot-world height
+(0.0 = table at the arm-base plane) instead of the home TCP — absolute
+heights then match: the real tip touches the table exactly when the sim
+tip reaches z = anchor-z.
+
 Usage
 -----
 ::
@@ -99,6 +105,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
+    p.add_argument(
+        "--anchor-z",
+        type=float,
+        default=None,
+        help="Table-anchor ritual: anchor with the gripper TIP RESTING ON THE "
+        "TABLE, and that pose maps to this robot-world height (meters) instead "
+        "of the arm's home TCP — absolute heights then match for the whole "
+        "session (real tip touches the table exactly when the sim tip does). "
+        "0.0 = table at the arm-base plane. Omit for the default relative "
+        "mapping (anchor pose -> home TCP).",
+    )
     p.add_argument(
         "--controller-tcp-calibration",
         type=Path,
@@ -371,6 +388,16 @@ def main() -> None:
     play_sounds = not args.no_sounds
     side_indices = _side_joint_indices(runtime)
     home_q = runtime.config.home_q.astype(np.float32)
+    # Robot pose each side's anchor maps to. With --anchor-z the ritual is
+    # "anchor with the tip resting on the table": same home x/y, but the
+    # tip's height at anchor time corresponds to anchor-z in robot world,
+    # pinning absolute heights (real table touch == sim table touch).
+    anchor_ref = {"left": home_left_pose7.copy(), "right": home_right_pose7.copy()}
+    if args.anchor_z is not None:
+        for side in ("left", "right"):
+            anchor_ref[side][2] = args.anchor_z
+        log.info("Table-anchor mode: anchor with the tip ON the table "
+                 "(maps to z=%.3f in robot world).", args.anchor_z)
     # Per-arm anchors: None = disengaged (arm holds home). X/A engage a side
     # by snapshotting the current state; a per-side double clap disengages it.
     anchors: dict[str, object] = {"left": None, "right": None}
@@ -418,8 +445,8 @@ def main() -> None:
                     continue
                 anchors[side] = retarget_anchors_from_raw_state(
                     state,
-                    left_robot_pose7=home_left_pose7,
-                    right_robot_pose7=home_right_pose7,
+                    left_robot_pose7=anchor_ref["left"],
+                    right_robot_pose7=anchor_ref["right"],
                     max_reach=max_reach,
                 )
                 log.info("%s arm anchored — follows from home.", side)

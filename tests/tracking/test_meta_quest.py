@@ -172,6 +172,31 @@ class TrackingFreshnessTest(unittest.TestCase):
 
         self.assertTrue(sample.left_tracked)
         self.assertTrue(sample.right_tracked)
+        self.assertTrue(sample.left_device_tracked)
+        self.assertTrue(sample.left_pose_valid)
+        self.assertTrue(sample.hmd_tracked)
+        self.assertEqual(sample.hmd_pose.shape, (7,))
+
+    def test_receiver_selects_native_frame_nearest_aligned_pc_time(self):
+        receiver = MetaQuestReceiver(self.config)
+        first = parse_frame(
+            {"ovrTimeNs": 1_000, "leftTracked": True}, pc_monotonic_ns=10_000
+        )
+        second = parse_frame(
+            {"ovrTimeNs": 2_000, "leftTracked": True}, pc_monotonic_ns=20_000
+        )
+        with receiver._lock:
+            receiver._frames.extend((first, second))
+            receiver._offset_ns = 100_000
+            receiver._rtt_ns = 1_000
+
+        selected = receiver.aligned_at(102_100)
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.frame.device_time_ns, 2_000)
+        self.assertEqual(selected.aligned_time_ns, 102_000)
+        self.assertTrue(selected.clock_synced)
 
 
 class PipeSmokeTest(unittest.TestCase):
@@ -206,7 +231,9 @@ class PipeSmokeTest(unittest.TestCase):
 
         threading.Thread(target=tcp_server, daemon=True).start()
 
-        cfg = MetaQuestConfig(quest_ip="127.0.0.1", tcp_port=tcp_port, sync_port=sync_port)
+        cfg = MetaQuestConfig(
+            quest_ip="127.0.0.1", tcp_port=tcp_port, sync_port=sync_port
+        )
         rx = MetaQuestReceiver(cfg)
         rx.start()
         try:

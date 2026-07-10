@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 from dotenv import load_dotenv
 
 import numpy as np
@@ -143,6 +144,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--hub-token",
         default=None,
         help="HuggingFace API token (uses HF_TOKEN env var if not set).",
+    )
+    ds.add_argument(
+        "--quality-config",
+        type=Path,
+        default=Path("configs/quality.yaml"),
+        help="Offline episode-acceptance thresholds.",
+    )
+    ds.add_argument(
+        "--skip-quality-filter",
+        action="store_true",
+        help="Convert rejected episodes too; intended only for debugging.",
     )
 
     # ------------------------------------------------------------------
@@ -513,7 +525,7 @@ def process_episode(
     episode_index: int,
     source_episode_index: int,
     task: str,
-) -> object:
+) -> Any:
     """Run IK retargeting on one episode and return an EpisodeResult.
 
     A fresh retargeter is built for each episode so the local-relative
@@ -668,29 +680,58 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Process each episode
     # ------------------------------------------------------------------
-    from handumi.dataset import load_raw_episode_states
+    from handumi.dataset import load_raw_episode
+    from handumi.dataset.quality import EpisodeQualityConfig, validate_episode
 
     results = []
-    for out_idx, src_idx in enumerate(episode_indices):
-        print(f"\nEpisode {out_idx + 1}/{len(episode_indices)}  (source ep {src_idx})")
+    quality_reports = []
+    quality_config = None
+    if not args.skip_quality_filter:
         try:
-            raw_states, _ = load_raw_episode_states(
+            quality_config = EpisodeQualityConfig.from_yaml(args.quality_config)
+        except (OSError, ValueError) as exc:
+            parser.error(f"Could not load quality config: {exc}")
+
+    for position, src_idx in enumerate(episode_indices, start=1):
+        print(f"\nEpisode {position}/{len(episode_indices)}  (source ep {src_idx})")
+        try:
+            raw_episode = load_raw_episode(
                 repo_id=source_repo_id,
                 root=source_root,
                 episode=src_idx,
                 source=args.source,
                 revision=args.revision,
+                download_videos=True,
             )
         except Exception as exc:
             print(f"  SKIP: failed to load — {exc}", file=sys.stderr)
             continue
+
+        raw_states = raw_episode.states
+        if quality_config is not None:
+            report = validate_episode(
+                raw_states,
+                fps=raw_episode.fps,
+                signals=raw_episode.signals,
+                episode_index=src_idx,
+                config=quality_config,
+            )
+            quality_reports.append(report)
+            if not report.accepted:
+                reasons = ", ".join(
+                    finding.code
+                    for finding in report.findings
+                    if finding.severity == "reject"
+                )
+                print(f"  SKIP: quality filter — {reasons}", file=sys.stderr)
+                continue
 
         task = get_task(src_idx)
         try:
             result = process_episode(
                 args=args,
                 states=raw_states,
-                episode_index=out_idx,
+                episode_index=len(results),
                 source_episode_index=src_idx,
                 task=task,
             )
@@ -735,8 +776,26 @@ def main() -> None:
             "translation_scale": float(args.translation_scale),
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
+            "quality_filter_enabled": not args.skip_quality_filter,
+            "quality_source_accepted": sum(
+                report.accepted for report in quality_reports
+            ),
+            "quality_source_rejected": sum(
+                not report.accepted for report in quality_reports
+            ),
+            "converted_source_episodes": len(results),
         },
     )
+
+    if quality_config is not None:
+        from handumi.dataset.quality import write_quality_report
+
+        write_quality_report(
+            output_root / "meta" / "source_quality.json",
+            quality_reports,
+            config=quality_config,
+            dataset=source_repo_id,
+        )
 
     # ------------------------------------------------------------------
     # Optional: push to Hub

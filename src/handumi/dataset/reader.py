@@ -41,6 +41,7 @@ class DatasetRef:
         return cls(repo_id=repo_id, root=resolved_root, revision=revision)
 
 
+@dataclass(frozen=True)
 class DatasetDownloadResult:
     """Summary of a downloaded or loaded LeRobot dataset."""
 
@@ -52,9 +53,20 @@ class DatasetDownloadResult:
     features: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RawEpisode:
+    """Raw state plus scalar capture diagnostics for one episode."""
+
+    states: np.ndarray
+    fps: float
+    signals: dict[str, np.ndarray]
+
+
 def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
     """Return HandUMI-specific metadata from an ``info.json`` dict or dataset root."""
-    info = load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+    info = (
+        load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+    )
     meta = info.get("handumi", {})
     return dict(meta) if isinstance(meta, dict) else {}
 
@@ -87,27 +99,64 @@ def load_raw_episode_states(
     revision: str | None = None,
 ) -> tuple[np.ndarray, float]:
     """Load one raw 16D HandUMI episode column as ``(states, fps)``."""
+    loaded = load_raw_episode(
+        ref,
+        repo_id=repo_id,
+        root=root,
+        episode=episode,
+        source=source,
+        revision=revision,
+    )
+    return loaded.states, loaded.fps
+
+
+def load_raw_episode(
+    ref: DatasetRef | None = None,
+    *,
+    repo_id: str | None = None,
+    root: str | Path | None = None,
+    episode: int,
+    source: str = "observation.state",
+    revision: str | None = None,
+    download_videos: bool = False,
+) -> RawEpisode:
+    """Load state and non-image HandUMI diagnostics without decoding videos."""
     dataset = open_dataset(
         ref,
         repo_id=repo_id,
         root=root,
         episode=episode,
         revision=revision,
+        download_videos=download_videos,
     )
     fps = float(getattr(dataset, "fps", 30) or 30)
-    states: list[np.ndarray] = []
-    for item in dataset:
-        if source not in item:
-            raise ValueError(f"Dataset item has no {source!r} feature.")
-        state = np.asarray(item[source], dtype=np.float32).reshape(-1)
-        if len(state) != 16:
-            raise ValueError(
-                f"Expected raw HandUMI state length 16 in {source!r}, got {len(state)}."
-            )
-        states.append(state)
-    if not states:
+    table = dataset.hf_dataset
+    if source not in table.column_names:
+        raise ValueError(f"Dataset has no {source!r} feature.")
+    states = np.asarray(table[source], dtype=np.float32)
+    if states.ndim != 2 or states.shape[1] != 16:
+        width = states.shape[1] if states.ndim == 2 else states.shape
+        raise ValueError(
+            f"Expected raw HandUMI state width 16 in {source!r}, got {width}."
+        )
+    if len(states) == 0:
         raise ValueError(f"Episode {episode} is empty.")
-    return np.stack(states, axis=0), fps
+
+    prefixes = (
+        "observation.tracking.",
+        "observation.feetech.",
+        "observation.camera.",
+        "observation.sync.",
+    )
+    signals: dict[str, np.ndarray] = {}
+    for key in table.column_names:
+        if not key.startswith(prefixes):
+            continue
+        values = np.asarray(table[key])
+        if values.ndim == 2 and values.shape[1] == 1:
+            values = values[:, 0]
+        signals[key] = values
+    return RawEpisode(states=states, fps=fps, signals=signals)
 
 
 def _parse_episodes(value: str | None) -> list[int] | None:
@@ -185,6 +234,7 @@ def open_dataset(
     episode: int | None = None,
     episodes: list[int] | None = None,
     revision: str | None = None,
+    download_videos: bool = True,
 ) -> Any:
     """Open a local or remote LeRobot dataset, downloading missing files as needed."""
     if episode is not None and episodes is not None:
@@ -211,7 +261,7 @@ def open_dataset(
         root=resolved.root,
         revision=resolved.revision,
         episodes=resolved_episodes,
-        download_videos=True,
+        download_videos=download_videos,
     )
 
 

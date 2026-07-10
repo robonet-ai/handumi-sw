@@ -497,6 +497,8 @@ class PicoTrackingProvider:
         left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
         device_time_ns = int(np.asarray(frame["observation.pico.timestamp_ns"]).reshape(-1)[0])
         tracked = bool(np.any(left[:3]) or np.any(right[:3]))
+        hmd = as_pose7(frame["observation.pico.headset_pose"])
+        pc_time_ns = time.monotonic_ns()
         return ControllerPairSample(
             device=self.device,
             left_controller_pose=left,
@@ -505,6 +507,20 @@ class PicoTrackingProvider:
             right_tcp_pose=right_tcp,
             left_tracked=tracked,
             right_tracked=tracked,
+            left_device_tracked=tracked,
+            right_device_tracked=tracked,
+            left_pose_valid=tracked,
+            right_pose_valid=tracked,
+            hmd_pose=hmd,
+            hmd_tracked=bool(np.any(hmd[:3])),
             device_time_ns=device_time_ns,
-            pc_monotonic_ns=time.monotonic_ns(),
+            pc_monotonic_ns=pc_time_ns,
+            aligned_time_ns=pc_time_ns,
+            connected=True,
+            streaming=tracked,
         )
+
+    def sample_at(self, target_time_ns: int) -> ControllerPairSample:
+        """PICO has no native history buffer; timestamp its synchronous snapshot."""
+        del target_time_ns
+        return self.latest()

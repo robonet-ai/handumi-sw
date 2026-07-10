@@ -3,8 +3,22 @@ import tempfile
 from pathlib import Path
 
 import yaml
+import numpy as np
 
-from handumi.cameras.usb import build_camera_specs, resolve_camera_ids
+from handumi.cameras.base import CameraSample
+from handumi.cameras.usb import (
+    build_camera_specs,
+    read_camera_samples,
+    resolve_camera_ids,
+)
+
+
+class _SampledCamera:
+    def __init__(self, sample_time_ns: int):
+        self.sample_time_ns = sample_time_ns
+
+    def sample_at(self, target_time_ns: int):
+        return CameraSample(np.ones((2, 3, 3), dtype=np.uint8), self.sample_time_ns, 4)
 
 
 class UsbCameraConfigTest(unittest.TestCase):
@@ -60,6 +74,41 @@ class UsbCameraConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cameras.yaml"
             self.assertEqual(resolve_camera_ids([7, 8], path), [7, 8])
+
+    def test_timestamped_camera_health_is_recorded(self):
+        frame, health = read_camera_samples(
+            [_SampledCamera(1_002_000_000)],
+            ["left_wrist"],
+            target_time_ns=1_000_000_000,
+            record_time_ns=1_010_000_000,
+            width=3,
+            height=2,
+            stale_timeout_s=0.1,
+            max_sync_skew_s=0.01,
+        )
+
+        self.assertTrue(health["camera.left_wrist"])
+        self.assertEqual(
+            frame["observation.camera.left_wrist.sample_time_ns"].item(),
+            1_002_000_000,
+        )
+        self.assertAlmostEqual(
+            frame["observation.camera.left_wrist.sync_error_ms"].item(), 2.0
+        )
+
+    def test_stale_camera_is_unhealthy(self):
+        _, health = read_camera_samples(
+            [_SampledCamera(1_000_000_000)],
+            ["left_wrist"],
+            target_time_ns=2_000_000_000,
+            record_time_ns=2_000_000_000,
+            width=3,
+            height=2,
+            stale_timeout_s=0.1,
+            max_sync_skew_s=0.01,
+        )
+
+        self.assertFalse(health["camera.left_wrist"])
 
 
 if __name__ == "__main__":

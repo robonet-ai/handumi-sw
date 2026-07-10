@@ -9,6 +9,10 @@ from handumi.dataset.raw import (
     RIGHT_GRIPPER_INDEX,
     RIGHT_POSE_SLICE,
     raw_state_feature,
+    raw_tracking_features,
+    feetech_features,
+    camera_health_features,
+    capture_timing_features,
     validate_raw_state_shape,
 )
 
@@ -74,6 +78,23 @@ class RawSchemaTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Expected demo length 16, got 15"):
             validate_raw_state_shape([0.0] * 15, name="demo")
+
+    def test_capture_schema_preserves_health_and_source_timestamps(self):
+        tracking = raw_tracking_features()
+        self.assertIn("observation.tracking.hmd_pose", tracking)
+        self.assertIn("observation.tracking.left_device_tracked", tracking)
+        self.assertIn("observation.tracking.left_pose_valid", tracking)
+        self.assertIn("observation.tracking.aligned_time_ns", tracking)
+        self.assertIn("observation.tracking.sync_error_ms", tracking)
+
+        feetech = feetech_features()
+        self.assertIn("observation.feetech.sample_time_ns", feetech)
+        self.assertIn("observation.feetech.healthy", feetech)
+
+        cameras = camera_health_features(["left_wrist"])
+        self.assertIn("observation.camera.left_wrist.sample_time_ns", cameras)
+        self.assertIn("observation.camera.left_wrist.healthy", cameras)
+        self.assertIn("observation.sync.target_time_ns", capture_timing_features())
 
 
 if __name__ == "__main__":

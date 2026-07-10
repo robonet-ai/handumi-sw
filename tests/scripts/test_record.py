@@ -6,6 +6,7 @@ from unittest import mock
 
 import numpy as np
 
+from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _default_output_dir,
@@ -20,10 +21,14 @@ from handumi.tracking.gestures import DoubleClapDetector
 
 def _widths(left_mm: float, right_mm: float) -> GripperWidths:
     return GripperWidths(
-        left=left_mm / 1000.0, right=right_mm / 1000.0,
-        left_mm=left_mm, right_mm=right_mm,
-        left_normalized=left_mm / 80.0, right_normalized=right_mm / 80.0,
-        left_ticks=0, right_ticks=0,
+        left=left_mm / 1000.0,
+        right=right_mm / 1000.0,
+        left_mm=left_mm,
+        right_mm=right_mm,
+        left_normalized=left_mm / 80.0,
+        right_normalized=right_mm / 80.0,
+        left_ticks=0,
+        right_ticks=0,
     )
 
 
@@ -69,11 +74,44 @@ class _FakeDataset:
         self.frames.append(frame)
 
 
+class _HealthyTracker:
+    device = "meta"
+
+    def sample_at(self, target_time_ns: int) -> ControllerPairSample:
+        return replace(
+            ControllerPairSample.empty("meta"),
+            left_tracked=True,
+            right_tracked=True,
+            left_device_tracked=True,
+            right_device_tracked=True,
+            left_pose_valid=True,
+            right_pose_valid=True,
+            aligned_time_ns=target_time_ns,
+            pc_monotonic_ns=target_time_ns,
+            connected=True,
+            streaming=True,
+        )
+
+    def latest(self) -> ControllerPairSample:
+        return self.sample_at(1)
+
+
+class _StaleCamera:
+    def sample_at(self, target_time_ns: int) -> CameraSample:
+        return CameraSample(
+            image=np.zeros((48, 64, 3), dtype=np.uint8),
+            capture_time_ns=target_time_ns - 1_000_000_000,
+            sequence=1,
+        )
+
+
 def _clap_sequence() -> list[GripperWidths]:
     """open, clap, open, clap -> triggers the double-clap detector."""
     return [
-        _widths(50.0, 50.0), _widths(2.0, 2.0),
-        _widths(50.0, 50.0), _widths(2.0, 2.0),
+        _widths(50.0, 50.0),
+        _widths(2.0, 2.0),
+        _widths(50.0, 50.0),
+        _widths(2.0, 2.0),
         _widths(50.0, 50.0),
     ]
 
@@ -96,9 +134,7 @@ class WaitForClapTest(unittest.TestCase):
         stop = threading.Event()
         stop.set()
         grippers = _FakeGrippers([_widths(50.0, 50.0)])
-        self.assertFalse(
-            _wait_for_clap(grippers, DoubleClapDetector(), stop)
-        )
+        self.assertFalse(_wait_for_clap(grippers, DoubleClapDetector(), stop))
 
 
 class WaitForTrackingTest(unittest.TestCase):
@@ -182,6 +218,34 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
         self.assertEqual(status, "tracking_lost")
         self.assertEqual(n_frames, 1)
         self.assertEqual(len(dataset.frames), n_frames)
+
+    def test_sustained_camera_failure_discards_episode(self):
+        dataset = _FakeDataset()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[_StaleCamera()],
+            cam_names=["left_wrist"],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=1.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            sync_lag_s=0.001,
+            max_sync_skew_s=0.01,
+            camera_stale_timeout_s=0.1,
+            sensor_loss_timeout_s=0.005,
+        )
+
+        self.assertEqual(status, "sensor_unhealthy")
+        self.assertGreater(n_frames, 0)
 
 
 class BuildObservationTest(unittest.TestCase):

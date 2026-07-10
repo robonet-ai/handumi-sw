@@ -29,7 +29,7 @@ import struct
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -112,6 +112,17 @@ class QuestFrame:
     right: ControllerState
     battery: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    receive_sequence: int = 0
+
+
+@dataclass(frozen=True)
+class AlignedQuestFrame:
+    """Quest frame mapped onto the workstation monotonic clock."""
+
+    frame: QuestFrame
+    aligned_time_ns: int
+    clock_offset_ns: int
+    clock_synced: bool
 
 
 def controller_pose_in_workspace(
@@ -272,11 +283,13 @@ class MetaQuestReceiver:
         self._thread: threading.Thread | None = None
 
         self._latest: QuestFrame | None = None
+        self._frames: deque[QuestFrame] = deque(maxlen=512)
         self._frame_times: deque[float] = deque(maxlen=config.fps_window)
         self._last_frame_mono: float | None = None
         self._offset_hist: deque[int] = deque(maxlen=config.offset_history)
         self._offset_ns: int = 0
         self._rtt_ns: int | None = None
+        self._receive_sequence = 0
 
     # ---------- public API ----------
 
@@ -306,6 +319,37 @@ class MetaQuestReceiver:
     def latest(self) -> QuestFrame | None:
         with self._lock:
             return self._latest
+
+    def aligned_at(self, target_time_ns: int | None = None) -> AlignedQuestFrame | None:
+        """Return the buffered Quest frame nearest one PC monotonic timestamp."""
+        with self._lock:
+            frames = tuple(self._frames)
+            latest = self._latest
+            offset_ns = self._offset_ns
+            clock_synced = self._rtt_ns is not None
+        if not frames:
+            frames = () if latest is None else (latest,)
+        if not frames:
+            return None
+
+        def aligned_time(frame: QuestFrame) -> int:
+            if clock_synced and frame.device_time_ns > 0:
+                return int(frame.device_time_ns + offset_ns)
+            return int(frame.pc_monotonic_ns)
+
+        if target_time_ns is None:
+            frame = frames[-1]
+        else:
+            frame = min(
+                frames,
+                key=lambda candidate: abs(aligned_time(candidate) - target_time_ns),
+            )
+        return AlignedQuestFrame(
+            frame=frame,
+            aligned_time_ns=aligned_time(frame),
+            clock_offset_ns=int(offset_ns),
+            clock_synced=bool(clock_synced),
+        )
 
     def metrics(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -351,6 +395,7 @@ class MetaQuestReceiver:
             with self._lock:
                 self._connected = True
                 self._frame_times.clear()
+                self._frames.clear()
                 self._last_frame_mono = None
                 self._offset_hist.clear()
                 self._offset_ns = 0
@@ -418,7 +463,10 @@ class MetaQuestReceiver:
         pc_mono_ns = time.monotonic_ns()
         frame = parse_frame(msg, pc_monotonic_ns=pc_mono_ns)
         with self._lock:
+            self._receive_sequence += 1
+            frame = replace(frame, receive_sequence=self._receive_sequence)
             self._latest = frame
+            self._frames.append(frame)
             self._last_frame_mono = pc_mono_ns / 1e9
             self._frame_times.append(self._last_frame_mono)
         if self._on_frame is not None:
@@ -505,13 +553,22 @@ class MetaQuestTrackingProvider:
         self.workspace_set = False
 
     def latest(self) -> ControllerPairSample:
-        frame = self.receiver.latest()
-        if frame is None:
+        return self._sample(self.receiver.aligned_at())
+
+    def sample_at(self, target_time_ns: int) -> ControllerPairSample:
+        """Return the native Quest frame nearest a synchronized row target."""
+        return self._sample(self.receiver.aligned_at(target_time_ns))
+
+    def _sample(self, aligned: AlignedQuestFrame | None) -> ControllerPairSample:
+        if aligned is None:
             return ControllerPairSample.empty(self.device)
+        frame = aligned.frame
 
         # The receiver intentionally retains its last frame across reconnects.
         # Never advertise that cached pose as tracked once the stream is stale.
-        streaming = bool(self.receiver.metrics()["streaming"])
+        metrics = self.receiver.metrics()
+        streaming = bool(metrics["streaming"])
+        connected = bool(metrics["connected"])
         reset_pressed = (
             streaming and self.reset_workspace_on_x and frame.left.buttons.primary
         )
@@ -528,6 +585,9 @@ class MetaQuestTrackingProvider:
         right_controller = self.workspace.apply(
             unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
         )
+        hmd_pose = self.workspace.apply(
+            unity_pose_to_handumi(frame.hmd.position, frame.hmd.quaternion)
+        )
         left = pose_to_pose7(left_controller)
         right = pose_to_pose7(right_controller)
         left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
@@ -539,8 +599,23 @@ class MetaQuestTrackingProvider:
             right_tcp_pose=right_tcp,
             left_tracked=bool(streaming and frame.left.tracked and frame.left.valid),
             right_tracked=bool(streaming and frame.right.tracked and frame.right.valid),
+            left_device_tracked=bool(frame.left.tracked),
+            right_device_tracked=bool(frame.right.tracked),
+            left_pose_valid=bool(frame.left.valid),
+            right_pose_valid=bool(frame.right.valid),
+            hmd_pose=pose_to_pose7(hmd_pose),
+            hmd_tracked=bool(streaming and frame.hmd.tracked),
+            workspace_from_device_pose=pose_to_pose7(
+                self.workspace.workspace_from_quest
+            ),
             device_time_ns=int(frame.device_time_ns),
             pc_monotonic_ns=int(frame.pc_monotonic_ns),
+            aligned_time_ns=int(aligned.aligned_time_ns),
+            clock_offset_ns=int(aligned.clock_offset_ns),
+            clock_synced=bool(aligned.clock_synced),
+            connected=connected,
+            streaming=streaming,
+            sequence=int(frame.receive_sequence),
         )
 
 

@@ -80,8 +80,21 @@ def raw_tracking_features() -> dict[str, Any]:
     for side in ("left", "right"):
         features[f"observation.tracking.{side}_controller_pose"] = pose7_feature()
         features[f"observation.tracking.{side}_tracked"] = scalar_feature("int64")
+        features[f"observation.tracking.{side}_device_tracked"] = scalar_feature(
+            "int64"
+        )
+        features[f"observation.tracking.{side}_pose_valid"] = scalar_feature("int64")
+    features["observation.tracking.hmd_pose"] = pose7_feature()
+    features["observation.tracking.hmd_tracked"] = scalar_feature("int64")
+    features["observation.tracking.workspace_from_device_pose"] = pose7_feature()
     features["observation.tracking.device_time_ns"] = scalar_feature("int64")
     features["observation.tracking.pc_monotonic_ns"] = scalar_feature("int64")
+    features["observation.tracking.aligned_time_ns"] = scalar_feature("int64")
+    features["observation.tracking.clock_offset_ns"] = scalar_feature("int64")
+    for key in ("clock_synced", "connected", "streaming", "sequence"):
+        features[f"observation.tracking.{key}"] = scalar_feature("int64")
+    for key in ("age_ms", "sync_error_ms"):
+        features[f"observation.tracking.{key}"] = scalar_feature("float32")
     return features
 
 
@@ -92,10 +105,36 @@ def feetech_features() -> dict[str, Any]:
         features[f"observation.feetech.{side}_ticks"] = scalar_feature("int64")
         features[f"observation.feetech.{side}_width_mm"] = scalar_feature("float32")
         features[f"observation.feetech.{side}_normalized"] = scalar_feature("float32")
+    for key in ("sample_time_ns", "sequence", "enabled", "healthy"):
+        features[f"observation.feetech.{key}"] = scalar_feature("int64")
+    for key in ("age_ms", "sync_error_ms"):
+        features[f"observation.feetech.{key}"] = scalar_feature("float32")
     return features
 
 
-def validate_raw_state_shape(value: Sequence[object], *, name: str = "raw state") -> None:
+def capture_timing_features() -> dict[str, Any]:
+    """Recorder target and wall-clock timing stored on every dataset row."""
+    return {
+        "observation.sync.target_time_ns": scalar_feature("int64"),
+        "observation.sync.record_time_ns": scalar_feature("int64"),
+    }
+
+
+def camera_health_features(camera_names: Sequence[str]) -> dict[str, Any]:
+    """Per-camera source timing and health fields."""
+    features: dict[str, Any] = {}
+    for name in camera_names:
+        prefix = f"observation.camera.{name}"
+        for key in ("sample_time_ns", "sequence", "enabled", "healthy"):
+            features[f"{prefix}.{key}"] = scalar_feature("int64")
+        for key in ("age_ms", "sync_error_ms"):
+            features[f"{prefix}.{key}"] = scalar_feature("float32")
+    return features
+
+
+def validate_raw_state_shape(
+    value: Sequence[object], *, name: str = "raw state"
+) -> None:
     """Raise ``ValueError`` if ``value`` is not a single 16D raw state vector."""
     if len(value) != HANDUMI_RAW_STATE_SIZE:
         raise ValueError(
@@ -131,6 +170,8 @@ __all__ = [
     "RIGHT_GRIPPER_INDEX",
     "RIGHT_POSE_SLICE",
     "pose_to_state_vector",
+    "camera_health_features",
+    "capture_timing_features",
     "feetech_features",
     "pose7_feature",
     "raw_state_feature",

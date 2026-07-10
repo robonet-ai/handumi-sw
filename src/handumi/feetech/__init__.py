@@ -11,12 +11,20 @@ from handumi.feetech.calibration import (
     save_calibration,
     user_calibration_path,
 )
-from handumi.feetech.gripper import FeetechGripperPair, GripperWidths, zero_gripper_widths
+from handumi.feetech.gripper import (
+    FeetechGripperPair,
+    FeetechGripperSampler,
+    GripperSample,
+    GripperWidths,
+    zero_gripper_widths,
+)
 
 __all__ = [
     "PORTS_PATH",
     "FeetechConfig",
     "FeetechGripperPair",
+    "FeetechGripperSampler",
+    "GripperSample",
     "GripperCalibration",
     "GripperWidths",
     "assert_calibrated",

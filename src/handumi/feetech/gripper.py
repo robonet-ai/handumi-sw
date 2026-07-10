@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
+
+log = logging.getLogger("handumi.record")
 
 
 _ENCODER_RESOLUTION = 4096
@@ -36,6 +42,125 @@ class GripperWidths:
             left_ticks=0,
             right_ticks=0,
         )
+
+
+@dataclass(frozen=True)
+class GripperSample:
+    """One aperture sample timestamped on the workstation monotonic clock."""
+
+    widths: GripperWidths
+    sample_time_ns: int
+    sequence: int
+    enabled: bool = True
+
+
+class FeetechGripperSampler:
+    """Continuously sample both encoders and retain a short native-rate buffer."""
+
+    def __init__(
+        self,
+        grippers: "FeetechGripperPair",
+        *,
+        sample_hz: float = 100.0,
+        buffer_seconds: float = 1.0,
+    ) -> None:
+        if sample_hz <= 0:
+            raise ValueError("sample_hz must be greater than zero.")
+        self.grippers = grippers
+        self.sample_hz = float(sample_hz)
+        self._samples: deque[GripperSample] = deque(
+            maxlen=max(8, int(round(sample_hz * buffer_seconds)))
+        )
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._sequence = 0
+        self._last_error: str | None = None
+        self._consecutive_errors = 0
+
+    def start(self, *, timeout_s: float = 2.0) -> None:
+        if self._thread is not None:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="handumi_feetech_sampler",
+            daemon=True,
+        )
+        self._thread.start()
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.latest() is not None:
+                return
+            time.sleep(0.01)
+        error = self.last_error or "no encoder sample received"
+        self.stop()
+        raise RuntimeError(f"Feetech sampler failed to start: {error}")
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+        self._thread = None
+
+    def latest(self) -> GripperSample | None:
+        with self._lock:
+            return self._samples[-1] if self._samples else None
+
+    def sample_at(self, target_time_ns: int | None = None) -> GripperSample | None:
+        with self._lock:
+            samples = tuple(self._samples)
+        if not samples:
+            return None
+        if target_time_ns is None:
+            return samples[-1]
+        return min(
+            samples, key=lambda sample: abs(sample.sample_time_ns - target_time_ns)
+        )
+
+    @property
+    def last_error(self) -> str | None:
+        with self._lock:
+            return self._last_error
+
+    @property
+    def consecutive_errors(self) -> int:
+        with self._lock:
+            return self._consecutive_errors
+
+    def _run(self) -> None:
+        interval_s = 1.0 / self.sample_hz
+        next_sample = time.perf_counter()
+        while not self._stop.is_set():
+            started_ns = time.monotonic_ns()
+            try:
+                widths = self.grippers.read_normalized_widths()
+                finished_ns = time.monotonic_ns()
+                self._sequence += 1
+                sample = GripperSample(
+                    widths=widths,
+                    sample_time_ns=(started_ns + finished_ns) // 2,
+                    sequence=self._sequence,
+                )
+                with self._lock:
+                    self._samples.append(sample)
+                    self._last_error = None
+                    self._consecutive_errors = 0
+            except Exception as exc:  # noqa: BLE001 - health gate owns recovery.
+                with self._lock:
+                    self._last_error = str(exc)
+                    self._consecutive_errors += 1
+                    count = self._consecutive_errors
+                if count == 1:
+                    log.warning("Feetech sampling failed: %s", exc)
+
+            next_sample += interval_s
+            delay = next_sample - time.perf_counter()
+            if delay > 0:
+                self._stop.wait(delay)
+            else:
+                next_sample = time.perf_counter()
 
 
 def zero_gripper_widths() -> GripperWidths:
@@ -106,8 +231,12 @@ class FeetechGripperPair:
         self.close()
 
     def read_normalized_widths(self) -> GripperWidths:
-        left = _read_width(self._buses[self._left_port], self.config.left, self._left_unwrap)
-        right = _read_width(self._buses[self._right_port], self.config.right, self._right_unwrap)
+        left = _read_width(
+            self._buses[self._left_port], self.config.left, self._left_unwrap
+        )
+        right = _read_width(
+            self._buses[self._right_port], self.config.right, self._right_unwrap
+        )
         return GripperWidths(
             left=left["width_m"],
             right=right["width_m"],
@@ -115,8 +244,8 @@ class FeetechGripperPair:
             right_mm=right["width_mm"],
             left_normalized=left["normalized"],
             right_normalized=right["normalized"],
-            left_ticks=left["ticks"],
-            right_ticks=right["ticks"],
+            left_ticks=int(left["ticks"]),
+            right_ticks=int(right["ticks"]),
         )
 
 

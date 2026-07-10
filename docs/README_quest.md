@@ -2,8 +2,10 @@
 
 Streams controller/HMD poses over TCP/JSON + UDP time-sync using the
 prebuilt **YubiQuestApp** from [yubi-sw](https://github.com/airoa-org/yubi-sw).
-The Quest is worn on the neck as a tracking base, one controller mounted on
-each gripper. No XRoboToolkit needed — install the repo with
+For tabletop capture, rigidly mount the Quest with both controllers inside its
+camera coverage. For portable capture, secure it rigidly to the chest; do not
+leave it free to swing from the neck. One controller is mounted on each
+gripper. No XRoboToolkit needed; install the repo with
 `bash install.sh --skip-xrt`.
 
 ## Install (one-time)
@@ -31,9 +33,9 @@ adb shell ip route     # prints ... src <quest-ip>
 
 ## Smoke-test
 
-Launch YubiQuestApp (Library → Unknown Sources) — it must stay foreground
-with the headset "worn" (cover the proximity sensor if it hangs on the
-neck). Wake both controllers, keep them in view of the headset cameras.
+Launch YubiQuestApp (Library → Unknown Sources). It must stay foreground and
+the proximity sensor must remain active while the Quest is mounted. Wake both
+controllers and keep them in view of the headset cameras.
 
 ```bash
 python -m handumi.tracking.meta_quest --config configs/tracking_meta_quest.yaml
