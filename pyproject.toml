@@ -76,10 +76,3 @@ venv = ".venv"
 stubPath = "typings"
 extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
 reportMissingModuleSource = false
-
-[tool.pyright]
-venvPath = "."
-venv = ".venv"
-stubPath = "typings"
-extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
-reportMissingModuleSource = false
