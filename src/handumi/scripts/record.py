@@ -360,6 +360,12 @@ def main() -> None:
                 log.info("  Double-clap both grippers to start episode %d ...", ep_num)
                 if not _wait_for_clap(grippers, clap_detector, stop_event):
                     break
+                # Same clap semantics as handumi-live's re-anchor ("homing"):
+                # re-center the tracking workspace so every episode's poses
+                # start from a fresh, consistent origin.
+                reset_workspace = getattr(tracker, "reset_workspace", None)
+                if reset_workspace is not None:
+                    reset_workspace()
             elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),

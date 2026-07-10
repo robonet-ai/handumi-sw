@@ -60,11 +60,13 @@ health and TCP calibration:
 handumi-live --device meta            # or --device pico
 ```
 
-Per-arm controls: both arms start disengaged at home — press **X** to
-anchor the left arm to your current left-hand pose, **A** for the right
-(re-press to re-anchor). A **double clap on one gripper** sends that arm
-back to home, disengaged (hands-free). Spoken feedback; `--no-sounds` to
-mute. In the recorder below, the double clap instead starts/stops episodes.
+Per-arm controls — two gestures, same action: **(re-)anchor** that arm so
+your current hand pose maps to the arm's home and it follows from there.
+**X** anchors the left arm, **A** the right (hands free, during setup); a
+**double clap on one gripper** anchors that same arm hands-free once your
+fingers are inside the HandUMIs. Arms stay parked at home until their
+first anchor. Spoken feedback; `--no-sounds` to mute. In the recorder
+below, the double clap re-centers the workspace and starts/stops episodes.
 
 ## Record Data
 

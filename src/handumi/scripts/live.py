@@ -15,20 +15,18 @@ tracking health and TCP calibration before a session.
 Rerun (on by default, --no-rerun to disable) shows the calibrated TCP
 trails in the workspace frame — tracking-side truth, before retargeting/IK.
 
-Per-arm engage/disengage (each arm fully independent):
+Per-arm anchoring (each arm fully independent). Two gestures, SAME action —
+(re-)anchor that arm: your hand pose at that instant maps to the arm's home
+TCP and the arm follows relative motion from there. Only fires while that
+side is tracked.
 
-  X (left controller)   anchor the LEFT arm: your left hand pose at that
-                        instant maps to the arm's home TCP, and the arm
-                        follows relative motion from there. Press again to
-                        re-anchor. Only fires while that side is tracked.
-  A (right controller)  same for the RIGHT arm.
-  double clap LEFT      left arm back to home, disengaged (ignores tracking
-                        until you press X again). Hands-free — usable while
-                        holding the HandUMIs.
-  double clap RIGHT     same for the RIGHT arm.
+  X (left controller)   anchor the LEFT arm   (hands free, during setup)
+  A (right controller)  anchor the RIGHT arm
+  double clap LEFT      anchor the LEFT arm   (hands inside the HandUMIs)
+  double clap RIGHT     anchor the RIGHT arm
 
-Both arms start disengaged at home: position yourself, press X and A, go.
-Spoken feedback ("left anchored", "right home", ...) — --no-sounds off.
+Both arms start parked at home until their first anchor. Spoken feedback
+("left anchored", ...) — --no-sounds to mute.
 
 Usage
 -----
@@ -379,8 +377,8 @@ def main() -> None:
     prev_button = {"left": False, "right": False}
     clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
     interval = 1.0 / args.fps
-    log.info("Arms idle at home. Anchor with X (left) / A (right); "
-             "a per-side double clap sends that arm back home.")
+    log.info("Arms idle at home. Anchor with X (left) / A (right), or with a "
+             "double clap of that side's gripper — both gestures re-anchor.")
     try:
         while True:
             loop_start = time.perf_counter()
@@ -400,38 +398,38 @@ def main() -> None:
 
             state = _sample_state(sample, widths)
 
-            # X/A rising edge: (re-)anchor that side, if it is tracked.
+            # (Re-)anchor a side on either gesture — X/A rising edge (hands
+            # free, during setup) or that side's double clap (hands inside
+            # the HandUMIs, mid-operation). Both do exactly the same thing:
+            # snapshot that hand's current pose <-> the arm's home TCP, and
+            # the arm follows relative motion from there.
             pressed = _anchor_buttons_pressed(tracker)
             side_width_mm = {"left": widths.left_mm, "right": widths.right_mm}
             for side in ("left", "right"):
                 rise = pressed[side] and not prev_button[side]
                 prev_button[side] = pressed[side]
-                if rise:
-                    if not side_tracked[side]:
-                        log.warning("%s anchor ignored — that controller is not tracked.", side)
-                        continue
-                    anchors[side] = retarget_anchors_from_raw_state(
-                        state,
-                        left_robot_pose7=home_left_pose7,
-                        right_robot_pose7=home_right_pose7,
-                        max_reach=max_reach,
-                    )
-                    log.info("%s arm anchored — follows from home.", side)
-                    log_say(f"{side} anchored", play_sounds=play_sounds)
+                # Feeding the same width to both detector channels makes the
+                # clap side-local.
+                clapped = clap[side].update(side_width_mm[side], side_width_mm[side], loop_start)
+                if not (rise or clapped):
+                    continue
+                if not side_tracked[side]:
+                    log.warning("%s anchor ignored — that controller is not tracked.", side)
+                    continue
+                anchors[side] = retarget_anchors_from_raw_state(
+                    state,
+                    left_robot_pose7=home_left_pose7,
+                    right_robot_pose7=home_right_pose7,
+                    max_reach=max_reach,
+                )
+                log.info("%s arm anchored — follows from home.", side)
+                log_say(f"{side} anchored", play_sounds=play_sounds)
 
-                # Per-side double clap: back to home, disengaged. Feeding the
-                # same width to both detector channels makes it side-local.
-                if clap[side].update(side_width_mm[side], side_width_mm[side], loop_start):
-                    if anchors[side] is not None:
-                        anchors[side] = None
-                        log.info("%s arm back to home (disengaged).", side)
-                        log_say(f"{side} home", play_sounds=play_sounds)
-
-            # Engaged + tracked sides follow their anchor via IK; engaged but
-            # momentarily untracked sides hold the current pose (None target).
-            # Disengaged sides are parked kinematically at home_q every tick
-            # (no IK target — chasing the home pose through IK left the arm
-            # in a jittery tug-of-war between pose and rest costs).
+            # Anchored + tracked sides follow their anchor via IK; anchored
+            # but momentarily untracked sides hold the current pose (None
+            # target). Never-anchored sides are parked kinematically at
+            # home_q every tick (no IK target — chasing the home pose through
+            # IK left the arm in a jittery tug-of-war of costs).
             ik_targets: dict[str, tuple | None] = {"left": None, "right": None}
             for index, side in enumerate(("left", "right")):
                 if anchors[side] is None or not side_tracked[side]:

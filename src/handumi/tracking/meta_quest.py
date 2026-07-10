@@ -493,6 +493,12 @@ class MetaQuestTrackingProvider:
     def stop(self) -> None:
         self.receiver.stop()
 
+    def reset_workspace(self) -> None:
+        """Re-center the workspace on the next tracked HMD frame (e.g. the
+        recorder calls this when a double clap starts an episode, so every
+        episode's poses share a fresh, consistent origin)."""
+        self.workspace_set = False
+
     def latest(self) -> ControllerPairSample:
         frame = self.receiver.latest()
         if frame is None:
