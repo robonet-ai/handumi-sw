@@ -18,7 +18,7 @@
 -->
 <mujoco model="cube_in_box">
   <worldbody>
-    <body name="cube_in_box_box" pos="0 0.10 0">
+    <body name="cube_in_box_box" pos="0 0.20 0">
       <geom name="cube_in_box_box_floor" type="box"
             size="0.02 0.02 0.0025" pos="0 0 0.0025" rgba="1 1 1 1"/>
       <geom name="cube_in_box_box_wall_front" type="box"
@@ -34,7 +34,7 @@
     <!-- Body origins are the geometric center of the BOTTOM face, for both
          the box and the cube: geoms are offset upward so "pos z=0" means
          resting on the table plane. -->
-    <body name="cube_in_box_cube" pos="0 0 0">
+    <body name="cube_in_box_cube" pos="0 -0.10 0">
       <freejoint name="cube_in_box_cube_freejoint"/>
       <geom name="cube_in_box_cube_geom" type="box" pos="0 0 0.015"
             size="0.015 0.015 0.015" rgba="0.529 0.808 0.922 1"

@@ -504,6 +504,11 @@ def main() -> None:
                 )
                 log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
+                if physics is not None:
+                    # Anchoring doubles as the episode reset: put every
+                    # scene prop (cube, box, ...) back at its initial pose.
+                    physics.reset()
+                    log.info("Scene reset to its initial state.")
 
             # Anchored + tracked sides follow their anchor via IK; anchored
             # but momentarily untracked sides hold the current pose (None
