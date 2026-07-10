@@ -21,10 +21,13 @@ class DoubleClapDetector:
     def __init__(
         self,
         *,
-        close_mm: float = 8.0,
-        open_mm: float = 25.0,
-        window_s: float = 1.2,
+        close_mm: float = 12.0,
+        open_mm: float = 20.0,
+        window_s: float = 1.6,
     ) -> None:
+        # Defaults tuned on hardware (2026-07-09): the original 8/25/1.2 was
+        # hard to trigger — the squeeze rarely dipped under 8mm between 30Hz
+        # samples, and re-opening past 25mm within 1.2s took several tries.
         self._close_mm = close_mm
         self._open_mm = open_mm
         self._window_s = window_s
