@@ -14,16 +14,35 @@ is stored in the servo's EEPROM (persists across power cycles and laptops).
 handumi-setup-ports
 ```
 
-Connect/disconnect one device at a time and note the changed port. `Ctrl+C` to
-stop. The Feetech section shows each serial port and detected servo IDs:
+Leave the command running while you plug and unplug hardware. Connect or
+disconnect **one physical device at a time**, then note which line changed.
+`Ctrl+C` stops the command.
+
+You are collecting two kinds of wiring information:
+
+- Feetech grippers: serial device path plus servo ID.
+- Cameras: video device path or camera index.
+
+If the output does not show the devices you expect, see
+[Troubleshooting](#troubleshooting).
+
+### Feetech grippers
+
+The Feetech section lists serial ports and the servo IDs found on each port:
 
 ```text
 /dev/ttyACM0: ids=[0]
 /dev/ttyACM1: ids=[1]
 ```
 
-Edit `configs/feetech.yaml` (committed, machine-specific — same idea as
-`configs/cameras.yaml`):
+For each physical gripper, write down:
+
+- which side it belongs to: `left` or `right`
+- the serial port: `/dev/ttyACM0`, `/dev/ttyUSB0`, etc.
+- the detected servo ID from `ids=[...]`
+
+Then edit `configs/feetech.yaml`. Put the detected serial port in `port` and
+the detected ID in `servo_id`:
 
 ```yaml
 left:
@@ -34,16 +53,95 @@ right:
   port: /dev/ttyACM1
 ```
 
-Edit `configs/cameras.yaml`:
+If both grippers are connected through the same Feetech bus adapter, they may
+use the same `port` and different `servo_id` values:
+
+```yaml
+left:
+  servo_id: 0
+  port: /dev/ttyUSB0
+right:
+  servo_id: 1
+  port: /dev/ttyUSB0
+```
+
+If each gripper has its own USB adapter, they usually use different `port`
+values.
+
+### Cameras
+
+The camera section lists USB camera devices. A single camera often exposes two
+`/dev/video*` nodes:
+
+```text
+USB Camera: USB Camera (...):
+  /dev/video2
+  /dev/video3
+USB Camera: USB Camera (...):
+  /dev/video4
+  /dev/video5
+```
+
+Use the first `/dev/video*` node for each physical camera unless testing shows
+the second one is the usable stream. In the example above, if `/dev/video2` is
+the left wrist camera and `/dev/video4` is the right wrist camera, edit
+`configs/cameras.yaml` like this:
 
 ```yaml
 left_wrist:
-  index_or_path: 0
+  index_or_path: /dev/video2
 right_wrist:
-  index_or_path: 2
+  index_or_path: /dev/video4
 ```
 
-### Troubleshooting: Feetech serial ports shows `none`
+`index_or_path` can be either a numeric OpenCV index such as `0` or an explicit
+device path such as `/dev/video2`. Prefer `/dev/video*` paths during setup
+because they match the `handumi-setup-ports` output directly.
+
+## 2. Check Feetech Ticks
+
+```bash
+handumi-calibrate-grippers monitor
+```
+
+Open/close each gripper and confirm `ticks` changes.
+
+## 3. Home Servos (centre the encoder range)
+
+The encoder wraps at the 0/4095 seam; travel crossing it makes the width readout
+flip or saturate. Homing stores a correction so the current shaft angle reads
+2048 (centre), clearing the range of the seam:
+
+```bash
+handumi-home-servos              # both sides
+handumi-home-servos --side right # one side
+```
+
+Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
+`OK` / `CHECK`. Re-calibrate afterwards.
+
+A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, so
+an un-homed range is fine as long as recording **starts with the grippers roughly
+closed**.
+
+## 4. Calibrate Gripper Width
+
+```bash
+handumi-calibrate-grippers calibrate            # both sides
+handumi-calibrate-grippers calibrate --side right
+```
+
+For each side: enter the max opening in mm, open fully (ENTER), close fully
+(ENTER). This writes to the per-user cache
+(`~/.cache/handumi/calibration.yaml`), never to the repo.
+
+Setup done — head back to [README.md](README.md) to record. The other
+calibration (controller → gripper TCP, once per mount design) is in
+[README_tcp_offset.md](README_tcp_offset.md).
+
+## Troubleshooting
+
+### Feetech serial ports shows `none`
 
 `Feetech serial ports -> none` means Linux did not create any `/dev/ttyACM*`
 or `/dev/ttyUSB*` serial device. This is different from camera devices, which
@@ -100,43 +198,48 @@ sudo usermod -aG uucp $USER
 
 Then log out and back in.
 
-## 2. Check Feetech Ticks
+### Feetech port exists but no IDs are detected
+
+If `handumi-setup-ports` shows a serial port but `ids=[]`, the adapter opened
+successfully but no servo replied. Check:
+
+- the gripper has power
+- TX/RX/GND wiring between the Feetech adapter and servo
+- the configured baudrate is still `1000000`
+- the servo ID is outside the default scan range
+
+To scan a wider ID range:
 
 ```bash
-handumi-calibrate-grippers monitor
+handumi-setup-ports --start-id 0 --end-id 253
 ```
 
-Open/close each gripper and confirm `ticks` changes.
+### Gripper side is swapped
 
-## 3. Home Servos (centre the encoder range)
+If the right gripper changes when you move the left gripper, swap the `left`
+and `right` entries in `configs/feetech.yaml`. Keep the `servo_id` and `port`
+together as a pair.
 
-The encoder wraps at the 0/4095 seam; travel crossing it makes the width readout
-flip or saturate. Homing stores a correction so the current shaft angle reads
-2048 (centre), clearing the range of the seam:
+### Camera side is swapped
 
-```bash
-handumi-home-servos              # both sides
-handumi-home-servos --side right # one side
-```
+If the right camera preview shows the left wrist, swap the `index_or_path`
+values for `left_wrist` and `right_wrist` in `configs/cameras.yaml`.
 
-Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
-`OK` / `CHECK`. Re-calibrate afterwards.
+### Camera appears twice
 
-A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, so
-an un-homed range is fine as long as recording **starts with the grippers roughly
-closed**.
+Many USB cameras expose two `/dev/video*` nodes. Usually the first node in the
+pair is the video stream. If the configured camera fails to open, try the second
+node from the same camera block.
 
-## 4. Calibrate Gripper Width
+### Ticks do not change
 
-```bash
-handumi-calibrate-grippers calibrate            # both sides
-handumi-calibrate-grippers calibrate --side right
-```
+If `handumi-calibrate-grippers monitor` connects but `ticks` stay constant while
+you move the gripper, confirm that `configs/feetech.yaml` points to the servo
+for the gripper you are moving. If the correct servo is selected, re-home the
+servo and recalibrate width.
 
-For each side: enter the max opening in mm, open fully (ENTER), close fully
-(ENTER). This writes to the per-user cache
-(`~/.cache/handumi/calibration.yaml`), never to the repo.
+### Width flips or saturates near open/close
 
-Setup done — head back to [README.md](README.md) to record. The other
-calibration (controller → gripper TCP, once per mount design) is in
-[README_tcp_offset.md](README_tcp_offset.md).
+The encoder range may be crossing the 0/4095 wrap point. Run
+`handumi-home-servos` with the gripper held at mid-travel, then run width
+calibration again.
