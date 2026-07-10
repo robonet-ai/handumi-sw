@@ -320,7 +320,7 @@ def main() -> None:
     )
 
     log.info("--- Feetech setup ---")
-    grippers = _connect_feetech(args)
+    grippers = connect_feetech(args)
 
     log.info("--- Dataset setup ---")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -463,7 +463,7 @@ def build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
     return MetaQuestTrackingProvider(config=config, calibration=calibration)
 
 
-def _connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
+def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
     if args.skip_feetech:
         log.info("Feetech disabled: gripper widths will be zero-filled.")
         return None
