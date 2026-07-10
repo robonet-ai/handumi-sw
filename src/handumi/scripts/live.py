@@ -156,6 +156,15 @@ def _load_calibration(args: argparse.Namespace):
     )
 
 
+def _side_joint_indices(runtime) -> dict[str, list[int]]:
+    """Actuated-joint indices per side (``left_*`` / ``right_*`` prefixes)."""
+    names = list(runtime.robot.joints.actuated_names)
+    return {
+        side: [i for i, name in enumerate(names) if name.startswith(f"{side}_")]
+        for side in ("left", "right")
+    }
+
+
 def _anchor_buttons_pressed(tracker) -> dict[str, bool]:
     """Raw pressed-state of the per-arm anchor buttons: X (left), A (right).
 
@@ -362,7 +371,8 @@ def main() -> None:
     raw_trails = {"left": TrajectoryTrail(max_points), "right": TrajectoryTrail(max_points)}
 
     play_sounds = not args.no_sounds
-    home_pose7 = {"left": home_left_pose7, "right": home_right_pose7}
+    side_indices = _side_joint_indices(runtime)
+    home_q = runtime.config.home_q.astype(np.float32)
     # Per-arm anchors: None = disengaged (arm holds home). X/A engage a side
     # by snapshotting the current state; a per-side double clap disengages it.
     anchors: dict[str, object] = {"left": None, "right": None}
@@ -417,21 +427,27 @@ def main() -> None:
                         log.info("%s arm back to home (disengaged).", side)
                         log_say(f"{side} home", play_sounds=play_sounds)
 
-            # Disengaged sides park at home; engaged + tracked sides follow
-            # their anchor; engaged but momentarily untracked sides hold the
-            # current pose (None target -> rest cost holds joints).
-            ik_targets: dict[str, tuple | None] = {}
+            # Engaged + tracked sides follow their anchor via IK; engaged but
+            # momentarily untracked sides hold the current pose (None target).
+            # Disengaged sides are parked kinematically at home_q every tick
+            # (no IK target — chasing the home pose through IK left the arm
+            # in a jittery tug-of-war between pose and rest costs).
+            ik_targets: dict[str, tuple | None] = {"left": None, "right": None}
             for index, side in enumerate(("left", "right")):
-                if anchors[side] is None:
-                    pose7 = home_pose7[side]  # disengaged -> park at home
-                elif side_tracked[side]:
-                    pose7 = raw_state_robot_target_pose7(state, anchors[side])[index]
-                else:
-                    ik_targets[side] = None  # engaged but occluded: hold pose
+                if anchors[side] is None or not side_tracked[side]:
                     continue
+                pose7 = raw_state_robot_target_pose7(state, anchors[side])[index]
                 ik_targets[side] = (pose7[:3], pose7[3:7])
                 target_markers[side].position = tuple(pose7[:3])
             q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
+            for side in ("left", "right"):
+                if anchors[side] is None:
+                    q[side_indices[side]] = home_q[side_indices[side]]
+            # Gripper fingers always mirror the real HandUMI opening
+            # (normalized Feetech width scaled to each finger's URDF range).
+            runtime.set_finger_positions(
+                q, {"left": widths.left_normalized, "right": widths.right_normalized}
+            )
             robot_view.update_cfg(q)
 
             if rr is not None:

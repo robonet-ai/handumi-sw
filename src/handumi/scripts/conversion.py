@@ -44,7 +44,12 @@ from handumi.calibration.control_tcp import (
     load_controller_tcp_calibration,
 )
 from handumi.dataset.reader import dataset_root_from_repo_id
-from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
+from handumi.dataset.raw import (
+    LEFT_GRIPPER_INDEX,
+    LEFT_POSE_SLICE,
+    RIGHT_GRIPPER_INDEX,
+    RIGHT_POSE_SLICE,
+)
 from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
     local_relative_robot_target_pose7,
@@ -170,7 +175,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--gripper",
         type=float,
         default=1.0,
-        help="Constant gripper value in [0, 1] written for every frame.",
+        help="Fallback gripper opening in [0, 1], used only when the recording "
+        "carries no Feetech widths (e.g. --skip-feetech). Otherwise the "
+        "recorded opening drives the finger joints frame by frame.",
+    )
+    ik.add_argument(
+        "--gripper-max-width-m",
+        type=float,
+        default=0.08,
+        help="HandUMI full opening (m) that maps to the robot gripper fully "
+        "open; recorded widths are normalized by this before scaling to the "
+        "finger joint range.",
     )
     ik.add_argument("--pos-weight", type=float, default=None)
     ik.add_argument("--ori-weight", type=float, default=None)
@@ -454,7 +469,36 @@ def solve_joint_trajectory_from_raw_states(
             print(f"    frame {i + 1}/{len(states_for_retarget)}", end="\r", flush=True)
 
     print()
-    return np.asarray(qs, dtype=np.float32), calibration_source
+    joints = np.asarray(qs, dtype=np.float32)
+    _write_gripper_joints(joints, states=states, runtime=runtime, args=args)
+    return joints, calibration_source
+
+
+def _write_gripper_joints(
+    joints: np.ndarray,
+    *,
+    states: np.ndarray,
+    runtime,
+    args: argparse.Namespace,
+) -> None:
+    """Drive the finger joints from the recorded HandUMI opening widths.
+
+    ``state[14]``/``state[15]`` carry the left/right opening in meters;
+    normalized by --gripper-max-width-m and scaled to each finger's URDF
+    range (same mapping handumi-live renders). Recordings without Feetech
+    (widths all zero) fall back to the constant --gripper opening.
+    """
+    widths_m = np.asarray(states, dtype=np.float32)[
+        :, [LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX]
+    ]
+    max_w = max(float(args.gripper_max_width_m), 1e-6)
+    normalized = np.clip(widths_m / max_w, 0.0, 1.0)
+    if not np.any(widths_m > 0):
+        normalized[:] = float(np.clip(args.gripper, 0.0, 1.0))
+        print(f"    no recorded widths — constant gripper opening {args.gripper:.2f}")
+    for column, side in enumerate(("left", "right")):
+        for joint_index, open_value in runtime.finger_joints.get(side, ()):
+            joints[:, joint_index] = normalized[:, column] * open_value
 
 
 # ---------------------------------------------------------------------------

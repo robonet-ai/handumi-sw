@@ -48,6 +48,19 @@ class RobotRuntime:
     wrist_forward: float = 0.34
     wrist_height: float = 0.24
     wrist_lateral: float = 0.23
+    # Per side: [(actuated-joint index, fully-open joint value)] for the
+    # prismatic gripper fingers, derived from the URDF limits. The joint
+    # value for a given HandUMI opening is ``normalized_width * open_value``.
+    finger_joints: dict[str, tuple[tuple[int, float], ...]] = None  # type: ignore[assignment]
+
+    def set_finger_positions(self, q: np.ndarray, normalized: dict[str, float]) -> np.ndarray:
+        """Write the gripper-finger joint values for a 0-1 opening per side
+        into ``q`` (in place) and return it."""
+        for side, fingers in (self.finger_joints or {}).items():
+            fraction = float(np.clip(normalized.get(side, 0.0), 0.0, 1.0))
+            for joint_index, open_value in fingers:
+                q[joint_index] = fraction * open_value
+        return q
 
     def urdf_arm_joint_names(self, *, is_left: bool) -> list[str]:
         side = "left" if is_left else "right"
@@ -180,6 +193,21 @@ def load_embodiment(name: str) -> RobotRuntime:
         sum(j.startswith("left_") for j in robot.joints.actuated_names),
         sum(j.startswith("right_") for j in robot.joints.actuated_names),
     )
+    finger_joints: dict[str, tuple[tuple[int, float], ...]] = {"left": (), "right": ()}
+    for side in ("left", "right"):
+        fingers = []
+        for index, joint_name in enumerate(robot.joints.actuated_names):
+            joint = urdf.joint_map.get(joint_name)
+            if (
+                joint is None
+                or joint.type != "prismatic"
+                or joint.limit is None
+                or not joint_name.startswith(f"{side}_")
+            ):
+                continue
+            lower, upper = float(joint.limit.lower), float(joint.limit.upper)
+            fingers.append((index, upper if abs(upper) >= abs(lower) else lower))
+        finger_joints[side] = tuple(fingers)
     return RobotRuntime(
         name=name,
         config=cfg,
@@ -189,6 +217,7 @@ def load_embodiment(name: str) -> RobotRuntime:
         solver_cls=_Solver,
         command_size=command_size,
         default_port=8002 if name == "axol" else 8003,
+        finger_joints=finger_joints,
     )
 
 
