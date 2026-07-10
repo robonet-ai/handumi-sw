@@ -31,9 +31,12 @@
             size="0.0025 0.02 0.015" pos="-0.0175 0 0.02" rgba="1 1 1 1"/>
     </body>
 
-    <body name="cube_in_box_cube" pos="-0.15 0 0.015">
+    <!-- Body origins are the geometric center of the BOTTOM face, for both
+         the box and the cube: geoms are offset upward so "pos z=0" means
+         resting on the table plane. -->
+    <body name="cube_in_box_cube" pos="0 -0.10 0">
       <freejoint name="cube_in_box_cube_freejoint"/>
-      <geom name="cube_in_box_cube_geom" type="box"
+      <geom name="cube_in_box_cube_geom" type="box" pos="0 0 0.015"
             size="0.015 0.015 0.015" rgba="0.529 0.808 0.922 1"
             mass="0.02" friction="1.0 0.005 0.0001"/>
     </body>
