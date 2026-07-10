@@ -107,9 +107,13 @@ Useful options:
 - `--skip-feetech` records with zero-filled gripper widths.
 - `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
 - `--manual-control` lets PICO buttons start/repeat/finish episodes.
+- `--tracking-loss-timeout-s` sets how long tracking may remain lost before
+  the current episode is discarded (default: 1 second).
 - `--no-video` stores image frames instead of encoded video.
 
-By default, each episode starts when you press ENTER in the terminal.
+By default, each episode starts when you press ENTER in the terminal. Recording
+then waits for fresh, valid poses from both controllers. If either controller
+remains untracked beyond the loss timeout, the whole episode is discarded.
 
 ## Push to Hugging Face
 

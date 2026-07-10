@@ -51,6 +51,7 @@ def main() -> None:
         tcp_port=args.tcp_port if args.tcp_port is not None else config.tcp_port,
         sync_port=args.sync_port if args.sync_port is not None else config.sync_port,
         connect_retry_s=config.connect_retry_s,
+        frame_stale_timeout_s=config.frame_stale_timeout_s,
     )
 
     receiver = MetaQuestReceiver(config)

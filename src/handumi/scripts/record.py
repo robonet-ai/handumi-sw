@@ -131,6 +131,36 @@ def _pose_from_pose7(pose7: np.ndarray) -> Pose:
     return Pose(pose[:3], pose[3:7])
 
 
+def _tracking_healthy(sample: ControllerPairSample) -> bool:
+    return bool(sample.left_tracked and sample.right_tracked)
+
+
+def _wait_for_tracking(
+    tracker: TrackingProvider,
+    stop_event: threading.Event,
+    *,
+    poll_s: float = 0.05,
+) -> bool:
+    """Wait until both controller poses are fresh and valid."""
+    last_report = float("-inf")
+    while not stop_event.is_set():
+        sample = tracker.latest()
+        if _tracking_healthy(sample):
+            log.info("Both controllers tracked; recording gate open.")
+            return True
+
+        now = time.monotonic()
+        if now - last_report >= 2.0:
+            log.warning(
+                "Waiting for controller tracking (left=%d right=%d) ...",
+                int(sample.left_tracked),
+                int(sample.right_tracked),
+            )
+            last_report = now
+        time.sleep(poll_s)
+    return False
+
+
 def record_episode(
     *,
     dataset,
@@ -150,6 +180,7 @@ def record_episode(
     finish_button: str,
     start_threshold: float,
     clap_detector: DoubleClapDetector | None = None,
+    tracking_loss_timeout_s: float = 1.0,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -175,11 +206,23 @@ def record_episode(
 
     # Clap-controlled episodes end on the next double clap, not on a timer.
     timed = not manual_control and not clap_control
+    tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
+    tracking_lost_since_ns: int | None = None
 
     while True:
         loop_start = time.perf_counter()
+        tracking_now_ns = time.monotonic_ns()
         elapsed = loop_start - start_t
         if (timed and elapsed >= episode_time_s) or stop_event.is_set():
+            if (
+                tracking_lost_since_ns is not None
+                and tracking_now_ns - tracking_lost_since_ns >= tracking_loss_timeout_ns
+            ):
+                status = "tracking_lost"
+                log.error(
+                    "Controller tracking unavailable for %.2fs; discarding episode.",
+                    (tracking_now_ns - tracking_lost_since_ns) / 1e9,
+                )
             break
 
         if manual_control and xrt is not None:
@@ -203,9 +246,37 @@ def record_episode(
 
         cam_frames = read_camera_frames(cameras, cam_names, width=cam_width, height=cam_height)
         widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+        sample = tracker.latest()
+        if _tracking_healthy(sample):
+            if tracking_lost_since_ns is not None:
+                log.info("Controller tracking recovered before the episode timeout.")
+            tracking_lost_since_ns = None
+        elif tracking_lost_since_ns is None:
+            # For a stale cached frame, count loss from its receive timestamp
+            # instead of adding the freshness timeout to the one-second grace.
+            sample_time_ns = int(sample.pc_monotonic_ns)
+            tracking_lost_since_ns = (
+                min(sample_time_ns, tracking_now_ns)
+                if sample_time_ns > 0
+                else tracking_now_ns
+            )
+            log.warning(
+                "Controller tracking lost (left=%d right=%d); "
+                "discarding if it lasts %.2fs.",
+                int(sample.left_tracked),
+                int(sample.right_tracked),
+                tracking_loss_timeout_s,
+            )
+        elif tracking_now_ns - tracking_lost_since_ns >= tracking_loss_timeout_ns:
+            status = "tracking_lost"
+            log.error(
+                "Controller tracking unavailable for %.2fs; discarding episode.",
+                (tracking_now_ns - tracking_lost_since_ns) / 1e9,
+            )
+            break
+
         if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
             break
-        sample = tracker.latest()
         dataset.add_frame({**cam_frames, **build_observation(sample, widths), "task": task})
         n_frames += 1
 
@@ -242,6 +313,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--episode-time-s", type=float, default=60.0)
     p.add_argument("--fps", type=int, default=30)
+    p.add_argument(
+        "--tracking-loss-timeout-s",
+        type=float,
+        default=1.0,
+        help="Discard an episode when either controller remains untracked for this long.",
+    )
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
@@ -292,6 +369,8 @@ def main() -> None:
         raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
+    if args.tracking_loss_timeout_s <= 0:
+        raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
@@ -389,7 +468,8 @@ def main() -> None:
             else:
                 raise SystemExit("--start-button other than enter currently requires --device pico.")
 
-            stop_event.clear()
+            if not _wait_for_tracking(tracker, stop_event):
+                break
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             n_frames, status = record_episode(
                 dataset=dataset,
@@ -409,8 +489,9 @@ def main() -> None:
                 finish_button=args.finish_button,
                 start_threshold=args.start_threshold,
                 clap_detector=clap_detector,
+                tracking_loss_timeout_s=args.tracking_loss_timeout_s,
             )
-            if n_frames == 0 or status == "repeat":
+            if n_frames == 0 or status in {"repeat", "tracking_lost"}:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()
@@ -467,6 +548,7 @@ def build_tracker(
         tcp_port=args.tcp_port if args.tcp_port is not None else base.tcp_port,
         sync_port=args.sync_port if args.sync_port is not None else base.sync_port,
         connect_retry_s=base.connect_retry_s,
+        frame_stale_timeout_s=base.frame_stale_timeout_s,
     )
     return MetaQuestTrackingProvider(
         config=config, calibration=calibration, reset_workspace_on_x=reset_workspace_on_x

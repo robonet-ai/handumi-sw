@@ -1,6 +1,8 @@
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -8,6 +10,7 @@ from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _default_output_dir,
     _wait_for_clap,
+    _wait_for_tracking,
     build_observation,
     record_episode,
 )
@@ -41,6 +44,21 @@ class _FakeTracker:
 
     def latest(self) -> ControllerPairSample:
         return ControllerPairSample.empty("meta")
+
+
+class _ScriptedTracker:
+    device = "meta"
+
+    def __init__(self, tracked: list[bool]):
+        self._tracked = list(tracked)
+
+    def latest(self) -> ControllerPairSample:
+        value = self._tracked.pop(0) if len(self._tracked) > 1 else self._tracked[0]
+        return replace(
+            ControllerPairSample.empty("meta"),
+            left_tracked=value,
+            right_tracked=value,
+        )
 
 
 class _FakeDataset:
@@ -83,6 +101,19 @@ class WaitForClapTest(unittest.TestCase):
         )
 
 
+class WaitForTrackingTest(unittest.TestCase):
+    def test_waits_until_both_controllers_are_tracked(self):
+        tracker = _ScriptedTracker([False, True])
+        with mock.patch("handumi.scripts.record.time.sleep"):
+            ready = _wait_for_tracking(tracker, threading.Event(), poll_s=0.0)
+        self.assertTrue(ready)
+
+    def test_returns_false_when_stopped(self):
+        stop = threading.Event()
+        stop.set()
+        self.assertFalse(_wait_for_tracking(_ScriptedTracker([True]), stop))
+
+
 class RecordEpisodeClapControlTest(unittest.TestCase):
     def test_double_clap_stops_the_episode(self):
         dataset = _FakeDataset()
@@ -112,6 +143,45 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
         for frame in dataset.frames:
             self.assertIn("observation.state", frame)
             self.assertEqual(frame["observation.state"].dtype, np.float32)
+
+
+class RecordEpisodeTrackingGateTest(unittest.TestCase):
+    def test_sustained_tracking_loss_discards_episode(self):
+        dataset = _FakeDataset()
+        with (
+            mock.patch(
+                "handumi.scripts.record.time.perf_counter",
+                side_effect=[0.0, 0.0, 0.0, 2.0],
+            ),
+            mock.patch(
+                "handumi.scripts.record.time.monotonic_ns",
+                side_effect=[0, 2_000_000_000],
+            ),
+            mock.patch("handumi.scripts.record.time.sleep"),
+        ):
+            n_frames, status = record_episode(
+                dataset=dataset,
+                cameras=[],
+                cam_names=[],
+                tracker=_FakeTracker(),
+                grippers=None,
+                episode_time_s=1.0,
+                fps=1000,
+                task="test",
+                cam_width=64,
+                cam_height=48,
+                stop_event=threading.Event(),
+                manual_control=False,
+                start_button="enter",
+                repeat_button="B",
+                finish_button="Y",
+                start_threshold=0.75,
+                tracking_loss_timeout_s=1.0,
+            )
+
+        self.assertEqual(status, "tracking_lost")
+        self.assertEqual(n_frames, 1)
+        self.assertEqual(len(dataset.frames), n_frames)
 
 
 class BuildObservationTest(unittest.TestCase):

@@ -5,7 +5,14 @@ import unittest
 
 import numpy as np
 
-from handumi.tracking import MetaQuestConfig, MetaQuestReceiver, parse_frame
+from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.robots.utils import IDENTITY_POSE7
+from handumi.tracking import (
+    MetaQuestConfig,
+    MetaQuestReceiver,
+    MetaQuestTrackingProvider,
+    parse_frame,
+)
 from handumi.tracking import mock_quest_sender as mock
 
 
@@ -13,6 +20,32 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _tracked_frame():
+    return parse_frame(
+        {
+            "hmdPosition": {"x": 0, "y": 1.1, "z": 0},
+            "hmdRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            "leftControllerPosition": {"x": -0.2, "y": 0.9, "z": 0.3},
+            "leftControllerRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            "leftTracked": True,
+            "leftValid": True,
+            "rightControllerPosition": {"x": 0.2, "y": 0.9, "z": 0.3},
+            "rightControllerRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            "rightTracked": True,
+            "rightValid": True,
+        },
+        pc_monotonic_ns=time.monotonic_ns(),
+    )
+
+
+def _identity_calibration() -> ControllerTcpCalibration:
+    return ControllerTcpCalibration(
+        left=IDENTITY_POSE7.copy(),
+        right=IDENTITY_POSE7.copy(),
+        source=None,
+    )
 
 
 class ParseFrameTest(unittest.TestCase):
@@ -73,6 +106,72 @@ class ParseFrameTest(unittest.TestCase):
         self.assertTrue(
             np.allclose(frame.left.quaternion, [0.11, 0.22, 0.33, 0.44], atol=1e-6)
         )
+
+
+class TrackingFreshnessTest(unittest.TestCase):
+    def setUp(self):
+        self.config = MetaQuestConfig(
+            quest_ip="127.0.0.1",
+            frame_stale_timeout_s=0.05,
+        )
+
+    def test_receiver_marks_old_frame_as_not_streaming(self):
+        receiver = MetaQuestReceiver(self.config)
+        with receiver._lock:
+            receiver._connected = True
+            receiver._latest = _tracked_frame()
+            receiver._last_frame_mono = time.monotonic() - 0.10
+
+        metrics = receiver.metrics()
+
+        self.assertTrue(metrics["connected"])
+        self.assertFalse(metrics["streaming"])
+        self.assertGreater(metrics["last_frame_age_s"], 0.05)
+
+    def test_provider_does_not_expose_cached_stale_pose_as_tracked(self):
+        provider = MetaQuestTrackingProvider(
+            config=self.config,
+            calibration=_identity_calibration(),
+        )
+        with provider.receiver._lock:
+            provider.receiver._connected = True
+            provider.receiver._latest = _tracked_frame()
+            provider.receiver._last_frame_mono = time.monotonic() - 0.10
+
+        sample = provider.latest()
+
+        self.assertFalse(sample.left_tracked)
+        self.assertFalse(sample.right_tracked)
+
+    def test_provider_does_not_expose_cached_pose_after_disconnect(self):
+        provider = MetaQuestTrackingProvider(
+            config=self.config,
+            calibration=_identity_calibration(),
+        )
+        with provider.receiver._lock:
+            provider.receiver._connected = False
+            provider.receiver._latest = _tracked_frame()
+            provider.receiver._last_frame_mono = time.monotonic()
+
+        sample = provider.latest()
+
+        self.assertFalse(sample.left_tracked)
+        self.assertFalse(sample.right_tracked)
+
+    def test_provider_exposes_fresh_valid_pose_as_tracked(self):
+        provider = MetaQuestTrackingProvider(
+            config=self.config,
+            calibration=_identity_calibration(),
+        )
+        with provider.receiver._lock:
+            provider.receiver._connected = True
+            provider.receiver._latest = _tracked_frame()
+            provider.receiver._last_frame_mono = time.monotonic()
+
+        sample = provider.latest()
+
+        self.assertTrue(sample.left_tracked)
+        self.assertTrue(sample.right_tracked)
 
 
 class PipeSmokeTest(unittest.TestCase):

@@ -14,6 +14,12 @@ connection:
   sync_port: 42000 # NTP-style UDP time-sync
   connect_retry_s: 1.0
 
+health:
+  # Frames older than this are exposed as untracked, even when the last JSON
+  # payload said tracked=true. The recorder's 1s loss timeout is measured from
+  # the receive timestamp of that last frame.
+  frame_stale_timeout_s: 0.25
+
 streams:
   left: true
   right: true

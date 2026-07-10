@@ -222,6 +222,7 @@ class MetaQuestConfig:
     tcp_port: int = 65432
     sync_port: int = 42000
     connect_retry_s: float = 1.0
+    frame_stale_timeout_s: float = 0.25
     fps_window: int = 30
     offset_history: int = 15
     rtt_accept_ns: int = 8_000_000
@@ -231,11 +232,15 @@ class MetaQuestConfig:
         with Path(path).open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
         conn = data.get("connection", {}) or {}
+        health = data.get("health", {}) or {}
         return cls(
             quest_ip=str(conn.get("quest_ip", "")),
             tcp_port=int(conn.get("tcp_port", 65432)),
             sync_port=int(conn.get("sync_port", 42000)),
             connect_retry_s=float(conn.get("connect_retry_s", 1.0)),
+            frame_stale_timeout_s=float(
+                health.get("frame_stale_timeout_s", 0.25)
+            ),
         )
 
 
@@ -321,7 +326,7 @@ class MetaQuestReceiver:
         streaming = (
             connected
             and last_frame_age_s == last_frame_age_s  # not NaN
-            and last_frame_age_s <= 1.0
+            and last_frame_age_s <= self.config.frame_stale_timeout_s
         )
         return {
             "connected": connected,
@@ -504,10 +509,15 @@ class MetaQuestTrackingProvider:
         if frame is None:
             return ControllerPairSample.empty(self.device)
 
-        reset_pressed = self.reset_workspace_on_x and frame.left.buttons.primary
+        # The receiver intentionally retains its last frame across reconnects.
+        # Never advertise that cached pose as tracked once the stream is stale.
+        streaming = bool(self.receiver.metrics()["streaming"])
+        reset_pressed = (
+            streaming and self.reset_workspace_on_x and frame.left.buttons.primary
+        )
         reset_edge = reset_pressed and not self._prev_reset
         self._prev_reset = reset_pressed
-        if frame.hmd.tracked and (reset_edge or not self.workspace_set):
+        if streaming and frame.hmd.tracked and (reset_edge or not self.workspace_set):
             self.workspace = workspace_from_hmd(frame.hmd)
             self.workspace_set = True
             log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
@@ -527,8 +537,8 @@ class MetaQuestTrackingProvider:
             right_controller_pose=right,
             left_tcp_pose=left_tcp,
             right_tcp_pose=right_tcp,
-            left_tracked=bool(frame.left.tracked and frame.left.valid),
-            right_tracked=bool(frame.right.tracked and frame.right.valid),
+            left_tracked=bool(streaming and frame.left.tracked and frame.left.valid),
+            right_tracked=bool(streaming and frame.right.tracked and frame.right.valid),
             device_time_ns=int(frame.device_time_ns),
             pc_monotonic_ns=int(frame.pc_monotonic_ns),
         )
