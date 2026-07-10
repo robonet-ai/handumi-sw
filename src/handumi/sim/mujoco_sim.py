@@ -11,6 +11,10 @@ Thread model: one daemon thread owns ``mj_step``; all public methods are
 safe to call from the render/control loop (a lock guards MjData).
 """
 
+# mujoco ships no py.typed/stubs (its classes come from native bindings that
+# pyright cannot introspect), so attribute checks are meaningless here.
+# pyright: reportAttributeAccessIssue=false
+
 from __future__ import annotations
 
 import logging
@@ -41,6 +45,16 @@ def _build_model(
     verbatim thanks to ``prefix=""``).
     """
     robot_spec = mujoco.MjSpec.from_file(str(mjcf_path))
+    # The Piper link meshes interpenetrate slightly at every joint; with
+    # default collision masks those internal contacts friction-lock the
+    # joints (the base barely moved under 9kN·m). Put robot geoms in their
+    # own collision group so they collide with the floor and the scene but
+    # never with each other. (floor: contype=1; scene keeps defaults 1/1;
+    # robot: contype=2, conaffinity=1 -> robot-robot 0, robot-world 1.)
+    for geom in robot_spec.geoms:
+        if geom.name != "floor":
+            geom.contype = 2
+            geom.conaffinity = 1
     scene_body_names: list[str] = []
     if scene_name is not None:
         scene_xml = SCENES_DIR / scene_name / "scene.xml"

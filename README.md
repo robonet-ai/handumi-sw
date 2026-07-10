@@ -72,17 +72,14 @@ For a full pick-and-place rehearsal with a task scene and real contact
 physics (MuJoCo: the cube is graspable, driven by your Feetech opening):
 
 ```bash
-handumi-live --device meta --scene cube_in_box --anchor-z 0.0
+handumi-live --device meta --scene cube_in_box
 ```
 
-- `--scene <name>` loads `assets/scenes/<name>/scene.xml`, placed per
-  `configs/scene.yaml`. With a robot that declares an `mjcf` (Piper), the
-  scene runs under MuJoCo contact physics; otherwise it renders statically.
-- `--anchor-z 0.0` enables the table-anchor ritual: anchor **with the
-  gripper tip resting on the table**, and that pose maps to z=0 in the
-  robot world — real heights then match sim heights (touching the real
-  table == touching the sim table). Place the real box/cube at the same
-  coordinates as the scene for a true 1:1 rehearsal.
+`--scene <name>` loads `assets/scenes/<name>/scene.xml`, placed per
+`configs/scene.yaml`. With a robot that declares an `mjcf` (Piper), the
+scene runs under MuJoCo contact physics; otherwise it renders statically.
+Optional `--anchor-z <m>`: anchor with the tip resting on the table to pin
+absolute heights to the sim table (see `handumi-live --help`).
 
 ## Record Data
 

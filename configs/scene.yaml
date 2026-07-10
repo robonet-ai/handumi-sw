@@ -11,4 +11,4 @@
 # in the robot world (midpoint between the arm bases, at base height).
 scene:
   name: null
-  position: [0.10, 0.0, 0.0]
+  position: [0.30, 0.0, 0.0]
