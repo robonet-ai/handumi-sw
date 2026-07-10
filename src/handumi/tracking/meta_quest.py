@@ -473,12 +473,17 @@ class MetaQuestTrackingProvider:
         *,
         config: MetaQuestConfig,
         calibration: ControllerTcpCalibration,
+        reset_workspace_on_x: bool = True,
     ) -> None:
         self.config = config
         self.calibration = calibration
         self.receiver = MetaQuestReceiver(config)
         self.workspace = WorkspaceCalibration.identity()
         self.workspace_set = False
+        # When False, left X is left free for callers (e.g. handumi-live uses
+        # it as the left-arm anchor button); the workspace still initializes
+        # on the first tracked HMD frame.
+        self.reset_workspace_on_x = reset_workspace_on_x
         self._prev_reset = False
 
     def start(self) -> None:
@@ -493,7 +498,7 @@ class MetaQuestTrackingProvider:
         if frame is None:
             return ControllerPairSample.empty(self.device)
 
-        reset_pressed = frame.left.buttons.primary
+        reset_pressed = self.reset_workspace_on_x and frame.left.buttons.primary
         reset_edge = reset_pressed and not self._prev_reset
         self._prev_reset = reset_pressed
         if frame.hmd.tracked and (reset_edge or not self.workspace_set):

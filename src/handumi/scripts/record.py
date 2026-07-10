@@ -439,7 +439,9 @@ def main() -> None:
         log_say("Exiting", play_sounds=play_sounds)
 
 
-def build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
+def build_tracker(
+    args: argparse.Namespace, calibration, *, reset_workspace_on_x: bool = True
+) -> TrackingProvider:
     if args.device == "pico":
         transport = "wifi" if args.pico_wifi else "adb"
         return PicoTrackingProvider(
@@ -460,7 +462,9 @@ def build_tracker(args: argparse.Namespace, calibration) -> TrackingProvider:
         sync_port=args.sync_port if args.sync_port is not None else base.sync_port,
         connect_retry_s=base.connect_retry_s,
     )
-    return MetaQuestTrackingProvider(config=config, calibration=calibration)
+    return MetaQuestTrackingProvider(
+        config=config, calibration=calibration, reset_workspace_on_x=reset_workspace_on_x
+    )
 
 
 def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:

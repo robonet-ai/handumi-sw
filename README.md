@@ -60,7 +60,11 @@ health and TCP calibration:
 handumi-live --device meta            # or --device pico
 ```
 
-Episode control features (double-clap, voice) live in the recorder below.
+Per-arm controls: both arms start disengaged at home — press **X** to
+anchor the left arm to your current left-hand pose, **A** for the right
+(re-press to re-anchor). A **double clap on one gripper** sends that arm
+back to home, disengaged (hands-free). Spoken feedback; `--no-sounds` to
+mute. In the recorder below, the double clap instead starts/stops episodes.
 
 ## Record Data
 

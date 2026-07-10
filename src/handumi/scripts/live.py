@@ -15,10 +15,20 @@ tracking health and TCP calibration before a session.
 Rerun (on by default, --no-rerun to disable) shows the calibrated TCP
 trails in the workspace frame — tracking-side truth, before retargeting/IK.
 
-Anchoring: the first tracked frame per run maps your hand poses to the
-robot's home TCPs; everything after is relative motion. On Quest, left X
-re-centers the tracking workspace (provider-side) — expect the arms to
-jump if you press it mid-run.
+Per-arm engage/disengage (each arm fully independent):
+
+  X (left controller)   anchor the LEFT arm: your left hand pose at that
+                        instant maps to the arm's home TCP, and the arm
+                        follows relative motion from there. Press again to
+                        re-anchor. Only fires while that side is tracked.
+  A (right controller)  same for the RIGHT arm.
+  double clap LEFT      left arm back to home, disengaged (ignores tracking
+                        until you press X again). Hands-free — usable while
+                        holding the HandUMIs.
+  double clap RIGHT     same for the RIGHT arm.
+
+Both arms start disengaged at home: position yourself, press X and A, go.
+Spoken feedback ("left anchored", "right home", ...) — --no-sounds off.
 
 Usage
 -----
@@ -59,8 +69,10 @@ from handumi.retargeting.handumi_to_robot import (
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker, connect_feetech
-from handumi.tracking.pico import START_BUTTON_CHOICES  # noqa: F401  (parity with record)
+from handumi.tracking.gestures import DoubleClapDetector
+from handumi.tracking.pico import read_start_button_value
 from handumi.tracking.transforms import Pose
+from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
 
 logging.basicConfig(
@@ -88,6 +100,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--fps", type=int, default=30)
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
+    p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
     p.add_argument(
         "--controller-tcp-calibration",
         type=Path,
@@ -141,6 +154,29 @@ def _load_calibration(args: argparse.Namespace):
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
+
+
+def _anchor_buttons_pressed(tracker) -> dict[str, bool]:
+    """Raw pressed-state of the per-arm anchor buttons: X (left), A (right).
+
+    Meta: read from the receiver's latest frame. PICO: read via the XRT SDK.
+    Missing data reads as not-pressed.
+    """
+    if tracker.device == "meta":
+        frame = tracker.receiver.latest()
+        if frame is None:
+            return {"left": False, "right": False}
+        return {
+            "left": bool(frame.left.buttons.primary),
+            "right": bool(frame.right.buttons.primary),
+        }
+    xrt = getattr(tracker, "xrt", None)
+    if xrt is None:
+        return {"left": False, "right": False}
+    return {
+        "left": read_start_button_value(xrt, "X") >= 0.75,
+        "right": read_start_button_value(xrt, "A") >= 0.75,
+    }
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:
@@ -263,7 +299,9 @@ def main() -> None:
     args = parse_args()
 
     calibration = _load_calibration(args)
-    tracker = build_tracker(args, calibration)
+    # X is the left-arm anchor button here, so the provider must not consume
+    # it as a workspace reset (per-arm anchors absorb any workspace shift).
+    tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
     tracker.start()
 
     cameras: list = []
@@ -323,13 +361,21 @@ def main() -> None:
     trails = {"left": TrajectoryTrail(max_points), "right": TrajectoryTrail(max_points)}
     raw_trails = {"left": TrajectoryTrail(max_points), "right": TrajectoryTrail(max_points)}
 
-    anchors = None
+    play_sounds = not args.no_sounds
+    home_pose7 = {"left": home_left_pose7, "right": home_right_pose7}
+    # Per-arm anchors: None = disengaged (arm holds home). X/A engage a side
+    # by snapshotting the current state; a per-side double clap disengages it.
+    anchors: dict[str, object] = {"left": None, "right": None}
+    prev_button = {"left": False, "right": False}
+    clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
     interval = 1.0 / args.fps
+    log.info("Arms idle at home. Anchor with X (left) / A (right); "
+             "a per-side double clap sends that arm back home.")
     try:
         while True:
             loop_start = time.perf_counter()
             sample = tracker.latest()
-            tracked = sample.left_tracked or sample.right_tracked
+            side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
 
             widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
             if rr is not None:
@@ -342,33 +388,58 @@ def main() -> None:
                 rr.log("observation.feetech.left_width_mm", rr.Scalars(float(widths.left_mm)))
                 rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
 
-            if tracked:
-                state = _sample_state(sample, widths)
-                if anchors is None:
-                    # First tracked frame: your current hand poses map to the
-                    # robot's home TCPs (same anchored mode as replay-in-sim).
-                    anchors = retarget_anchors_from_raw_state(
+            state = _sample_state(sample, widths)
+
+            # X/A rising edge: (re-)anchor that side, if it is tracked.
+            pressed = _anchor_buttons_pressed(tracker)
+            side_width_mm = {"left": widths.left_mm, "right": widths.right_mm}
+            for side in ("left", "right"):
+                rise = pressed[side] and not prev_button[side]
+                prev_button[side] = pressed[side]
+                if rise:
+                    if not side_tracked[side]:
+                        log.warning("%s anchor ignored — that controller is not tracked.", side)
+                        continue
+                    anchors[side] = retarget_anchors_from_raw_state(
                         state,
                         left_robot_pose7=home_left_pose7,
                         right_robot_pose7=home_right_pose7,
                         max_reach=max_reach,
                     )
-                    log.info("Anchored to first tracked frame — arms follow from home.")
-                left_pose7, right_pose7 = raw_state_robot_target_pose7(state, anchors)
-                q = solver.ik(
-                    q,
-                    left_pose=(left_pose7[:3], left_pose7[3:7]),
-                    right_pose=(right_pose7[:3], right_pose7[3:7]),
-                )
-                robot_view.update_cfg(q)
-                target_markers["left"].position = tuple(left_pose7[:3])
-                target_markers["right"].position = tuple(right_pose7[:3])
+                    log.info("%s arm anchored — follows from home.", side)
+                    log_say(f"{side} anchored", play_sounds=play_sounds)
 
-                if rr is not None:
-                    for side, tcp, raw, color in (
-                        ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR),
-                        ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR),
-                    ):
+                # Per-side double clap: back to home, disengaged. Feeding the
+                # same width to both detector channels makes it side-local.
+                if clap[side].update(side_width_mm[side], side_width_mm[side], loop_start):
+                    if anchors[side] is not None:
+                        anchors[side] = None
+                        log.info("%s arm back to home (disengaged).", side)
+                        log_say(f"{side} home", play_sounds=play_sounds)
+
+            # Disengaged sides park at home; engaged + tracked sides follow
+            # their anchor; engaged but momentarily untracked sides hold the
+            # current pose (None target -> rest cost holds joints).
+            ik_targets: dict[str, tuple | None] = {}
+            for index, side in enumerate(("left", "right")):
+                if anchors[side] is None:
+                    pose7 = home_pose7[side]  # disengaged -> park at home
+                elif side_tracked[side]:
+                    pose7 = raw_state_robot_target_pose7(state, anchors[side])[index]
+                else:
+                    ik_targets[side] = None  # engaged but occluded: hold pose
+                    continue
+                ik_targets[side] = (pose7[:3], pose7[3:7])
+                target_markers[side].position = tuple(pose7[:3])
+            q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
+            robot_view.update_cfg(q)
+
+            if rr is not None:
+                for side, tcp, raw, color in (
+                    ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR),
+                    ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR),
+                ):
+                    if side_tracked[side]:
                         _log_rerun(rr, side, tcp, raw, trails[side], raw_trails[side], color)
 
             dt = time.perf_counter() - loop_start
