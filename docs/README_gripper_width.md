@@ -121,7 +121,7 @@ handumi-home-servos              # both sides
 handumi-home-servos --side right # one side
 ```
 
-Hold the gripper at **mid-travel** (~2040 ticks), press ENTER; the script reports
+Hold the gripper at **mid-travel**, press ENTER; the script reports
 `OK` / `CHECK`. Re-calibrate afterwards.
 
 A software unwrap in `handumi.feetech.gripper` also tracks wraps continuously, so

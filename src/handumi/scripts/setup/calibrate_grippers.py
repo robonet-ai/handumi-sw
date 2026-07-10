@@ -42,9 +42,17 @@ class Monitor:
     initial: int
     last: int
     peak_delta: int = 0
+    failed_reads: int = 0
+    last_error: str | None = None
 
     def update(self) -> None:
-        self.last = self.bus.read_position(self.servo_id)
+        try:
+            self.last = self.bus.read_position(self.servo_id)
+        except RuntimeError as exc:
+            self.failed_reads += 1
+            self.last_error = str(exc)
+            return
+        self.last_error = None
         self.peak_delta = max(self.peak_delta, abs(self.last - self.initial))
 
 
@@ -97,8 +105,20 @@ def cmd_monitor(args: argparse.Namespace) -> None:
             bus.open()
             buses.append(bus)
             if not args.keep_torque:
-                bus.disable_torque(calibration.servo_id)
-            ticks = bus.read_position(calibration.servo_id)
+                try:
+                    bus.disable_torque(calibration.servo_id)
+                except RuntimeError as exc:
+                    print(
+                        f"Warning: could not disable torque on servo "
+                        f"{calibration.servo_id} at {port}: {exc}"
+                    )
+            try:
+                ticks = bus.read_position(calibration.servo_id)
+            except RuntimeError as exc:
+                raise SystemExit(
+                    f"Could not read initial position from servo "
+                    f"{calibration.servo_id} at {port}: {exc}"
+                ) from exc
             monitors.append(Monitor(port, calibration.servo_id, bus, ticks, ticks))
 
         print("Open/close each gripper and check that ticks or peak_delta changes.")
@@ -221,10 +241,16 @@ def _side_port(config: FeetechConfig, calibration: GripperCalibration, side: str
 
 
 def _print_monitor(monitors: list[Monitor]) -> None:
-    print("port          id  ticks  delta  peak_delta")
+    print("port          id  ticks  delta  peak_delta  status")
     for monitor in monitors:
         delta = monitor.last - monitor.initial
-        print(f"{monitor.port:<12} {monitor.servo_id:>2}  {monitor.last:>5}  {delta:>5}  {monitor.peak_delta:>10}")
+        status = "ok"
+        if monitor.last_error is not None:
+            status = f"read failed x{monitor.failed_reads}: {monitor.last_error}"
+        print(
+            f"{monitor.port:<12} {monitor.servo_id:>2}  {monitor.last:>5}  "
+            f"{delta:>5}  {monitor.peak_delta:>10}  {status}"
+        )
     print()
 
 

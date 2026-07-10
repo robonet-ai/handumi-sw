@@ -58,12 +58,18 @@ class FeetechBus:
 
     def ping(self, servo_id: int) -> bool:
         packet = self._require_packet()
-        _, comm, error = packet.ping(self._require_port(), int(servo_id))
+        try:
+            _, comm, error = packet.ping(self._require_port(), int(servo_id))
+        except _RETRYABLE_SDK_EXCEPTIONS:
+            return False
         return _comm_success(comm, self._sdk) and _no_error(error)
 
     def ping_model(self, servo_id: int) -> int | None:
         packet = self._require_packet()
-        model_number, comm, error = packet.ping(self._require_port(), int(servo_id))
+        try:
+            model_number, comm, error = packet.ping(self._require_port(), int(servo_id))
+        except _RETRYABLE_SDK_EXCEPTIONS:
+            return None
         if not _comm_success(comm, self._sdk) or not _no_error(error):
             return None
         return int(model_number)
@@ -82,13 +88,14 @@ class FeetechBus:
                 value, comm, error = packet.read2ByteTxRx(
                     port, int(servo_id), _PRESENT_POSITION_ADDR
                 )
-            except IndexError:
+            except _RETRYABLE_SDK_EXCEPTIONS as exc:
                 # The SCServo SDK indexes the reply buffer before checking the
                 # comm result, so a truncated response (e.g. the servo is still
                 # busy right after an EEPROM middle-position write) crashes with
-                # IndexError instead of reporting a clean failure. Treat it as a
-                # retryable short-packet read.
-                last_error = "truncated response"
+                # IndexError instead of reporting a clean failure. PySerial can
+                # also raise OSError/SerialException when the port reports ready
+                # but returns no bytes. Treat both as retryable bus I/O failures.
+                last_error = _format_sdk_exception(exc)
             else:
                 if _comm_success(comm, self._sdk) and _no_error(error):
                     return int(value)
@@ -144,16 +151,39 @@ class FeetechBus:
             ok = False
         return ok
 
-    def _write_1_byte(self, servo_id: int, address: int, value: int, name: str) -> None:
+    def _write_1_byte(
+        self,
+        servo_id: int,
+        address: int,
+        value: int,
+        name: str,
+        *,
+        retries: int = 4,
+        retry_delay_s: float = 0.05,
+    ) -> None:
         packet = self._require_packet()
-        comm, error = packet.write1ByteTxRx(
-            self._require_port(),
-            int(servo_id),
-            int(address),
-            int(value),
+        port = self._require_port()
+        last_error = "no response"
+        for attempt in range(retries + 1):
+            try:
+                comm, error = packet.write1ByteTxRx(
+                    port,
+                    int(servo_id),
+                    int(address),
+                    int(value),
+                )
+            except _RETRYABLE_SDK_EXCEPTIONS as exc:
+                last_error = _format_sdk_exception(exc)
+            else:
+                if _comm_success(comm, self._sdk) and _no_error(error):
+                    return
+                last_error = f"comm={comm}, error={error}"
+            if attempt < retries:
+                time.sleep(retry_delay_s)
+        raise RuntimeError(
+            f"Failed to write {name}={value} on servo {servo_id} after "
+            f"{retries + 1} attempts ({last_error})."
         )
-        if not _comm_success(comm, self._sdk) or not _no_error(error):
-            raise RuntimeError(f"Failed to write {name}={value} on servo {servo_id}.")
 
     def _require_packet(self):
         if self._packet_handler is None:
@@ -180,6 +210,14 @@ def _comm_success(result: Any, sdk: Any | None) -> bool:
 def _no_error(error: Any) -> bool:
     return int(error) == 0
 
+
+def _format_sdk_exception(exc: BaseException) -> str:
+    if isinstance(exc, IndexError):
+        return "truncated response"
+    return f"{exc.__class__.__name__}: {exc}"
+
+
+_RETRYABLE_SDK_EXCEPTIONS = (IndexError, OSError)
 
 _ID_ADDR = 5
 _TORQUE_ENABLE_ADDR = 40

@@ -50,7 +50,7 @@ Before recording, configure and calibrate the hardware once:
 
 ## Live Preview (no recording)
 
-`handumi-live` opens Viser with the robot IK-following your HandUMI motion in
+Run the app on your VR headset. Then run `handumi-live` to open Viser with the robot IK-following your HandUMI motion in
 real time, plus a Rerun view of the calibrated TCP trails (`--no-rerun` to
 disable). Same calibration + retargeting the replay uses, so what you see is
 what a recording would replay — handy before a session to check tracking
