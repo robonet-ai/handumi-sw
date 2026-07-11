@@ -1,11 +1,22 @@
 # HandUMI Software
 
-HandUMI records bimanual demonstrations as LeRobot-compatible datasets:
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
+  <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
+</p>
+
+[HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for
+collecting robot-free bimanual demonstrations. This repository contains its
+data-collection, calibration, validation, replay, and robot-retargeting
+software.
+
+It records synchronized [LeRobot](https://github.com/huggingface/lerobot)-compatible
+datasets:
 
 ```text
 left/right wrist cameras
 + left/right Feetech gripper widths
-+ optional VR tracking poses (PICO / Meta Quest)
++ VR tracking poses (PICO / Meta Quest)
 -> raw HandUMI LeRobot dataset
 ```
 
@@ -15,12 +26,29 @@ The usual flow is:
 record data -> optionally push to Hugging Face -> convert to robot joints or replay in sim
 ```
 
+The raw dataset remains robot-agnostic. Controller-to-TCP calibration and the
+intended robot configuration are fingerprinted in dataset metadata so later
+conversion remains reproducible.
+
+## Team
+
+- **Project lead and original hardware design:**
+  [BrikHMP18](https://github.com/BrikHMP18)
+- **Core hardware contributors:**
+  [Alvaro Mendoza-Li](https://github.com/alvax64) and
+  [Bryan](https://github.com/BryanB72)
+- **Core software contributors:**
+  [Leonardo Pérez](https://github.com/leoperezz),
+  [Raul Bastidas](https://github.com/RAUL-BASTIDAS),
+  [Mitshell Ramos](https://github.com/mbrq13), and
+  [Alvaro Mendoza-Li](https://github.com/alvax64)
+
 ## Install
 
 Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
 
 ```bash
-git clone <repo-url> handumi-sw
+git clone https://github.com/leoperezz/handumi-sw.git
 cd handumi-sw
 bash install.sh              # PICO support included
 # bash install.sh --skip-xrt # Meta Quest only
@@ -91,9 +119,11 @@ Example with the common flags:
 ```bash
 handumi-record \
   --device pico \
-  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --repo-id your-name/handumi-demo \
   --output-dir outputs/datasets/handumi-demo \
   --task "pick and place with HandUMI" \
+  --robot piper \
+  --wrist-cameras --workspace-camera \
   --num-episodes 10 \
   --episode-time-s 30 \
   --fps 30 \
@@ -106,16 +136,28 @@ For Meta Quest:
 ```bash
 handumi-record \
   --device meta \
-  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --repo-id your-name/handumi-demo \
   --output-dir outputs/datasets/handumi-demo \
   --task "pick and place with HandUMI" \
+  --robot piper \
+  --wrist-cameras --workspace-camera \
+  --clap-control \
   --num-episodes 10 \
-  --episode-time-s 30 \
   --fps 30
 ```
 
 Useful options:
 
+- No camera-selection flag records both wrist cameras. Use
+  `--wrist-cameras --workspace-camera` for all three, `--workspace-camera`
+  for only the workspace view, or `--only-left-camera` /
+  `--only-right-camera` for one wrist view.
+- `--robot piper` records the intended embodiment and an exact snapshot of its
+  robot configuration. The raw trajectories remain robot-agnostic.
+- `--controller-tcp-calibration` selects the physical HandUMI mount offset to
+  snapshot in metadata; raw controller poses remain unchanged.
+- `--clap-control` starts or stops an episode by squeezing either the left or
+  right gripper twice within 1.6 seconds.
 - `--push-to-hub` pushes the dataset after recording.
 - `--skip-feetech` records with zero-filled gripper widths.
 - `--pico-wifi` uses PICO over Wi-Fi instead of ADB.
@@ -140,7 +182,7 @@ Run offline validation before training or conversion:
 
 ```bash
 handumi-validate \
-  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --repo-id your-name/handumi-demo \
   --root outputs/datasets/handumi-demo
 ```
 
@@ -156,7 +198,7 @@ If the dataset was not recorded with `--push-to-hub`, upload the local folder:
 
 ```bash
 huggingface-cli login
-huggingface-cli upload NONHUMAN-RESEARCH/handumi-demo \
+huggingface-cli upload your-name/handumi-demo \
   outputs/datasets/handumi-demo --repo-type dataset
 ```
 
@@ -174,14 +216,14 @@ episodes, and writes `meta/source_quality.json` in the converted dataset.
 Minimal conversion:
 
 ```bash
-handumi-convert --repo-id NONHUMAN-RESEARCH/handumi-demo
+handumi-convert --repo-id your-name/handumi-demo
 ```
 
 The default embodiment is `axol`. To convert for Piper, use:
 
 ```bash
 handumi-convert \
-  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --repo-id your-name/handumi-demo \
   --embodiment piper
 ```
 
@@ -198,7 +240,7 @@ To inspect how a recorded dataset moves the robot in simulation with
 ([src/handumi/scripts/replay/replay_in_sim.py](src/handumi/scripts/replay/replay_in_sim.py)):
 
 ```bash
-handumi-replay-in-sim --repo-id NONHUMAN-RESEARCH/handumi-demo
+handumi-replay-in-sim --repo-id your-name/handumi-demo
 ```
 
 This opens a local Viser viewer and saves a rollout under `outputs/replay_in_sim/`.
@@ -208,7 +250,7 @@ Headless example:
 
 ```bash
 handumi-replay-in-sim \
-  --repo-id NONHUMAN-RESEARCH/handumi-demo \
+  --repo-id your-name/handumi-demo \
   --headless
 ```
 
@@ -231,6 +273,7 @@ Raw HandUMI datasets include:
 ```text
 observation.images.left_wrist
 observation.images.right_wrist
+observation.images.workspace            # when --workspace-camera is enabled
 observation.state                  # float32[16]
 action                             # float32[16]
 observation.feetech.left_ticks
@@ -269,3 +312,47 @@ widths in meters. Camera, Feetech, and tracking diagnostics also include
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
 - [docs/README_quality.md](docs/README_quality.md) - synchronization, sensor health,
   and offline episode filtering.
+- [docs/calibration_plan.md](docs/calibration_plan.md) - portable Quest/table
+  calibration plan and acceptance criteria.
+
+## References and Acknowledgments
+
+- UMI: Chi et al., "Universal Manipulation Interface: In-The-Wild Robot
+  Teaching Without In-The-Wild Robots," RSS 2024.
+  [Project](https://umi-gripper.github.io/) ·
+  [Paper](https://arxiv.org/abs/2402.10329)
+- YUBI: Ohkawa et al., "YUBI: Yielding Universal Bidigital Interface for
+  Bimanual Dexterous Manipulation at Scale," 2026.
+  [Project](https://yubi.airoa.io/) ·
+  [Paper](https://arxiv.org/abs/2606.10244) ·
+  [Software](https://github.com/airoa-org/yubi-sw)
+- Meta Quest support uses YubiQuestApp and adapts the yubi-sw protocol and
+  coordinate conversion. PICO support uses
+  [XRoboToolkit](https://github.com/XR-Robotics/XRoboToolkit-PC-Service-Pybind).
+- Core software: [LeRobot](https://github.com/huggingface/lerobot),
+  [PyRoki](https://github.com/chungmin99/pyroki),
+  [Viser](https://github.com/nerfstudio-project/viser),
+  [Rerun](https://github.com/rerun-io/rerun), and
+  [MuJoCo](https://github.com/google-deepmind/mujoco).
+- Robot assets: [Almond Axol](https://github.com/almond-bot/axol) and
+  [AgileX Piper ROS](https://github.com/agilexrobotics/piper_ros), both MIT.
+
+HandUMI is not affiliated with or endorsed by Meta, PICO, AgileX, AIRoA/YUBI,
+Almond, or Hugging Face. All trademarks belong to their respective owners.
+
+## Safety
+
+This is research software. Preview and validate trajectories before commanding
+physical robots, keep an emergency stop accessible, and enforce the robot's
+joint, velocity, acceleration, workspace, and collision limits. The software
+is provided without warranty.
+
+## License
+
+Original HandUMI software and documentation in this repository are licensed
+under the [Apache License 2.0](LICENSE). Third-party software and robot assets
+remain under their respective licenses, listed at the end of [LICENSE](LICENSE).
+
+This license does not automatically apply to datasets recorded with HandUMI,
+the separate HandUMI hardware repository, headset applications, robot
+firmware, or trademarks.

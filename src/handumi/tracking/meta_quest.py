@@ -1,5 +1,8 @@
 """Meta Quest native-app tracking receiver (Phase 2A, Step 1 — the pose pipe).
 
+This module is a HandUMI adaptation of the yubi-sw transport model, modified
+for the local tracking schema, buffering, health gates, and clock alignment.
+
 yubi-sw model: the native Quest app is a TCP server that streams one
 newline-delimited JSON pose sample per frame; the workstation (this module)
 dials in, parses each sample, stamps a PC receive clock, and keeps the latest

@@ -1,7 +1,10 @@
 [project]
 name = "handumi"
 version = "0.1.0"
-description = "handumi robotics project"
+description = "Robot-free bimanual demonstration recording and retargeting for HandUMI"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "lerobot[feetech]==0.5.1",
@@ -29,6 +32,11 @@ dependencies = [
     "pyvista>=0.43.0",
     "scipy>=1.17.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/BrikHMP18/HandUMI"
+Repository = "https://github.com/leoperezz/handumi-sw"
+Issues = "https://github.com/leoperezz/handumi-sw/issues"
 
 [project.optional-dependencies]
 piper = [
@@ -68,7 +76,14 @@ packages = ["src/handumi"]
 "configs/robots" = "handumi/configs/robots"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/handumi"]
+include = [
+    "src/handumi",
+    "assets",
+    "configs",
+    "docs",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.uv]
 no-build-isolation-package = ["xrobotoolkit-sdk"]
