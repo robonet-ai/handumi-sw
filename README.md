@@ -30,19 +30,6 @@ The raw dataset remains robot-agnostic. Controller-to-TCP calibration and the
 intended robot configuration are fingerprinted in dataset metadata so later
 conversion remains reproducible.
 
-## Team
-
-- **Project lead and original hardware design:**
-  [BrikHMP18](https://github.com/BrikHMP18)
-- **Core hardware contributors:**
-  [Alvaro Mendoza-Li](https://github.com/alvax64) and
-  [Bryan](https://github.com/BryanB72)
-- **Core software contributors:**
-  [Leonardo Pérez](https://github.com/leoperezz),
-  [Raul Bastidas](https://github.com/RAUL-BASTIDAS),
-  [Mitshell Ramos](https://github.com/mbrq13), and
-  [Alvaro Mendoza-Li](https://github.com/alvax64)
-
 ## Install
 
 Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
@@ -342,6 +329,22 @@ widths in meters. Camera, Feetech, and tracking diagnostics also include
 
 HandUMI is not affiliated with or endorsed by Meta, PICO, AgileX, AIRoA/YUBI,
 Almond, or Hugging Face. All trademarks belong to their respective owners.
+
+## Team
+
+- **Project lead and original hardware design:**
+  [BrikHMP18](https://github.com/BrikHMP18)
+- **Core software contributors:**
+  [Leonardo Pérez](https://github.com/leoperezz),
+  [Raul Bastidas](https://github.com/RAUL-BASTIDAS),
+  [Mitshell Ramos](https://github.com/mbrq13), and
+  [Alvaro Mendoza-Li](https://github.com/alvax64)
+- **Core hardware contributors:**
+  [Alvaro Mendoza-Li](https://github.com/alvax64) and
+  [Bryan Bastidas](https://github.com/BryanB72)
+- **IK and teleoperation explorations:**
+  Raul Bastidas developed the initial
+  [handumi-IK](https://github.com/raulbastidas1203/handumi-IK) experiments.
 
 ## Safety
 
