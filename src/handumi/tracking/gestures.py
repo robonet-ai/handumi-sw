@@ -2,7 +2,7 @@
 
 Shared by any script that needs a hands-free control signal while wearing the
 HandUMI shells (no free fingers to reach a controller button): today
-``handumi.scripts.live_tracking_quest`` uses it to reset the workspace, and
+``handumi.scripts.teleop_sim`` uses it to reset the workspace, and
 ``handumi.scripts.record`` uses it to start/stop an episode (--clap-control).
 """
 

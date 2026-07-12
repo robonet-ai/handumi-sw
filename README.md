@@ -1,6 +1,6 @@
 # HandUMI Software
 
-Ultima modificacion: 2026-07-11 19:54:06 -05 -0500
+Ultima modificacion: 2026-07-11 20:03:25 -05 -0500
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
@@ -66,7 +66,7 @@ Before recording, configure and calibrate the hardware once:
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
 
-## Live Preview (no recording)
+## Simulation Teleop (no recording)
 
 Run the app on your VR headset. Then run `handumi-teleop-sim` to open Viser
 with the robot IK-following your HandUMI motion in real time, plus a Rerun

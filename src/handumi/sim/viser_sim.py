@@ -32,7 +32,7 @@ except ImportError as e:
 from handumi.sim.scene import SceneBody
 from handumi.utils.trajectory import TrajectoryTrail
 
-# Same palette as the Rerun controller trails in live_tracking_quest.py, so
+# Same palette as the Rerun controller trails in teleop_sim.py, so
 # "which arm" reads the same color in both views.
 LEFT_TCP_COLOR = (240, 189, 63)  # mustard gold
 RIGHT_TCP_COLOR = (90, 200, 110)  # green

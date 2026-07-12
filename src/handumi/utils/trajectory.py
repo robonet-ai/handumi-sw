@@ -1,6 +1,6 @@
 """Rolling 3D position buffer, shared by any live view that draws a trail.
 
-Used by ``handumi.scripts.live_tracking_quest`` for the Rerun controller
+Used by ``handumi.scripts.teleop_sim`` for the Rerun controller
 trails, and by ``handumi.sim.viser_sim`` for the Viser TCP trail.
 """
 

@@ -58,7 +58,7 @@ class LoadCalibrationTest(unittest.TestCase):
         self.assertTrue(np.allclose(calibration.left[3:7], [0, 0, 0, 1]))
 
 
-class PiperLiveConfigTest(unittest.TestCase):
+class PiperTeleopSimConfigTest(unittest.TestCase):
     def test_home_matches_physical_piper_start(self):
         config = load_robot_config("piper")
 
@@ -80,7 +80,7 @@ class PiperLiveConfigTest(unittest.TestCase):
             atol=1e-7,
         )
 
-    def test_live_world_map_matches_tracking_provider_axes(self):
+    def test_world_map_matches_tracking_provider_axes(self):
         np.testing.assert_allclose(_tracking_world_map("pico"), VR_TO_ROBOT)
         np.testing.assert_allclose(_tracking_world_map("meta"), np.eye(3))
 
