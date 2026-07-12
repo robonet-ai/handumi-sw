@@ -1,5 +1,7 @@
 # HandUMI Software
 
+Ultima modificacion: 2026-07-11 20:39:48 -05 -0500
+
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
@@ -64,38 +66,38 @@ Before recording, configure and calibrate the hardware once:
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
 
-## Live Preview (no recording)
+## Simulation Teleop (no recording)
 
-Run the app on your VR headset. Then run `handumi-live` to open Viser with the robot IK-following your HandUMI motion in
-real time, plus a Rerun view of the calibrated TCP trails (`--no-rerun` to
-disable). Same calibration + retargeting the replay uses, so what you see is
-what a recording would replay — handy before a session to check tracking
-health and TCP calibration:
+Run the app on your VR headset. Then run `handumi-teleop-sim` to open Viser
+with the robot IK-following your HandUMI motion in real time, plus a Rerun
+view of the calibrated TCP trails (`--no-rerun` to disable). Same calibration
+and retargeting the replay uses, so what you see is what a recording would
+replay — handy before a session to check tracking health and TCP calibration:
 
 ```bash
-handumi-live --device meta            # or --device pico
+handumi-teleop-sim --device meta            # or --device pico
 ```
 
-Per-arm controls — two gestures, same action: **(re-)anchor** that arm so
-your current hand pose maps to the arm's home and it follows from there.
-**X** anchors the left arm, **A** the right (hands free, during setup); a
-**double clap on one gripper** anchors that same arm hands-free once your
-fingers are inside the HandUMIs. Arms stay parked at home until their
-first anchor. Spoken feedback; `--no-sounds` to mute. In the recorder
-below, the double clap re-centers the workspace and starts/stops episodes.
+Teleop controls: a **double clap on either gripper** (close/open twice)
+anchors or re-anchors the enabled, tracked arms so the current HandUMI pose
+maps to the robot home and the robot follows from there. Pass `--space-start`
+if you also want the keyboard Space key to start both idle arms at once. Arms
+stay parked at home until their first anchor. Spoken feedback; `--no-sounds`
+to mute. In the recorder below, the double clap re-centers the workspace and
+starts/stops episodes.
 
 For a full pick-and-place rehearsal with a task scene and real contact
 physics (MuJoCo: the cube is graspable, driven by your Feetech opening):
 
 ```bash
-handumi-live --device meta --scene cube_in_box
+handumi-teleop-sim --device meta --scene cube_in_box
 ```
 
 `--scene <name>` loads `assets/scenes/<name>/scene.xml`, placed per
 `configs/scene.yaml`. With a robot that declares an `mjcf` (Piper), the
 scene runs under MuJoCo contact physics; otherwise it renders statically.
 Optional `--anchor-z <m>`: anchor with the tip resting on the table to pin
-absolute heights to the sim table (see `handumi-live --help`).
+absolute heights to the sim table (see `handumi-teleop-sim --help`).
 
 ## Record Data
 

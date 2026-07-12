@@ -8,7 +8,12 @@ from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.retargeting.handumi_to_robot import VR_TO_ROBOT
 from handumi.robots.kinematics import limit_joint_delta
 from handumi.robots.registry import load_robot_config
-from handumi.scripts.live import _load_calibration, _sample_state, _tracking_world_map
+from handumi.scripts.teleop_sim import (
+    _load_calibration,
+    _sample_state,
+    _start_sides,
+    _tracking_world_map,
+)
 from handumi.tracking.base import ControllerPairSample
 
 
@@ -53,7 +58,7 @@ class LoadCalibrationTest(unittest.TestCase):
         self.assertTrue(np.allclose(calibration.left[3:7], [0, 0, 0, 1]))
 
 
-class PiperLiveConfigTest(unittest.TestCase):
+class PiperTeleopSimConfigTest(unittest.TestCase):
     def test_home_matches_physical_piper_start(self):
         config = load_robot_config("piper")
 
@@ -75,9 +80,24 @@ class PiperLiveConfigTest(unittest.TestCase):
             atol=1e-7,
         )
 
-    def test_live_world_map_matches_tracking_provider_axes(self):
+    def test_world_map_matches_tracking_provider_axes(self):
         np.testing.assert_allclose(_tracking_world_map("pico"), VR_TO_ROBOT)
         np.testing.assert_allclose(_tracking_world_map("meta"), np.eye(3))
+
+    def test_piper_uses_validated_ik_weights(self):
+        config = load_robot_config("piper")
+
+        self.assertEqual(config.ik_weights.pos_weight, 100.0)
+        self.assertEqual(config.ik_weights.ori_weight, 4.5)
+        self.assertEqual(config.ik_weights.rest_weight, 12.0)
+
+
+class TeleopSimStartTest(unittest.TestCase):
+    def test_space_start_only_returns_unanchored_enabled_sides(self):
+        anchors = {"left": {"source": np.zeros(7)}, "right": None}
+
+        self.assertEqual(_start_sides(anchors, ("left", "right")), ("right",))
+        self.assertEqual(_start_sides(anchors, ("left",)), ())
 
 
 if __name__ == "__main__":

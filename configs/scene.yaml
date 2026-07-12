@@ -6,7 +6,7 @@
 # folder under assets/scenes/ and point `name` at it — nothing here or in
 # code needs to know what shape the task is.
 #
-# `name: null` means no scene props — pass --scene <name> to handumi-live
+# `name: null` means no scene props — pass --scene <name> to handumi-teleop-sim
 # per run instead of editing this file. `position` places the scene origin
 # in the robot world (midpoint between the arm bases, at base height).
 scene:
