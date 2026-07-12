@@ -31,6 +31,10 @@ from handumi.calibration.control_tcp import (
     calibration_path_for_device,
     controller_tcp_calibration_metadata,
 )
+from handumi.calibration.spatial import (
+    session_calibration_metadata,
+    session_table_from_quest,
+)
 from handumi.cameras import (
     build_camera_specs,
     connect_cameras,
@@ -462,6 +466,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--session-calibration",
+        type=Path,
+        default=None,
+        help=(
+            "Quest-to-table session calibration from handumi-calibrate-spatial. "
+            "Locks all episodes to the same table frame."
+        ),
+    )
+    p.add_argument(
         "--robot",
         default="piper",
         help=(
@@ -509,6 +522,8 @@ def main() -> None:
         raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
+    if args.session_calibration is not None and args.device != "meta":
+        raise SystemExit("--session-calibration currently requires --device meta.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     for name in (
@@ -534,6 +549,10 @@ def main() -> None:
         calibration_path,
         applied_to_state=False,
     )
+    try:
+        spatial_session_metadata = session_calibration_metadata(args.session_calibration)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"Invalid session calibration: {exc}") from exc
     robot_metadata = _robot_metadata(args.robot)
 
     log.info("--- Tracking setup ---")
@@ -543,6 +562,11 @@ def main() -> None:
         source=None,
     )
     tracker = build_tracker(args, calibration)
+    if args.session_calibration is not None:
+        set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
+        if set_workspace is None:
+            raise SystemExit("Selected tracking backend cannot apply a table calibration.")
+        set_workspace(session_table_from_quest(args.session_calibration), locked=True)
     tracker.start()
 
     log.info("--- Camera setup ---")
@@ -617,9 +641,8 @@ def main() -> None:
                 assert clap_detector is not None
                 if not _wait_for_clap(grippers, clap_detector, stop_event):
                     break
-                # Same clap semantics as handumi-teleop-sim's re-anchor ("homing"):
-                # re-center the tracking workspace so every episode's poses
-                # start from a fresh, consistent origin.
+                # A calibrated table workspace is locked and ignores this
+                # legacy HMD recenter; uncalibrated sessions retain it.
                 reset_workspace = getattr(tracker, "reset_workspace", None)
                 if reset_workspace is not None:
                     reset_workspace()
@@ -695,8 +718,11 @@ def main() -> None:
             Path(dataset.root),
             {
                 "recording_device": args.device,
-                "tracking_schema": "controller_raw_v2",
-                "state_semantics": "raw_controller_pose7_plus_gripper_widths",
+                "tracking_schema": "controller_raw_and_workspace_v3",
+                "tracking_workspace": (
+                    "table" if spatial_session_metadata is not None else "hmd_recentered"
+                ),
+                "state_semantics": "workspace_controller_pose7_plus_gripper_widths",
                 "capture_schema": "synchronized_sources_v1",
                 "sync_lag_s": args.sync_lag_s,
                 "max_sync_skew_s": args.max_sync_skew_s,
@@ -707,6 +733,7 @@ def main() -> None:
                     for spec in camera_specs
                 ],
                 "controller_tcp_calibration": calibration_metadata,
+                "spatial_session_calibration": spatial_session_metadata,
                 "target_robot": robot_metadata,
             },
         )

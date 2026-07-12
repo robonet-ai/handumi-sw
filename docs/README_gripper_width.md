@@ -30,6 +30,22 @@ If the output does not show the devices you expect, see
 If udev event monitoring is unavailable, the command falls back to polling. You
 can force polling with `handumi-setup-ports --poll`.
 
+### Servo IDs
+
+Each Feetech servo has an internal ID stored in EEPROM. You only need to change
+it when preparing a new servo or when two servos that share one bus have the
+same ID. Servos with the same ID cannot share the same `port`.
+
+Connect one servo at a time and assign the desired ID:
+
+```bash
+handumi-set-servo-id --port /dev/ttyUSB0 --new-id 0   
+handumi-set-servo-id --port /dev/ttyUSB0 --new-id 1   
+```
+
+Then run `handumi-setup-ports` again and copy the detected `servo_id`/`port`
+pairs into `configs/rig.yaml`.
+
 ### Feetech grippers
 
 The Feetech section lists serial ports and the servo IDs found on each port:

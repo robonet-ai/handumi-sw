@@ -50,10 +50,12 @@ handumi-teleop-real = "handumi.scripts.teleop_real:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-validate = "handumi.scripts.validate:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
+handumi-set-servo-id = "handumi.scripts.setup.set_servo_id:main"
 handumi-home-servos = "handumi.scripts.setup.home_servos:main"
 handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
 handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
 handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
+handumi-calibrate-spatial = "handumi.scripts.setup.calibrate_spatial:main"
 handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
 
 [dependency-groups]

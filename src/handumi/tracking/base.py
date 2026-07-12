@@ -35,6 +35,15 @@ class ControllerPairSample:
     hmd_pose: np.ndarray = field(
         default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
     )
+    left_device_controller_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
+    right_device_controller_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
+    device_hmd_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
     hmd_tracked: bool = False
     workspace_from_device_pose: np.ndarray = field(
         default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
@@ -86,6 +95,9 @@ class ControllerPairSample:
                 [int(self.right_pose_valid)], dtype=np.int64
             ),
             "observation.tracking.hmd_pose": self.hmd_pose,
+            "observation.tracking.left_device_controller_pose": self.left_device_controller_pose,
+            "observation.tracking.right_device_controller_pose": self.right_device_controller_pose,
+            "observation.tracking.device_hmd_pose": self.device_hmd_pose,
             "observation.tracking.hmd_tracked": np.array(
                 [int(self.hmd_tracked)], dtype=np.int64
             ),

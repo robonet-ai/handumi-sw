@@ -65,6 +65,10 @@ Before recording, configure and calibrate the hardware once:
 - [docs/README_quest.md](docs/README_quest.md) - Meta Quest setup.
 - [docs/README_pico.md](docs/README_pico.md) - PICO setup.
 - [docs/README_tcp_offset.md](docs/README_tcp_offset.md) - controller to gripper-TCP offset.
+- [docs/calibration_plan.md](docs/calibration_plan.md) - camera and Quest-to-table calibration.
+
+After spatial/session calibration, `handumi-calibrate-spatial visualize` opens
+the table-frame Rerun view with all three cameras and both controller trails.
 
 ## Simulation Teleop (no recording)
 
@@ -83,8 +87,9 @@ anchors or re-anchors the enabled, tracked arms so the current HandUMI pose
 maps to the robot home and the robot follows from there. Pass `--space-start`
 if you also want the keyboard Space key to start both idle arms at once. Arms
 stay parked at home until their first anchor. Spoken feedback; `--no-sounds`
-to mute. In the recorder below, the double clap re-centers the workspace and
-starts/stops episodes.
+to mute. In the recorder below, the double clap starts/stops episodes. Without
+session calibration it recenters the HMD workspace; a calibrated table frame
+remains locked across episodes.
 
 For a full pick-and-place rehearsal with a task scene and real contact
 physics (MuJoCo: the cube is graspable, driven by your Feetech opening):
@@ -165,6 +170,7 @@ handumi-record \
   --task "pick and place with HandUMI" \
   --robot piper \
   --wrist-cameras --workspace-camera \
+  --session-calibration outputs/calibration/session.yaml \
   --clap-control \
   --num-episodes 10 \
   --fps 30
@@ -182,6 +188,8 @@ Useful options:
   robot configuration. The raw trajectories remain robot-agnostic.
 - `--controller-tcp-calibration` selects the physical HandUMI mount offset to
   snapshot in metadata; raw controller poses remain unchanged.
+- `--session-calibration` locks Meta Quest poses to the calibrated table frame
+  and snapshots both spatial and session calibrations in dataset metadata.
 - `--clap-control` starts or stops an episode by squeezing either the left or
   right gripper twice within 1.6 seconds.
 - `--push-to-hub` pushes the dataset after recording.
@@ -314,7 +322,10 @@ observation.tracking.left_tracked
 observation.tracking.right_tracked
 observation.tracking.left_device_tracked
 observation.tracking.left_pose_valid
+observation.tracking.left_device_controller_pose
+observation.tracking.right_device_controller_pose
 observation.tracking.hmd_pose
+observation.tracking.device_hmd_pose
 observation.tracking.aligned_time_ns
 observation.tracking.clock_synced
 observation.tracking.streaming

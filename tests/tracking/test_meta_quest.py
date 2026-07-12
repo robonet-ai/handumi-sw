@@ -200,6 +200,30 @@ class TrackingFreshnessTest(unittest.TestCase):
         self.assertTrue(sample.left_pose_valid)
         self.assertTrue(sample.hmd_tracked)
         self.assertEqual(sample.hmd_pose.shape, (7,))
+        self.assertEqual(sample.left_device_controller_pose.shape, (7,))
+
+    def test_calibrated_workspace_is_locked_and_preserves_device_pose(self):
+        provider = MetaQuestTrackingProvider(
+            config=self.config,
+            calibration=_identity_calibration(),
+        )
+        table_from_quest = np.array([1, 2, 3, 0, 0, 0, 1], dtype=np.float32)
+        provider.set_workspace_from_device_pose(table_from_quest, locked=True)
+        with provider.receiver._lock:
+            provider.receiver._connected = True
+            provider.receiver._latest = _tracked_frame()
+            provider.receiver._last_frame_mono = time.monotonic()
+
+        before = provider.latest()
+        provider.reset_workspace()
+        after = provider.latest()
+
+        np.testing.assert_allclose(before.workspace_from_device_pose, table_from_quest)
+        np.testing.assert_allclose(after.workspace_from_device_pose, table_from_quest)
+        np.testing.assert_allclose(
+            before.left_controller_pose[:3],
+            before.left_device_controller_pose[:3] + table_from_quest[:3],
+        )
 
     def test_receiver_selects_native_frame_nearest_aligned_pc_time(self):
         receiver = MetaQuestReceiver(self.config)
