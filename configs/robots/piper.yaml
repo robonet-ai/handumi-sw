@@ -16,3 +16,10 @@ ik_weights:
   # 4 deg per IK frame, matching the validated handumi-IK teleop command.
   max_joint_delta: 0.06981317
   max_reach: 0.45
+real:
+  command_rate_hz: 100
+  max_joint_speed_deg_s: 180
+  home_max_joint_speed_deg_s: 20
+  home_timeout_s: 30
+  home_tolerance_deg: 3
+  speed_percent: 80

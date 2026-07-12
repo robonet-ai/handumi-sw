@@ -20,6 +20,23 @@ EMBODIMENT_NAMES: tuple[str, ...] = ("axol", "piper")
 
 
 @dataclass(frozen=True)
+class RobotRealConfig:
+    """Robot defaults for real-hardware teleop.
+
+    Machine-local connection details (CAN ports, camera IDs, Feetech ports)
+    stay in ``configs/rig.yaml``; these values describe how this robot should
+    be commanded once the local rig has supplied the transport.
+    """
+
+    command_rate_hz: float = 100.0
+    max_joint_speed_deg_s: float = 180.0
+    home_max_joint_speed_deg_s: float = 20.0
+    home_timeout_s: float = 30.0
+    home_tolerance_deg: float = 3.0
+    speed_percent: int = 80
+
+
+@dataclass(frozen=True)
 class RobotConfig:
     kind: str
     urdf: Path
@@ -28,6 +45,7 @@ class RobotConfig:
     ee_links: dict[str, str]
     home_q: np.ndarray
     ik_weights: KinematicsConfig
+    real: RobotRealConfig
 
 
 @dataclass(frozen=True)
@@ -130,6 +148,7 @@ def load_robot_config(name: str) -> RobotConfig:
         data: dict[str, Any] = yaml.safe_load(fh) or {}
 
     weights = data.get("ik_weights") or {}
+    real = data.get("real") or {}
     urdf = _resolve_path(data["urdf"])
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
@@ -157,6 +176,14 @@ def load_robot_config(name: str) -> RobotConfig:
                 if weights.get("max_reach") is None
                 else float(weights["max_reach"])
             ),
+        ),
+        real=RobotRealConfig(
+            command_rate_hz=float(real.get("command_rate_hz", 100.0)),
+            max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),
+            home_max_joint_speed_deg_s=float(real.get("home_max_joint_speed_deg_s", 20.0)),
+            home_timeout_s=float(real.get("home_timeout_s", 30.0)),
+            home_tolerance_deg=float(real.get("home_tolerance_deg", 3.0)),
+            speed_percent=int(real.get("speed_percent", 80)),
         ),
     )
 
@@ -232,6 +259,7 @@ def _resolve_path(value: str | Path) -> Path:
 __all__ = [
     "EMBODIMENT_NAMES",
     "RobotConfig",
+    "RobotRealConfig",
     "RobotRuntime",
     "load_embodiment",
     "load_robot_config",

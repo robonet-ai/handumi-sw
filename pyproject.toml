@@ -46,6 +46,7 @@ piper = [
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
 handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
+handumi-teleop-real = "handumi.scripts.teleop_real:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-validate = "handumi.scripts.validate:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"

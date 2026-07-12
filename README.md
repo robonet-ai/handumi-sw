@@ -1,6 +1,6 @@
 # HandUMI Software
 
-Ultima modificacion: 2026-07-11 20:39:48 -05 -0500
+Ultima modificacion: 2026-07-11 21:02:22 -05 -0500
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
@@ -98,6 +98,40 @@ handumi-teleop-sim --device meta --scene cube_in_box
 scene runs under MuJoCo contact physics; otherwise it renders statically.
 Optional `--anchor-z <m>`: anchor with the tip resting on the table to pin
 absolute heights to the sim table (see `handumi-teleop-sim --help`).
+
+## Real Piper Teleop
+
+Real teleop uses the same tracking, TCP calibration, retargeting, and Pyroki
+IK as `handumi-teleop-sim`, but streams the resulting Piper joint targets over
+CAN. Install the optional Piper dependency and set your local CAN ports in
+`configs/rig.yaml` first:
+
+```bash
+uv sync --extra piper
+cp configs/rig.example.yaml configs/rig.yaml  # if you do not have one yet
+```
+
+Edit:
+
+```yaml
+robots:
+  piper:
+    can:
+      bitrate: 1000000
+      left_port: can0
+      right_port: can1
+```
+
+Then run:
+
+```bash
+handumi-teleop-real --device pico --robot piper
+```
+
+The real Piper homes slowly to the configured XHUMAN start pose first. A
+double clap anchors or re-anchors the enabled arms. Add `--space-start` only
+when you want keyboard Space to start idle arms; it does not replace double
+clap and does not re-anchor arms already active.
 
 ## Record Data
 
