@@ -12,7 +12,8 @@ Safety defaults:
 * only ``--robot piper`` is accepted in this first real backend;
 * controller->TCP calibration is required;
 * both arms home slowly to the XHUMAN Piper start pose before teleop;
-* arms stay at home until double-clap or explicit ``--space-start``.
+* arms stay at home until double-clap or explicit ``--space-start``;
+* a double-clap while teleop is active clears anchors and returns home.
 
 Usage
 -----
@@ -228,6 +229,13 @@ def _clear_enabled_anchors(
         anchors[side] = None
 
 
+def _has_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    return any(anchors[side] is not None for side in enabled_sides)
+
+
 def main() -> None:
     args = parse_args()
     _validate_args(args)
@@ -303,12 +311,11 @@ def main() -> None:
         if args.space_start:
             log.info(
                 "Real Piper is at home. Start idle arms with Space, or double clap "
-                "to anchor/re-anchor enabled arms."
+                "to start enabled arms."
             )
         else:
             log.info(
-                "Real Piper is at home. Double clap a gripper to anchor/re-anchor "
-                "enabled arms."
+                "Real Piper is at home. Double clap a gripper to start enabled arms."
             )
 
         while True:
@@ -357,8 +364,21 @@ def main() -> None:
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
+                if _has_enabled_anchors(anchors, enabled_sides):
+                    _clear_enabled_anchors(anchors, enabled_sides)
+                    q = home_q.copy()
+                    real_env.set_q(q, actuated_names)
+                    real_env.raise_if_failed()
+                    episode_start = None
+                    frame = 0
+                    log.info("Double clap detected; teleop reset, Piper returning home.")
+                    log_say("teleop reset", play_sounds=play_sounds)
+                    dt = time.perf_counter() - loop_start
+                    if (sleep := interval - dt) > 0:
+                        time.sleep(sleep)
+                    continue
                 start_sides = enabled_sides
-                log.info("Double clap detected; re-anchoring %s.", "/".join(start_sides))
+                log.info("Double clap detected; starting %s.", "/".join(start_sides))
 
             anchored_this_frame = False
             for side in ("left", "right"):

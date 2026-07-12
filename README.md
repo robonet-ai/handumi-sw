@@ -82,14 +82,14 @@ replay — handy before a session to check tracking health and TCP calibration:
 handumi-teleop-sim --device meta            # or --device pico
 ```
 
-Teleop controls: a **double clap on either gripper** (close/open twice)
-anchors or re-anchors the enabled, tracked arms so the current HandUMI pose
-maps to the robot home and the robot follows from there. Pass `--space-start`
-if you also want the keyboard Space key to start both idle arms at once. Arms
-stay parked at home until their first anchor. Spoken feedback; `--no-sounds`
-to mute. In the recorder below, the double clap starts/stops episodes. Without
-session calibration it recenters the HMD workspace; a calibrated table frame
-remains locked across episodes.
+Teleop controls: a **double clap on either gripper** (close/open twice) starts
+the enabled, tracked arms from home. While teleop is active, another double
+clap clears the anchors, parks the enabled arms at home, and waits for a fresh
+start. Pass `--space-start` if you also want the keyboard Space key to start
+idle arms at once. Spoken feedback; `--no-sounds` to mute. In the recorder
+below, double clap starts episodes and requests a restart while recording.
+Without session calibration it recenters the HMD workspace; a calibrated table
+frame remains locked across episodes.
 
 For a full pick-and-place rehearsal with a task scene and real contact
 physics (MuJoCo: the cube is graspable, driven by your Feetech opening):
@@ -117,9 +117,9 @@ Set up the hardware with
 handumi-teleop-real --device pico --robot piper
 ```
 
-The real Piper homes slowly first. A double clap anchors or re-anchors the
-enabled arms. Add `--space-start` when you want keyboard Space to start idle
-arms.
+The real Piper homes slowly first. A double clap starts enabled arms from home;
+while teleop is active, another double clap clears anchors and sends the Piper
+back home. Add `--space-start` when you want keyboard Space to start idle arms.
 
 ## Record Data
 
@@ -173,8 +173,8 @@ Useful options:
   snapshot in metadata; raw controller poses remain unchanged.
 - `--session-calibration` locks Meta Quest poses to the calibrated table frame
   and snapshots both spatial and session calibrations in dataset metadata.
-- `--clap-control` starts or stops an episode by squeezing either the left or
-  right gripper twice within 1.6 seconds.
+- `--clap-control` starts an episode by squeezing either gripper twice; another
+  double clap during the episode discards it and returns to the start gate.
 - `--push-to-hub` pushes the dataset after recording.
 - `--skip-feetech` records with zero-filled gripper widths.
 - `--pico-wifi` uses PICO over Wi-Fi instead of ADB.

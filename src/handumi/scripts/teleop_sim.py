@@ -17,11 +17,12 @@ trails in the workspace frame — tracking-side truth, before retargeting/IK.
 
 Teleop anchoring maps your current HandUMI pose to the robot home TCP and the
 robot follows relative motion from there. The double-clap gesture (close/open
-one gripper twice) re-anchors all enabled, tracked arms. Keyboard Space can
-also start idle arms when explicitly enabled with ``--space-start``.
+one gripper twice) starts idle arms; once teleop is active, another double clap
+resets teleop by clearing anchors and parking enabled arms at home. Keyboard
+Space can also start idle arms when explicitly enabled with ``--space-start``.
 
   Space                 start both arms that are not anchored yet (--space-start)
-  double clap           re-anchor enabled arms (hands inside the HandUMIs)
+  double clap           start teleop, or reset/pause active teleop
 
 Both arms start parked at home until their first anchor. Spoken feedback
 ("left anchored", ...) — --no-sounds to mute.
@@ -236,6 +237,21 @@ def _start_sides(
 ) -> tuple[str, ...]:
     """Space only starts inactive arms; it does not re-anchor."""
     return tuple(side for side in enabled_sides if anchors[side] is None)
+
+
+def _has_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    return any(anchors[side] is not None for side in enabled_sides)
+
+
+def _clear_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> None:
+    for side in enabled_sides:
+        anchors[side] = None
 
 
 def _load_calibration(args: argparse.Namespace):
@@ -528,11 +544,11 @@ def main() -> None:
     if args.space_start:
         log.info(
             "Arms idle at home. Start with Space, or double clap a gripper "
-            "to re-anchor enabled arms."
+            "to start enabled arms."
         )
     else:
         log.info(
-            "Arms idle at home. Double clap a gripper to anchor/re-anchor enabled arms."
+            "Arms idle at home. Double clap a gripper to start enabled arms."
         )
     try:
         while True:
@@ -557,17 +573,26 @@ def main() -> None:
             state = _sample_state(sample, widths)
             source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
 
-            # (Re-)anchor on hands-free double clap (close/open one gripper
-            # twice). Space is only an optional setup shortcut: it starts idle
-            # arms but does not re-anchor arms that are already active.
+            # Double clap toggles teleop: first clap starts idle arms, next clap
+            # clears anchors so the robot parks at home and waits for a fresh
+            # start. Space remains an optional start shortcut for idle arms.
             start_sides: tuple[str, ...] = ()
+            reset_this_frame = False
             if args.space_start and space_listener.consume_space():
                 start_sides = _start_sides(anchors, enabled_sides)
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
-                start_sides = enabled_sides
-                log.info("Double clap detected; re-anchoring %s.", "/".join(start_sides))
+                if _has_enabled_anchors(anchors, enabled_sides):
+                    _clear_enabled_anchors(anchors, enabled_sides)
+                    episode_start = None
+                    frame = 0
+                    reset_this_frame = True
+                    log.info("Double clap detected; teleop reset, arms parking at home.")
+                    log_say("teleop reset", play_sounds=play_sounds)
+                else:
+                    start_sides = enabled_sides
+                    log.info("Double clap detected; starting %s.", "/".join(start_sides))
 
             anchored_this_frame = False
             for side in ("left", "right"):
@@ -591,8 +616,8 @@ def main() -> None:
                 log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
 
-            if anchored_this_frame and physics is not None:
-                # Anchoring doubles as the episode reset: put every scene prop
+            if (anchored_this_frame or reset_this_frame) and physics is not None:
+                # Starting or resetting teleop also puts every scene prop
                 # (cube, box, ...) back at its initial pose.
                 physics.reset()
                 log.info("Scene reset to its initial state.")

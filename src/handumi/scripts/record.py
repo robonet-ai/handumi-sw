@@ -3,7 +3,8 @@
 
 Episode control: timed by default (--episode-time-s), PICO buttons with
 --manual-control, or hands-free with --clap-control (squeeze either the left
-or right gripper twice within 1.6s to start or stop an episode).
+or right gripper twice within 1.6s to start an episode; another double-clap
+during the episode discards it and restarts the attempt).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
 frames", ...) are on by default — pass --no-sounds to disable them. Without
@@ -231,8 +232,9 @@ def record_episode(
         else False
     )
 
-    # Clap-controlled episodes end on the next double clap, not on a timer.
-    timed = not manual_control and not clap_control
+    # Clap starts episodes hands-free. Once recording, the timer still ends the
+    # episode; another clap is treated like the manual repeat button.
+    timed = not manual_control
     tracking_loss_timeout_ns = int(tracking_loss_timeout_s * 1e9)
     tracking_lost_since_ns: int | None = None
     episode_start_ns: int | None = None
@@ -349,6 +351,8 @@ def record_episode(
             break
 
         if clap_control and clap_detector.update(widths.left_mm, widths.right_mm, loop_start):
+            status = "repeat"
+            dataset.clear_episode_buffer()
             break
         dataset.add_frame(
             {
@@ -501,7 +505,8 @@ def parse_args() -> argparse.Namespace:
         "--clap-control",
         action="store_true",
         help="Hands-free: squeeze either gripper twice within 1.6s to start "
-        "or stop an episode. Needs real Feetech widths.",
+        "an episode; squeeze again during the episode to discard/restart it. "
+        "Needs real Feetech widths.",
     )
     p.add_argument(
         "--no-sounds",
@@ -697,7 +702,12 @@ def main() -> None:
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
             )
-            if n_frames == 0 or status in {"repeat", "tracking_lost", "sensor_unhealthy"}:
+            if status == "repeat":
+                log.warning("Episode restart requested (%d frames discarded).", n_frames)
+                log_say("Restart recording", play_sounds=play_sounds)
+                dataset.clear_episode_buffer()
+                continue
+            if n_frames == 0 or status in {"tracking_lost", "sensor_unhealthy"}:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
                 dataset.clear_episode_buffer()

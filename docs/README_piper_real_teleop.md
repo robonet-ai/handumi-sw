@@ -137,7 +137,7 @@ handumi-teleop-real --device pico --robot piper --skip-can-repair
 
 - `--side left|right|both` selects the controlled arm side.
 - `--space-start` lets the keyboard Space key start idle arms.
-- `--skip-feetech` disables gripper reading and double-clap anchoring; combine
+- `--skip-feetech` disables gripper reading and double-clap start/reset; combine
   it with `--space-start`.
 - `--controller-tcp-calibration <path>` overrides the default calibration file.
 - `--pico-wifi` uses PICO over Wi-Fi instead of USB/ADB.
@@ -147,8 +147,9 @@ Runtime behavior:
 
 - Tracking starts before the real arms move.
 - The Piper arms home slowly to the configured start pose.
-- Arms remain idle at home until a double clap anchors them.
-- A double clap re-anchors enabled arms to the current HandUMI pose.
+- Arms remain idle at home until a double clap starts them.
+- A double clap while teleop is active clears anchors and returns enabled arms
+  home; double clap again to start teleop from a fresh reference.
 - If tracking is lost, anchors are cleared and the current joint target is
   held until tracking recovers.
 
@@ -195,7 +196,8 @@ and USB debugging is authorized. For USB mode, the headset app should target
 ### Controllers are not tracked
 
 Wake the controllers, make sure the PICO/Quest app is streaming controller
-poses, and re-anchor only after both enabled controllers report valid tracking.
+poses, and start teleop only after both enabled controllers report valid
+tracking.
 
 ## Safety
 

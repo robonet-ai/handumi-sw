@@ -78,6 +78,9 @@ class _FakeDataset:
     def add_frame(self, frame: dict) -> None:
         self.frames.append(frame)
 
+    def clear_episode_buffer(self) -> None:
+        self.frames.clear()
+
 
 class _HealthyTracker:
     device = "meta"
@@ -210,7 +213,7 @@ class WaitForTrackingTest(unittest.TestCase):
 
 
 class RecordEpisodeClapControlTest(unittest.TestCase):
-    def test_double_clap_stops_the_episode(self):
+    def test_double_clap_restarts_the_episode(self):
         dataset = _FakeDataset()
         n_frames, status = record_episode(
             dataset=dataset,
@@ -231,13 +234,9 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
             start_threshold=0.75,
             clap_detector=DoubleClapDetector(),
         )
-        self.assertEqual(status, "recorded")
-        # The clap frames themselves are not recorded; only pre-clap ones.
-        self.assertGreaterEqual(n_frames, 1)
-        self.assertLess(n_frames, 10)
-        for frame in dataset.frames:
-            self.assertIn("observation.state", frame)
-            self.assertEqual(frame["observation.state"].dtype, np.float32)
+        self.assertEqual(status, "repeat")
+        self.assertGreaterEqual(n_frames, 0)
+        self.assertEqual(dataset.frames, [])
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):

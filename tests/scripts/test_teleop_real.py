@@ -7,6 +7,7 @@ from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
     _clear_enabled_anchors,
     _enabled_tracking_ok,
+    _has_enabled_anchors,
     _validate_feetech_ports_exist,
     _validate_args,
     parse_args,
@@ -49,7 +50,7 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertEqual(_start_sides(anchors, ("left", "right")), ("right",))
 
-    def test_double_clap_reanchors_all_enabled_arms(self):
+    def test_double_clap_starts_idle_arms_or_resets_active_arms(self):
         detector = DoubleClapDetector(window_s=1.2)
         detector.update(50.0, 50.0, 0.0)
         self.assertFalse(detector.update(2.0, 50.0, 0.05))
@@ -57,9 +58,18 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         triggered = detector.update(2.0, 50.0, 0.5)
         enabled_sides = ("left", "right")
-        start_sides = enabled_sides if triggered else ()
+        idle_anchors = {"left": None, "right": None}
+        active_anchors = {"left": {"source": object()}, "right": None}
+        start_sides = (
+            enabled_sides
+            if triggered and not _has_enabled_anchors(idle_anchors, enabled_sides)
+            else ()
+        )
 
         self.assertEqual(start_sides, enabled_sides)
+        self.assertTrue(_has_enabled_anchors(active_anchors, enabled_sides))
+        _clear_enabled_anchors(active_anchors, enabled_sides)
+        self.assertFalse(_has_enabled_anchors(active_anchors, enabled_sides))
 
     def test_tracking_loss_policy_clears_enabled_anchors(self):
         anchors = {"left": {"source": object()}, "right": {"source": object()}}
