@@ -1,5 +1,7 @@
 # Add a New Robot Embodiment
 
+Ultima modificacion: 2026-07-11 19:51:01 -05 -0500
+
 Robots are config-driven: one YAML under `configs/robots/` describes the
 embodiment, and the registry (`src/handumi/robots/registry.py`) builds the
 URDF model, bimanual IK solver, and Viser sim from it. No per-robot Python
@@ -52,7 +54,7 @@ Add the name to `EMBODIMENT_NAMES` in `src/handumi/robots/registry.py`
 handumi-replay-in-sim --repo-id <dataset> --robot myrobot
 
 # or follow live tracking with it
-handumi-live --device meta --robot myrobot
+handumi-teleop-sim --device meta --robot myrobot
 ```
 
 The replay reports per-frame EE pose errors — large errors usually mean

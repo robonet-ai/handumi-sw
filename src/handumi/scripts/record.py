@@ -617,7 +617,7 @@ def main() -> None:
                 assert clap_detector is not None
                 if not _wait_for_clap(grippers, clap_detector, stop_event):
                     break
-                # Same clap semantics as handumi-live's re-anchor ("homing"):
+                # Same clap semantics as handumi-teleop-sim's re-anchor ("homing"):
                 # re-center the tracking workspace so every episode's poses
                 # start from a fresh, consistent origin.
                 reset_workspace = getattr(tracker, "reset_workspace", None)

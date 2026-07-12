@@ -535,7 +535,7 @@ class MetaQuestTrackingProvider:
         self.receiver = MetaQuestReceiver(config)
         self.workspace = WorkspaceCalibration.identity()
         self.workspace_set = False
-        # When False, left X is left free for callers (e.g. handumi-live uses
+        # When False, left X is left free for callers (e.g. handumi-teleop-sim uses
         # it as the left-arm anchor button); the workspace still initializes
         # on the first tracked HMD frame.
         self.reset_workspace_on_x = reset_workspace_on_x

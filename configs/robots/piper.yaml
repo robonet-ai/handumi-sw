@@ -1,6 +1,6 @@
 kind: piper
 urdf: assets/piper/piper.urdf
-mjcf: assets/piper/piper.xml  # contact physics for handumi-live --scene
+mjcf: assets/piper/piper.xml  # contact physics for handumi-teleop-sim --scene
 pkg_root: assets/piper
 ee_links:
   left: left_tcp
@@ -11,8 +11,8 @@ ee_links:
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
 ik_weights:
   pos: 100.0
-  ori: 15.0
-  rest: 2.0
+  ori: 4.5
+  rest: 12.0
   # 4 deg per IK frame, matching the validated handumi-IK teleop command.
   max_joint_delta: 0.06981317
   max_reach: 0.45

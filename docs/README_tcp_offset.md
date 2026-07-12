@@ -1,5 +1,7 @@
 # Controller → Gripper TCP Offset
 
+Ultima modificacion: 2026-07-11 19:51:01 -05 -0500
+
 The fixed pose of the mounted controller relative to the gripper tip.
 Recordings store raw controller poses; this transform
 (`T_world_tcp = T_world_controller @ T_controller_tcp`) is applied
@@ -44,7 +46,7 @@ handumi-calibrate-tcp-offset inspect --device meta
 
 ## Verify
 
-Live (fastest): `handumi-live --device meta` — the robot follows you in
+Live (fastest): `handumi-teleop-sim --device meta` — the robot follows you in
 Viser through the same calibration + IK the replay uses.
 
 - Wrist-only rotations about a still tip → the sim TCP stays nearly still

@@ -498,7 +498,7 @@ def _write_gripper_joints(
 
     ``state[14]``/``state[15]`` carry the left/right opening in meters;
     normalized by --gripper-max-width-m and scaled to each finger's URDF
-    range (same mapping handumi-live renders). Recordings without Feetech
+    range (same mapping handumi-teleop-sim renders). Recordings without Feetech
     (widths all zero) fall back to the constant --gripper opening.
     """
     widths_m = np.asarray(states, dtype=np.float32)[

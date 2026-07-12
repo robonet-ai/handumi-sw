@@ -26,7 +26,7 @@ dependencies = [
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     # Viser utilities and pyroki transitive dependency, pinned direct.
     "viser>=1.0.0",
-    # Contact physics for handumi-live --scene (grasping in sim).
+    # Contact physics for handumi-teleop-sim --scene (grasping in sim).
     "mujoco>=3.9.0",
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",
@@ -45,7 +45,8 @@ piper = [
 
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
-handumi-live = "handumi.scripts.live:main"
+handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
+handumi-live = "handumi.scripts.teleop_sim:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-validate = "handumi.scripts.validate:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
