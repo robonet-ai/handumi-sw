@@ -1,7 +1,5 @@
 # Controller → Gripper TCP Offset
 
-Ultima modificacion: 2026-07-11 19:51:01 -05 -0500
-
 The fixed pose of the mounted controller relative to the gripper tip.
 Recordings store raw controller poses; this transform
 (`T_world_tcp = T_world_controller @ T_controller_tcp`) is applied

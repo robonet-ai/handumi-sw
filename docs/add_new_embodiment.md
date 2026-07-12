@@ -1,7 +1,5 @@
 # Add a New Robot Embodiment
 
-Ultima modificacion: 2026-07-11 19:51:01 -05 -0500
-
 Robots are config-driven: one YAML under `configs/robots/` describes the
 embodiment, and the registry (`src/handumi/robots/registry.py`) builds the
 URDF model, bimanual IK solver, and Viser sim from it. No per-robot Python
