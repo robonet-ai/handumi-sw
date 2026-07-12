@@ -59,7 +59,7 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.registry import load_embodiment
+from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 
 load_dotenv()
 
@@ -164,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     emb = parser.add_argument_group("Embodiment")
     emb.add_argument(
         "--embodiment",
-        choices=("axol", "piper"),
+        choices=EMBODIMENT_NAMES,
         default="axol",
         help="Target robot embodiment.",
     )
@@ -202,7 +202,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ik.add_argument("--pos-weight", type=float, default=None)
     ik.add_argument("--ori-weight", type=float, default=None)
-    ik.add_argument("--elbow-weight", type=float, default=5.0)
     ik.add_argument("--max-joint-delta", type=float, default=None)
     ik.add_argument("--max-reach", type=float, default=None)
     ik.add_argument(
@@ -239,29 +238,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--raw-controller-debug",
         action="store_true",
         help="Use raw controller poses directly, without controller->TCP calibration.",
-    )
-
-    # ------------------------------------------------------------------
-    # Axol-specific parameters
-    # ------------------------------------------------------------------
-    axol = parser.add_argument_group("Axol-specific parameters")
-    axol.add_argument(
-        "--axol-workspace",
-        choices=("front", "rest"),
-        default="front",
-        help="Use a front/chest initial workspace or the raw URDF rest pose.",
-    )
-    axol.add_argument("--axol-wrist-forward", type=float, default=-0.34)
-    axol.add_argument("--axol-wrist-height", type=float, default=0.58)
-    axol.add_argument("--axol-wrist-lateral", type=float, default=0.23)
-    axol.add_argument("--axol-elbow-forward", type=float, default=-0.16)
-    axol.add_argument("--axol-elbow-height", type=float, default=0.68)
-    axol.add_argument("--axol-elbow-lateral", type=float, default=0.20)
-    axol.add_argument(
-        "--settle-iterations",
-        type=int,
-        default=20,
-        help="IK iterations on the first frame before episode processing starts.",
     )
 
     return parser
