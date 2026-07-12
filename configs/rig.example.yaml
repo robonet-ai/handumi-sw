@@ -34,3 +34,13 @@ meta_quest:
     connect_retry_s: 1.0
   health:
     frame_stale_timeout_s: 0.25
+
+spatial_calibration:
+  board:
+    id: opencv_charuco_5x7_30mm_v1
+    squares_x: 5
+    squares_y: 7
+    dictionary: DICT_5X5_100
+    square_length_m: 0.030
+    marker_length_m: 0.015
+    legacy_pattern: false

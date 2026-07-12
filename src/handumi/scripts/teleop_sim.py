@@ -83,6 +83,7 @@ from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
+from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,10 +92,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("handumi.teleop_sim")
 
-# Same side palette as replay_in_sim's target markers.
-LEFT_COLOR = (255, 190, 50)
-RIGHT_COLOR = (80, 220, 130)
-BACKGROUND_COLOR = (40, 8, 8)  # dark red — the 3D view background
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
 SIDE_CHOICES = ("left", "right", "both")
