@@ -36,10 +36,11 @@ class PiperArm(Protocol):
 
     def read_mdeg(self) -> np.ndarray: ...
     def send_mdeg(self, cmd: np.ndarray) -> None: ...
+    def send_gripper_microm(self, opening_microm: int, effort: int) -> None: ...
     def disconnect(self) -> None: ...
 
 
-ArmFactory = Callable[[str, int, float], PiperArm]
+ArmFactory = Callable[[str, int, float, int], PiperArm]
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class PiperCanSettings:
     home_tolerance_deg: float = 3.0
     speed_percent: int = 80
     enable_timeout_s: float = 10.0
+    gripper_effort: int = 1000
 
 
 def load_piper_can_settings(
@@ -93,6 +95,7 @@ def load_piper_can_settings(
         home_timeout_s=defaults.home_timeout_s,
         home_tolerance_deg=defaults.home_tolerance_deg,
         speed_percent=defaults.speed_percent,
+        gripper_effort=defaults.gripper_effort,
     )
 
 
@@ -163,6 +166,7 @@ class PiperSdkArm:
         port: str,
         speed_percent: int,
         enable_timeout_s: float,
+        gripper_effort: int,
     ) -> None:
         try:
             from piper_sdk import C_PiperInterface_V2
@@ -173,6 +177,7 @@ class PiperSdkArm:
 
         self.port = port
         self.speed_percent = int(speed_percent)
+        self.gripper_effort = int(gripper_effort)
         self.arm = C_PiperInterface_V2(port)
         self.arm.ConnectPort()
         time.sleep(0.2)
@@ -214,6 +219,9 @@ class PiperSdkArm:
         values = [int(v) for v in np.asarray(cmd, dtype=np.int64)[:ARM_JOINT_COUNT]]
         self.arm.JointCtrl(*values)
 
+    def send_gripper_microm(self, opening_microm: int, effort: int) -> None:
+        self.arm.GripperCtrl(int(opening_microm), int(effort), 0x01, 0)
+
     def disconnect(self) -> None:
         disconnect = getattr(self.arm, "DisconnectPort", None)
         if disconnect is not None:
@@ -229,6 +237,7 @@ class PiperJointStreamer:
         *,
         command_rate_hz: float,
         max_joint_speed_deg_s: float,
+        gripper_effort: int,
     ) -> None:
         if command_rate_hz <= 0.0:
             raise ValueError("command_rate_hz must be > 0")
@@ -239,6 +248,7 @@ class PiperJointStreamer:
 
         self.arms = arms
         self.command_rate_hz = float(command_rate_hz)
+        self.gripper_effort = int(gripper_effort)
         self.max_step_mdeg = max(1.0, max_joint_speed_deg_s * 1000.0 / command_rate_hz)
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -247,6 +257,7 @@ class PiperJointStreamer:
             side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
         }
         self._targets = {side: cmd.copy() for side, cmd in self._commanded.items()}
+        self._gripper_targets: dict[str, int | None] = {side: None for side in self.arms}
         self._thread = threading.Thread(
             target=self._run,
             name="handumi-piper-can-streamer",
@@ -278,6 +289,13 @@ class PiperJointStreamer:
                     self._targets[side] = (
                         np.asarray(target, dtype=np.int64)[:ARM_JOINT_COUNT].copy()
                     )
+
+    def set_gripper_targets_microm(self, targets: dict[str, int | None]) -> None:
+        self.raise_if_failed()
+        with self._lock:
+            for side, target in targets.items():
+                if side in self._gripper_targets:
+                    self._gripper_targets[side] = None if target is None else max(0, int(target))
 
     def latest_commands(self) -> dict[str, np.ndarray]:
         with self._lock:
@@ -351,6 +369,7 @@ class PiperJointStreamer:
             while not self._stop.is_set():
                 with self._lock:
                     targets = {side: target.copy() for side, target in self._targets.items()}
+                    gripper_targets = self._gripper_targets.copy()
 
                 next_commands: dict[str, np.ndarray] = {}
                 for side, arm in self.arms.items():
@@ -360,6 +379,9 @@ class PiperJointStreamer:
                         self.max_step_mdeg,
                     )
                     arm.send_mdeg(cmd)
+                    gripper = gripper_targets.get(side)
+                    if gripper is not None:
+                        arm.send_gripper_microm(gripper, self.gripper_effort)
                     next_commands[side] = cmd
 
                 with self._lock:
@@ -398,6 +420,7 @@ class PiperCanEnvironment:
                 port,
                 self.settings.speed_percent,
                 self.settings.enable_timeout_s,
+                self.settings.gripper_effort,
             )
 
     def home(self, home_targets_mdeg: dict[str, np.ndarray]) -> None:
@@ -407,6 +430,7 @@ class PiperCanEnvironment:
             self.arms,
             command_rate_hz=self.settings.command_rate_hz,
             max_joint_speed_deg_s=self.settings.home_max_joint_speed_deg_s,
+            gripper_effort=self.settings.gripper_effort,
         )
         self.streamer.start()
         log.info(
@@ -424,6 +448,15 @@ class PiperCanEnvironment:
 
     def set_q(self, q: np.ndarray, actuated_names: list[str] | tuple[str, ...]) -> None:
         self.set_targets(q_to_piper_mdeg(q, actuated_names))
+
+    def set_gripper_widths_mm(self, widths_mm: dict[str, float]) -> None:
+        if self.streamer is None:
+            raise RuntimeError("home() before set_gripper_widths_mm()")
+        targets = {
+            side: int(round(max(0.0, float(width_mm)) * 1000.0))
+            for side, width_mm in widths_mm.items()
+        }
+        self.streamer.set_gripper_targets_microm(targets)
 
     def set_targets(self, targets_mdeg: dict[str, np.ndarray]) -> None:
         if self.streamer is None:

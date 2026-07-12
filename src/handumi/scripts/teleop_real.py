@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -37,6 +38,8 @@ from handumi.calibration.control_tcp import (
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech import zero_gripper_widths
+from handumi.feetech.calibration import assert_calibrated, load_config, user_calibration_path
+from handumi.feetech.setup import list_feetech_serial_ports
 from handumi.real.can_setup import ensure_can_interfaces_ready
 from handumi.real.piper_can import (
     PiperCanEnvironment,
@@ -140,6 +143,55 @@ def _validate_args(args: argparse.Namespace) -> None:
         )
 
 
+def _validate_feetech_ready(args: argparse.Namespace) -> None:
+    if args.skip_feetech:
+        return
+    feetech_config = load_config(args.rig_config)
+    if args.feetech_port is not None:
+        feetech_config = type(feetech_config)(
+            port=args.feetech_port,
+            baudrate=feetech_config.baudrate,
+            protocol_version=feetech_config.protocol_version,
+            left=feetech_config.left,
+            right=feetech_config.right,
+        )
+    assert_calibrated(feetech_config, source=user_calibration_path())
+    _validate_feetech_ports_exist(feetech_config)
+
+
+def _validate_feetech_ports_exist(feetech_config) -> None:
+    ports = {
+        side: getattr(feetech_config, side).port or feetech_config.port
+        for side in ("left", "right")
+    }
+    missing = {side: port for side, port in ports.items() if not port or not Path(port).exists()}
+    if missing:
+        current = sorted(list_feetech_serial_ports())
+        missing_text = ", ".join(
+            f"{side}={port or '<unset>'}" for side, port in missing.items()
+        )
+        current_text = ", ".join(current) if current else "ninguno"
+        raise SystemExit(
+            "Feetech port configured in rig.yaml is missing: "
+            f"{missing_text}.\n"
+            f"Puertos Feetech actuales: {current_text}\n"
+            "Remapea Feetech sin tocar CAN/PICO:\n"
+            "  uv run handumi-setup-hardware --robot piper --device pico "
+            "--skip-can-map --skip-can-repair --skip-pico "
+            "--force-feetech-calibration"
+        )
+
+    denied = {side: port for side, port in ports.items() if port and not os.access(port, os.R_OK | os.W_OK)}
+    if denied:
+        denied_text = ", ".join(f"{side}={port}" for side, port in denied.items())
+        raise SystemExit(
+            f"No tengo permisos para abrir Feetech: {denied_text}.\n"
+            "Corre primero:\n"
+            "  uv run handumi-setup-hardware --robot piper --device pico "
+            "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
+        )
+
+
 def _load_required_calibration(args: argparse.Namespace):
     path = args.controller_tcp_calibration or calibration_path_for_device(args.device)
     if not path.exists():
@@ -217,6 +269,7 @@ def main() -> None:
             bitrate=settings.bitrate,
             restart_ms=settings.restart_ms,
         )
+    _validate_feetech_ready(args)
 
     calibration = _load_required_calibration(args)
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
@@ -291,6 +344,10 @@ def main() -> None:
                 log.info("Tracking stream is valid again; waiting for a fresh anchor.")
 
             widths = _latest_widths(grippers)
+            if grippers is not None:
+                real_env.set_gripper_widths_mm(
+                    {"left": widths.left_mm, "right": widths.right_mm}
+                )
             state = _sample_state(sample, widths)
             source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
 

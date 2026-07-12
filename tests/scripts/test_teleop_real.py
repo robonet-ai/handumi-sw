@@ -1,8 +1,13 @@
 import unittest
+import tempfile
+from pathlib import Path
+from unittest import mock
 
+from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
     _clear_enabled_anchors,
     _enabled_tracking_ok,
+    _validate_feetech_ports_exist,
     _validate_args,
     parse_args,
 )
@@ -68,6 +73,40 @@ class TeleopRealArgsTest(unittest.TestCase):
     def test_single_side_mode_only_requires_that_side_tracked(self):
         self.assertTrue(_enabled_tracking_ok({"left": True, "right": False}, ("left",)))
         self.assertFalse(_enabled_tracking_ok({"left": True, "right": False}, ("right",)))
+
+    def test_feetech_port_validation_reports_missing_rig_ports(self):
+        config = FeetechConfig(
+            port=None,
+            baudrate=1_000_000,
+            protocol_version=0,
+            left=GripperCalibration(0, 1000, 2000, 80.0, "/dev/ttyACM9"),
+            right=GripperCalibration(1, 900, 1900, 75.0, "/dev/ttyACM8"),
+        )
+
+        with (
+            mock.patch(
+                "handumi.scripts.teleop_real.list_feetech_serial_ports",
+                return_value={"/dev/ttyACM0"},
+            ),
+            self.assertRaisesRegex(SystemExit, "Remapea Feetech"),
+        ):
+            _validate_feetech_ports_exist(config)
+
+    def test_feetech_port_validation_accepts_existing_ports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            left = Path(tmp) / "ttyACM0"
+            right = Path(tmp) / "ttyACM1"
+            left.touch()
+            right.touch()
+            config = FeetechConfig(
+                port=None,
+                baudrate=1_000_000,
+                protocol_version=0,
+                left=GripperCalibration(0, 1000, 2000, 80.0, str(left)),
+                right=GripperCalibration(1, 900, 1900, 75.0, str(right)),
+            )
+
+            _validate_feetech_ports_exist(config)
 
 
 if __name__ == "__main__":

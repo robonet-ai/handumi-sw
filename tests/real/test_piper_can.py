@@ -38,6 +38,7 @@ class FakeArm:
         self.port = "fake"
         self.current = np.zeros(6, dtype=np.int64) if start is None else np.asarray(start)
         self.sent: list[np.ndarray] = []
+        self.grippers: list[tuple[int, int]] = []
         self.closed = False
 
     def read_mdeg(self):
@@ -46,6 +47,9 @@ class FakeArm:
     def send_mdeg(self, cmd):
         self.current = np.asarray(cmd, dtype=np.int64).copy()
         self.sent.append(self.current.copy())
+
+    def send_gripper_microm(self, opening_microm, effort):
+        self.grippers.append((int(opening_microm), int(effort)))
 
     def disconnect(self):
         self.closed = True
@@ -79,6 +83,7 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(settings.restart_ms, 100)
         self.assertEqual(settings.command_rate_hz, 123)
         self.assertEqual(settings.max_joint_speed_deg_s, 45)
+        self.assertEqual(settings.gripper_effort, 1000)
 
     def test_piper_yaml_real_defaults(self):
         config = load_robot_config("piper")
@@ -89,6 +94,7 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(config.real.home_timeout_s, 30.0)
         self.assertEqual(config.real.home_tolerance_deg, 3.0)
         self.assertEqual(config.real.speed_percent, 80)
+        self.assertEqual(config.real.gripper_effort, 1000)
 
 
 class PiperUnitsTest(unittest.TestCase):
@@ -134,6 +140,7 @@ class PiperJointStreamerTest(unittest.TestCase):
             {"left": left, "right": right},
             command_rate_hz=500.0,
             max_joint_speed_deg_s=500.0,
+            gripper_effort=1000,
         )
 
         streamer.start()
@@ -157,10 +164,31 @@ class PiperJointStreamerTest(unittest.TestCase):
             {"left": FakeArm(), "right": FakeArm()},
             command_rate_hz=100.0,
             max_joint_speed_deg_s=100.0,
+            gripper_effort=1000,
         )
         streamer.start()
         time.sleep(0.02)
         streamer.stop()
+
+    def test_streamer_sends_gripper_targets_to_fake_arms(self):
+        left = FakeArm()
+        right = FakeArm()
+        streamer = PiperJointStreamer(
+            {"left": left, "right": right},
+            command_rate_hz=500.0,
+            max_joint_speed_deg_s=500.0,
+            gripper_effort=1234,
+        )
+
+        streamer.start()
+        try:
+            streamer.set_gripper_targets_microm({"left": 42000, "right": 17000})
+            time.sleep(0.02)
+        finally:
+            streamer.stop()
+
+        self.assertIn((42000, 1234), left.grippers)
+        self.assertIn((17000, 1234), right.grippers)
 
 
 if __name__ == "__main__":

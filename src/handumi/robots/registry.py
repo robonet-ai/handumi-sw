@@ -34,6 +34,7 @@ class RobotRealConfig:
     home_timeout_s: float = 30.0
     home_tolerance_deg: float = 3.0
     speed_percent: int = 80
+    gripper_effort: int = 1000
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,7 @@ def load_robot_config(name: str) -> RobotConfig:
             home_timeout_s=float(real.get("home_timeout_s", 30.0)),
             home_tolerance_deg=float(real.get("home_tolerance_deg", 3.0)),
             speed_percent=int(real.get("speed_percent", 80)),
+            gripper_effort=int(real.get("gripper_effort", 1000)),
         ),
     )
 
