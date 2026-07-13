@@ -21,7 +21,8 @@ handumi-record --device meta --skip-feetech \
   --task "tcp pivot left" --num-episodes 1 --episode-time-s 25
 
 handumi-calibrate-tcp-offset pivot --device meta --side left \
-  --parquet outputs/datasets/tcp_pivot_left/data/chunk-000/file-000.parquet
+  --parquet outputs/datasets/tcp_pivot_left/data/chunk-000/file-000.parquet \
+  --episode 0
 ```
 
 RMS residual **< 5 mm** = good; higher = the tip slipped, re-record.
@@ -32,7 +33,8 @@ orientation, then:
 
 ```bash
 handumi-calibrate-tcp-offset orient --device meta --side left \
-  --parquet <recording>.parquet --tcp-quat-world <qx> <qy> <qz> <qw>
+  --parquet <recording>.parquet --episode 0 \
+  --tcp-quat-world <qx> <qy> <qz> <qw>
 ```
 
 Both subcommands write the YAML in `configs/calibration/` directly.

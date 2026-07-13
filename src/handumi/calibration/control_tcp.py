@@ -28,8 +28,12 @@ DEFAULT_DEVICE = "pico"
 SUPPORTED_DEVICES = ("pico", "meta")
 DEFAULT_CALIBRATION_DIR = Path("configs/calibration")
 DEFAULT_CALIBRATION = DEFAULT_CALIBRATION_DIR / f"{DEFAULT_DEVICE}_controller_tcp.yaml"
-LEFT_COLUMN = "observation.pico.left_controller_pose"
-RIGHT_COLUMN = "observation.pico.right_controller_pose"
+LEFT_COLUMN = "observation.tracking.left_controller_pose"
+RIGHT_COLUMN = "observation.tracking.right_controller_pose"
+LEGACY_POSE_COLUMNS = {
+    "left": "observation.pico.left_controller_pose",
+    "right": "observation.pico.right_controller_pose",
+}
 SIDES = ("left", "right")
 
 
@@ -57,6 +61,21 @@ class ControllerTcpCalibration:
     left: np.ndarray
     right: np.ndarray
     source: Path | None = None
+
+
+def controller_tcp_calibration_from_metadata(
+    metadata: dict[str, Any],
+) -> ControllerTcpCalibration:
+    """Load a self-contained controller->TCP snapshot from dataset metadata."""
+    root = metadata.get("controller_to_gripper_tcp", metadata)
+    if not isinstance(root, dict):
+        raise ValueError("controller TCP metadata must be a mapping")
+    try:
+        left = _side_pose_from_mapping(root, "left")
+        right = _side_pose_from_mapping(root, "right")
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("invalid controller TCP calibration metadata") from exc
+    return ControllerTcpCalibration(left=left, right=right, source=None)
 
 
 def missing_calibration_message(path: Path = DEFAULT_CALIBRATION) -> str:
@@ -108,10 +127,13 @@ def load_episode_poses(
     *,
     column: str | None = None,
 ) -> np.ndarray:
-    column = column or pose_column_for_side(side)
     if not parquet.exists():
         raise SystemExit(missing_dataset_message(parquet))
     df = pd.read_parquet(parquet)
+    if column is None:
+        current = pose_column_for_side(side)
+        legacy = LEGACY_POSE_COLUMNS[side]
+        column = current if current in df.columns else legacy
     if "episode_index" not in df.columns:
         raise SystemExit(f"{parquet} has no episode_index column")
     if column not in df.columns:
