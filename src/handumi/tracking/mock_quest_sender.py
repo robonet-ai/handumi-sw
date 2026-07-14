@@ -93,6 +93,58 @@ def _make_frame(seq: int, t0: float, skew_ns: int) -> dict:
     }
 
 
+def make_tracking_packet_fixture(
+    joint_count: int = 84,
+    *,
+    seq: int = 0,
+    active: bool = True,
+    calibration_state: str = "Valid",
+) -> dict:
+    """Build a compact ``tracking_packet_v2`` fixture for provider tests."""
+
+    if joint_count not in (70, 84):
+        raise ValueError("joint_count must be 70 or 84")
+    frame = _make_frame(seq, time.monotonic(), 0)
+    frame.update(
+        {
+            "packetType": "body_pose",
+            "schema": "tracking_packet_v2",
+            "sourceSchemaVersion": 2,
+            "source": "meta_quest",
+            "sourceCoordinateSpace": "OpenXR Stage (floor), Unity left-handed meters",
+            "sourceTimeDomain": "OVRPlugin.GetTimeInSeconds.seconds",
+            "timestampQuality": "DIAGNOSTIC_ONLY",
+            "seq": seq,
+            "unknownFixtureField": {"preserved": True},
+        }
+    )
+    names = [f"Joint_{index}" for index in range(joint_count)] if active else []
+    flags = [15 if index % 2 == 0 else 3 for index in range(joint_count)] if active else []
+    poses: list[float] = []
+    if active:
+        for index in range(joint_count):
+            poses.extend((index * 0.01, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0))
+    frame["body"] = {
+        "active": active,
+        "requestedJointSet": "FullBody",
+        "activeJointSet": "FullBody" if joint_count == 84 and active else "UpperBody" if active else "None",
+        "jointCount": joint_count if active else 0,
+        "confidence": 0.9 if active else 0.0,
+        "calibrationState": calibration_state,
+        "fidelity": "High" if active else "Unknown",
+        "skeletonRevision": 7,
+        "sourceTimeNs": frame["ovrTimeNs"],
+        "sourceTimeDomain": "OVRPlugin.BodyState.Time.seconds",
+        "timestampQuality": "DIAGNOSTIC_ONLY",
+        "observationSeq": seq,
+        "isNewObservation": True,
+        "jointNames": names,
+        "jointLocationFlags": flags,
+        "jointPoses": poses,
+    }
+    return frame
+
+
 def _udp_sync_server(host: str, sync_port: int, skew_ns: int, stop: threading.Event) -> None:
     """Echo every ping with the device clock (the Quest end of time-sync)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

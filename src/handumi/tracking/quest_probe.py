@@ -389,7 +389,23 @@ def analyze_probe_records(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
 
         joints = body.get("joints")
         if not isinstance(joints, list):
-            continue
+            compact_flags = body.get("jointLocationFlags")
+            compact_names = body.get("jointNames")
+            if not isinstance(compact_flags, list):
+                continue
+            joints = [
+                {
+                    "index": index,
+                    "name": (
+                        compact_names[index]
+                        if isinstance(compact_names, list)
+                        and index < len(compact_names)
+                        else f"Joint_{index}"
+                    ),
+                    "locationFlags": flags,
+                }
+                for index, flags in enumerate(compact_flags)
+            ]
         for fallback_index, joint in enumerate(joints):
             if not isinstance(joint, Mapping):
                 continue

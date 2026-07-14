@@ -127,6 +127,30 @@ def test_analysis_reports_body_sample_rate_when_diagnostic_field_is_present():
     assert summary["body_update_rate_hz"] == 50.0
 
 
+def test_analysis_reads_compact_body_joint_flags():
+    summary = analyze_probe_records(
+        [
+            {
+                "packet": {
+                    "seq": 1,
+                    "body": {
+                        "active": True,
+                        "activeJointSet": "FullBody",
+                        "jointCount": 2,
+                        "jointNames": ["Root", "Hips"],
+                        "jointLocationFlags": [15, 3],
+                        "jointPoses": [0, 0, 0, 0, 0, 0, 1] * 2,
+                    },
+                }
+            }
+        ]
+    )
+
+    assert summary["body"]["joints"][0]["name"] == "Root"
+    assert summary["body"]["joints"][0]["pose_tracked_fraction"] == 1.0
+    assert summary["body"]["joints"][1]["pose_valid_fraction"] == 1.0
+
+
 def test_analysis_excludes_manifest_and_summarizes_body_flags_and_states():
     joints = [
         {"index": 0, "name": "Root", "locationFlags": 15},

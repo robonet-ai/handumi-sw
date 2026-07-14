@@ -131,6 +131,29 @@ class TrackingProvider(Protocol):
         ...
 
 
+class LegacyControllerProviderAdapter:
+    """Explicitly retain the controller-only provider boundary during migration."""
+
+    def __init__(self, provider: TrackingProvider) -> None:
+        self.provider = provider
+        self.device = provider.device
+
+    def start(self) -> None:
+        self.provider.start()
+
+    def stop(self) -> None:
+        self.provider.stop()
+
+    def latest(self) -> ControllerPairSample:
+        return self.provider.latest()
+
+    def sample_at(self, target_time_ns: int) -> ControllerPairSample:
+        sampler = getattr(self.provider, "sample_at", None)
+        if callable(sampler):
+            return sampler(target_time_ns)
+        return self.provider.latest()
+
+
 def as_pose7(value: object) -> np.ndarray:
     pose = np.asarray(value, dtype=np.float32).reshape(-1)
     out = IDENTITY_POSE7.astype(np.float32).copy()
@@ -156,6 +179,7 @@ def apply_tcp_calibration_pose7(
 
 __all__ = [
     "ControllerPairSample",
+    "LegacyControllerProviderAdapter",
     "TrackingProvider",
     "apply_tcp_calibration_pose7",
     "as_pose7",

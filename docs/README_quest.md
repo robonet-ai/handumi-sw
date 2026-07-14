@@ -1,8 +1,9 @@
 # Meta Quest Tracking Setup
 
-Streams controller/HMD poses over TCP/JSON + UDP time-sync using the
-prebuilt **YubiQuestApp** from [yubi-sw](https://github.com/airoa-org/yubi-sw).
-The current app supports the legacy bimanual workflow only. For tabletop
+Streams controller/HMD poses over TCP/JSON + UDP time-sync. The legacy
+**YubiQuestApp** remains supported without payload changes. The separate
+**HandUMI Body Probe** app adds an additive `tracking_packet_v2` envelope and
+compact 70/84-joint body channel. For tabletop
 capture, rigidly mount the Quest with both controllers inside its camera
 coverage. For portable legacy capture, secure it rigidly to the chest; do not
 leave it free to swing from the neck. One controller is mounted on each gripper.
@@ -85,6 +86,25 @@ sample-age statistics remain unavailable until UDP synchronization succeeds.
 A mock-sender run validates the workstation transport and analysis only. It
 cannot establish runtime extension support, body accuracy, or a zero-loss Quest
 session unless the sender includes a real monotonic `seq`.
+
+## Production tracking packet API
+
+`MetaQuestTrackingProvider` and `PicoTrackingProvider` retain their legacy
+`latest()` controller interface. New acquisition code can instead use
+`latest_packet()` for UI/control snapshots and `drain_packets()` for every
+queued sample. The queue is bounded by `streams.packet_queue_size`; overflow,
+malformed frames, unsupported versions, source gaps, duplicates, and reordering
+are exposed through packet-stream diagnostics. Raw writers should drain the
+FIFO with `drain_tracking_packets_jsonl()` so source fields unknown to this
+software are preserved.
+
+The common packet has optional HMD, controller, body, hand, and external
+tracker channels. Joint location flags remain exact and invalid joints are not
+filled from prior poses. Source time, mapped PC time, receive time, clock
+offset, RTT, uncertainty, provenance, and timestamp quality are separate
+fields. Meta body timestamps currently carry `DIAGNOSTIC_ONLY`: do not treat
+receive time as body sample time or use this body channel for precision sensor
+fusion until the source-time provenance is qualified.
 
 ## Troubleshooting
 

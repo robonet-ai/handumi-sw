@@ -21,6 +21,8 @@ health:
   frame_stale_timeout_s: 0.25
 
 streams:
+  # Raw consumers drain this bounded FIFO. Overflow is counted explicitly.
+  packet_queue_size: 2048
   left: true
   right: true
   hmd: true # used as the body/chest reference frame
