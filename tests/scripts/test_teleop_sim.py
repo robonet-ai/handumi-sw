@@ -18,6 +18,7 @@ from handumi.scripts.teleop_sim import (
     _selected_camera_names,
     _start_sides,
     _tracking_world_map,
+    _validate_unique_camera_ids,
 )
 from handumi.tracking.base import ControllerPairSample
 
@@ -55,6 +56,18 @@ class TeleopSimCameraSelectionTest(unittest.TestCase):
             _selected_camera_names(context_camera=True),
             ["left_wrist", "workspace", "right_wrist"],
         )
+
+    def test_context_camera_flag_is_parsed(self):
+        with mock.patch(
+            "sys.argv", ["handumi-teleop-sim", "--device", "meta", "--context-camera"]
+        ):
+            self.assertTrue(parse_args().context_camera)
+
+    def test_duplicate_camera_devices_are_rejected(self):
+        with self.assertRaisesRegex(SystemExit, "distinct devices"):
+            _validate_unique_camera_ids(
+                ["left_wrist", "workspace", "right_wrist"], [2, 2, 4]
+            )
 
     def test_default_uses_both_wrist_cameras(self):
         self.assertEqual(

@@ -332,6 +332,22 @@ def _selected_camera_names(context_camera: bool) -> list[str]:
     return names
 
 
+def _validate_unique_camera_ids(
+    camera_names: list[str], camera_ids: list[int | str]
+) -> None:
+    """Reject camera mappings that would show one device in multiple grid cells."""
+    duplicates = {camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1}
+    if not duplicates:
+        return
+    mappings = ", ".join(
+        f"{name}={camera_id}" for name, camera_id in zip(camera_names, camera_ids)
+    )
+    raise SystemExit(
+        f"Selected cameras must use distinct devices ({mappings}). "
+        "Fix the cameras section in configs/rig.yaml or pass matching --cam-ids."
+    )
+
+
 def _init_rerun(enabled: bool, cam_names: list[str]):
     """Start Rerun with the classic live layout: 3D tracking on the left,
     cameras top-right, gripper-width chart bottom-right."""
@@ -455,6 +471,7 @@ def main() -> None:
         cam_ids = resolve_camera_ids(
             args.cam_ids, args.rig_config, camera_names=camera_names
         )
+        _validate_unique_camera_ids(camera_names, cam_ids)
         camera_specs, _ = build_camera_specs(
             cam_ids,
             camera_names=camera_names,
