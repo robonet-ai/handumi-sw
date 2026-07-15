@@ -24,7 +24,7 @@ handumi-setup-ports
 
 Reconnect one physical device at a time and assign its port under `cameras`
 or `feetech` in `configs/rig.yaml`. Robot-arm buses do not belong in this
-recording setup; configure them only when deploying to physical hardware.
+recording setup; configure them only for real-robot teleoperation.
 
 Set new Feetech IDs only when required:
 

@@ -10,15 +10,34 @@
   --handumi-red-hover: #8f0000;
 }
 
+/* Keep a real document title for navigation without duplicating the cover. */
+section#handumi > h1:first-child {
+  display: none;
+}
+
 a {
   text-underline-offset: 0.15em;
 }
 
+.navbar-brand.logo {
+  flex-direction: row;
+  gap: 0.8rem;
+  justify-content: flex-start;
+}
+
 .navbar-brand.logo .logo__image {
-  width: 9rem;
-  height: 9rem;
-  margin-inline: auto;
+  width: 4rem;
+  height: 4rem;
+  margin: 0;
   object-fit: contain;
+}
+
+.navbar-brand.logo .logo__title {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 html[data-theme="light"] {

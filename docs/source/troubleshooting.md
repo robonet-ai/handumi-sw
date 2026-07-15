@@ -56,7 +56,7 @@ Inspect `meta/handumi_quality.json`. The common causes are tracking loss, stale 
 
 ## Piper CAN Is Down or BUS-OFF
 
-This applies only to physical Piper deployment. Check robot power and wiring,
+This applies only to physical Piper teleoperation. Check robot power and wiring,
 then rerun:
 
 ```bash

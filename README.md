@@ -3,7 +3,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
-  <a href="https://robonet-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-HandUMI-AF0000.svg" alt="HandUMI documentation"></a>
+  <a href="https://robonet-ai.github.io/handumi-sw/"><img src="https://img.shields.io/badge/Docs-GitHub_Pages-AF0000.svg" alt="HandUMI documentation on GitHub Pages"></a>
 </p>
 
 [HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
@@ -14,9 +14,9 @@
 
 - [Installation](docs/source/getting_started/installation.md)
 - [Setup and calibration](docs/source/setup.md)
-- [Record demonstrations](docs/source/record.md)
 - [Teleoperation](docs/source/teleoperation.md)
-- [Dataset pipeline](docs/source/workflows/datasets.md)
+- [Record demonstrations](docs/source/record.md)
+- [Quality assurance](docs/source/workflows/datasets.md)
 - [Troubleshooting](docs/source/troubleshooting.md)
 - [Add a new robot embodiment](docs/source/development/new_embodiment.md)
 

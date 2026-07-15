@@ -1,7 +1,7 @@
 # Add a New Robot Embodiment
 
 The HandUMI recorder and raw dataset are robot agnostic. An embodiment is a
-downstream adapter for conversion, simulation, or physical deployment; adding
+downstream adapter for conversion, simulation, or real-robot control; adding
 one must not add vendor-specific requirements to HandUMI setup or recording.
 
 Current supported scope: fixed-base bimanual robots with one TCP and one

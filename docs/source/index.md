@@ -1,3 +1,5 @@
+# HandUMI
+
 ```{image} _static/HandUMI.png
 :alt: HandUMI hardware
 :class: handumi-cover
@@ -10,9 +12,9 @@
 
 getting_started/installation
 setup
+teleoperation
 record
 workflows/datasets
-teleoperation
 troubleshooting
 ```
 

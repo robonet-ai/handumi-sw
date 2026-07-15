@@ -49,7 +49,7 @@ html_theme_options = {
     "collapse_navigation": True,
     "use_sidenotes": True,
     "logo": {
-        "text": "HandUMI Documentation",
+        "text": "RoboNet",
         "image_light": "_static/robonet-logo.svg",
         "image_dark": "_static/robonet-logo-white.svg",
     },
