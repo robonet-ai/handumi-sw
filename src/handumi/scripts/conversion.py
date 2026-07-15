@@ -642,8 +642,15 @@ def _write_gripper_joints(
         normalized[:] = float(np.clip(args.gripper, 0.0, 1.0))
         print(f"    no recorded widths — constant gripper opening {args.gripper:.2f}")
     for column, side in enumerate(("left", "right")):
-        for joint_index, open_value in runtime.finger_joints.get(side, ()):
-            joints[:, joint_index] = normalized[:, column] * open_value
+        for finger in runtime.finger_joints.get(side, ()):
+            if hasattr(finger, "closed_value") and hasattr(finger, "open_value"):
+                joints[:, finger.index] = finger.closed_value + (
+                    normalized[:, column] * (finger.open_value - finger.closed_value)
+                )
+            else:
+                # Compatibility with lightweight test/runtime doubles.
+                joint_index, open_value = finger
+                joints[:, joint_index] = normalized[:, column] * open_value
 
 
 # ---------------------------------------------------------------------------

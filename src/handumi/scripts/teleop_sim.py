@@ -294,17 +294,8 @@ def _load_calibration(args: argparse.Namespace):
 
 
 def _side_joint_indices(runtime) -> dict[str, list[int]]:
-    """Actuated-joint indices per side (``left_*`` / ``right_*`` prefixes)."""
-    names = list(runtime.robot.joints.actuated_names)
-    return {
-        side: [i for i, name in enumerate(names) if name.startswith(f"{side}_")]
-        for side in ("left", "right")
-    }
-
-
-def _mjcf_name(urdf_joint_name: str) -> str:
-    """URDF joint -> Piper MJCF actuator/joint name (left_/right_ -> izq_/der_)."""
-    return urdf_joint_name.replace("left_", "izq_", 1).replace("right_", "der_", 1)
+    """Actuated-joint indices per configured logical side."""
+    return {side: runtime.arm_joint_indices(side) for side in ("left", "right")}
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:
@@ -501,14 +492,11 @@ def main() -> None:
     robot_view = None
     if not args.no_viser:
         import viser
-        import yourdfpy
         from viser.extras import ViserUrdf
 
         server = viser.ViserServer(port=args.port)
         server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-        urdf = yourdfpy.URDF.load(
-            str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
-        )
+        urdf = runtime.load_urdf(load_meshes=True)
         robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
         robot_view.update_cfg(q)
 
@@ -545,7 +533,10 @@ def main() -> None:
 
             physics = MujocoPhysics(
                 mjcf_path=runtime.config.mjcf,
-                actuator_names=[_mjcf_name(n) for n in runtime.robot.joints.actuated_names],
+                actuator_names=[
+                    runtime.mjcf_actuator_name(n)
+                    for n in runtime.robot.joints.actuated_names
+                ],
                 scene_name=args.scene,
                 scene_position=scene_position,
             )
@@ -726,12 +717,15 @@ def main() -> None:
                 # the raw IK solution.
                 joint_names = list(runtime.robot.joints.actuated_names)
                 physics.set_ctrl(
-                    {_mjcf_name(name): float(q[i]) for i, name in enumerate(joint_names)}
+                    {
+                        runtime.mjcf_actuator_name(name): float(q[i])
+                        for i, name in enumerate(joint_names)
+                    }
                 )
                 settled = physics.joint_positions()
                 q_render = q.copy()
                 for i, name in enumerate(joint_names):
-                    q_render[i] = settled.get(_mjcf_name(name), q[i])
+                    q_render[i] = settled.get(runtime.mjcf_actuator_name(name), q[i])
                 if robot_view is not None:
                     robot_view.update_cfg(q_render)
                 for body_name, frame in scene_frames.items():

@@ -16,7 +16,45 @@ from handumi.sim.viser_sim import ViserSim
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_DIR = REPO_ROOT / "configs" / "robots"
-EMBODIMENT_NAMES: tuple[str, ...] = ("axol", "piper")
+SIDES: tuple[str, str] = ("left", "right")
+
+
+def available_robot_names() -> tuple[str, ...]:
+    """Return robot names discovered from ``configs/robots/*.yaml``."""
+
+    if not CONFIG_DIR.exists():
+        return ()
+    return tuple(sorted(path.stem for path in CONFIG_DIR.glob("*.yaml")))
+
+
+EMBODIMENT_NAMES: tuple[str, ...] = available_robot_names()
+
+
+@dataclass(frozen=True)
+class GripperJointConfig:
+    """One robot joint driven by a normalized HandUMI gripper opening."""
+
+    name: str
+    closed_value: float = 0.0
+    open_value: float | None = None
+
+
+@dataclass(frozen=True)
+class GripperJointRuntime:
+    """Resolved gripper joint mapping for normalized HandUMI openings."""
+
+    index: int
+    closed_value: float
+    open_value: float
+
+
+@dataclass(frozen=True)
+class RobotArmConfig:
+    """YAML-declared logical arm mapping."""
+
+    ee_link: str
+    joint_names: tuple[str, ...] = ()
+    gripper_joints: tuple[GripperJointConfig, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -43,6 +81,9 @@ class RobotConfig:
     urdf: Path
     pkg_root: Path
     mjcf: Path | None
+    mjcf_joint_map: dict[str, str]
+    mjcf_joint_prefix_map: dict[str, str]
+    arms: dict[str, RobotArmConfig]
     ee_links: dict[str, str]
     home_q: np.ndarray
     ik_weights: KinematicsConfig
@@ -54,6 +95,17 @@ class RobotConfig:
 
 
 @dataclass(frozen=True)
+class ArmRuntime:
+    """Validated arm metadata resolved against the loaded kinematic model."""
+
+    side: str
+    ee_link: str
+    ee_index: int
+    joint_names: tuple[str, ...]
+    joint_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class RobotRuntime:
     """Resolved robot config plus constructors used by scripts."""
 
@@ -61,7 +113,7 @@ class RobotRuntime:
     config: RobotConfig
     urdf_path: Path
     robot: pk.Robot
-    ee_indices: tuple[int, int]
+    arms: dict[str, ArmRuntime]
     solver_cls: type
     config_cls: type = KinematicsConfig
     command_size: int = 0
@@ -72,31 +124,62 @@ class RobotRuntime:
     wrist_forward: float = 0.34
     wrist_height: float = 0.24
     wrist_lateral: float = 0.23
-    # Per side: [(actuated-joint index, fully-open joint value)] for the
-    # prismatic gripper fingers, derived from the URDF limits. The joint
-    # value for a given HandUMI opening is ``normalized_width * open_value``.
-    finger_joints: dict[str, tuple[tuple[int, float], ...]] = None  # type: ignore[assignment]
+    # Per side: resolved finger joints. The joint value for a given HandUMI
+    # opening is interpolated from ``closed_value`` to ``open_value``.
+    finger_joints: dict[str, tuple[GripperJointRuntime, ...]] = None  # type: ignore[assignment]
+
+    @property
+    def ee_indices(self) -> tuple[int, int]:
+        return tuple(self.arms[side].ee_index for side in SIDES)  # type: ignore[return-value]
+
+    @property
+    def joint_names(self) -> tuple[str, ...]:
+        return tuple(self.robot.joints.actuated_names)
+
+    def arm_joint_names(self, side: str) -> list[str]:
+        return list(self.arms[side].joint_names)
+
+    def arm_joint_indices(self, side: str) -> list[int]:
+        return list(self.arms[side].joint_indices)
 
     def set_finger_positions(self, q: np.ndarray, normalized: dict[str, float]) -> np.ndarray:
         """Write the gripper-finger joint values for a 0-1 opening per side
         into ``q`` (in place) and return it."""
         for side, fingers in (self.finger_joints or {}).items():
             fraction = float(np.clip(normalized.get(side, 0.0), 0.0, 1.0))
-            for joint_index, open_value in fingers:
-                q[joint_index] = fraction * open_value
+            for finger in fingers:
+                q[finger.index] = finger.closed_value + (
+                    fraction * (finger.open_value - finger.closed_value)
+                )
         return q
 
     def urdf_arm_joint_names(self, *, is_left: bool) -> list[str]:
+        """Compatibility accessor for older callers."""
         side = "left" if is_left else "right"
-        return [
-            name
-            for name in self.robot.joints.actuated_names
-            if name.startswith(f"{side}_")
-        ]
+        return self.arm_joint_names(side)
 
     def command_to_arm_q(self, command: np.ndarray) -> np.ndarray:
-        names = self.urdf_arm_joint_names(is_left=True)
+        names = self.arm_joint_names("left")
         return np.asarray(command[: len(names)], dtype=float)
+
+    def mjcf_actuator_name(self, urdf_joint_name: str) -> str:
+        """Map a URDF joint name to the configured MJCF actuator/joint name."""
+
+        exact = self.config.mjcf_joint_map.get(urdf_joint_name)
+        if exact is not None:
+            return exact
+        for source_prefix, target_prefix in self.config.mjcf_joint_prefix_map.items():
+            if urdf_joint_name.startswith(source_prefix):
+                return target_prefix + urdf_joint_name[len(source_prefix) :]
+        return urdf_joint_name
+
+    def load_urdf(self, *, load_meshes: bool = False) -> yourdfpy.URDF:
+        return yourdfpy.URDF.load(
+            str(self.urdf_path),
+            filename_handler=yourdfpy_handler(self.config.pkg_root),
+            mesh_dir=str(self.urdf_path.parent),
+            load_meshes=load_meshes,
+        )
 
     def make_sim(
         self,
@@ -108,11 +191,12 @@ class RobotRuntime:
     ) -> ViserSim:
         return ViserSim(
             urdf_path=self.urdf_path,
-            left_joint_names=self.urdf_arm_joint_names(is_left=True),
-            right_joint_names=self.urdf_arm_joint_names(is_left=False),
+            filename_handler=yourdfpy_handler(self.config.pkg_root),
+            left_joint_names=self.arm_joint_names("left"),
+            right_joint_names=self.arm_joint_names("right"),
             command_size=self.command_size,
-            arm_q_fn=self.command_to_arm_q,
-            joint_names=joint_names,
+            arm_q_fn=lambda command: np.asarray(command, dtype=float),
+            joint_names=joint_names or list(self.joint_names),
             default_q=default_q,
             scene_bodies=scene_bodies,
             port=self.default_port if port is None else port,
@@ -148,7 +232,9 @@ def yourdfpy_handler(pkg_root: str | Path):
 def load_robot_config(name: str) -> RobotConfig:
     path = CONFIG_DIR / f"{name}.yaml"
     if not path.exists():
-        raise ValueError(f"Unsupported robot {name!r}. Expected config at {path}.")
+        raise ValueError(
+            f"Unsupported robot {name!r}. Expected one of {available_robot_names()}."
+        )
     with path.open("r", encoding="utf-8") as fh:
         data: dict[str, Any] = yaml.safe_load(fh) or {}
 
@@ -158,6 +244,7 @@ def load_robot_config(name: str) -> RobotConfig:
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
+    arms = _parse_arms(data)
     controller_tcp_calibrations = {
         str(device): _resolve_path(value)
         for device, value in (data.get("controller_tcp_calibrations") or {}).items()
@@ -168,7 +255,16 @@ def load_robot_config(name: str) -> RobotConfig:
         urdf=urdf,
         pkg_root=pkg_root,
         mjcf=mjcf,
-        ee_links=dict(data["ee_links"]),
+        mjcf_joint_map={
+            str(key): str(value)
+            for key, value in (data.get("mjcf_joint_map") or {}).items()
+        },
+        mjcf_joint_prefix_map={
+            str(key): str(value)
+            for key, value in (data.get("mjcf_joint_prefix_map") or {}).items()
+        },
+        arms=arms,
+        ee_links={side: arm.ee_link for side, arm in arms.items()},
         home_q=home_q,
         gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
         controller_tcp_calibrations=controller_tcp_calibrations,
@@ -218,10 +314,12 @@ def load_embodiment(name: str) -> RobotRuntime:
         load_meshes=False,
     )
     robot = pk.Robot.from_urdf(urdf)
-    ee_indices = (
-        robot.links.names.index(cfg.ee_links["left"]),
-        robot.links.names.index(cfg.ee_links["right"]),
-    )
+    arms = _resolve_arms(name, cfg, robot)
+    ee_indices = tuple(arms[side].ee_index for side in SIDES)
+    arm_joint_indices = {
+        side: list(arms[side].joint_indices)
+        for side in SIDES
+    }
     home_q = cfg.home_q
     if home_q.size == 0:
         home_q = np.zeros(robot.joints.num_actuated_joints, dtype=np.float32)
@@ -236,35 +334,19 @@ def load_embodiment(name: str) -> RobotRuntime:
             super().__init__(
                 robot=robot,
                 ee_indices=ee_indices,
+                arm_joint_indices=arm_joint_indices,
                 home_q=home_q,
                 config=config or cfg.ik_weights,
             )
 
-    command_size = max(
-        sum(j.startswith("left_") for j in robot.joints.actuated_names),
-        sum(j.startswith("right_") for j in robot.joints.actuated_names),
-    )
-    finger_joints: dict[str, tuple[tuple[int, float], ...]] = {"left": (), "right": ()}
-    for side in ("left", "right"):
-        fingers = []
-        for index, joint_name in enumerate(robot.joints.actuated_names):
-            joint = urdf.joint_map.get(joint_name)
-            if (
-                joint is None
-                or joint.type != "prismatic"
-                or joint.limit is None
-                or not joint_name.startswith(f"{side}_")
-            ):
-                continue
-            lower, upper = float(joint.limit.lower), float(joint.limit.upper)
-            fingers.append((index, upper if abs(upper) >= abs(lower) else lower))
-        finger_joints[side] = tuple(fingers)
+    command_size = max(len(arms[side].joint_names) for side in SIDES)
+    finger_joints = _resolve_finger_joints(urdf, robot, cfg, arms)
     return RobotRuntime(
         name=name,
         config=cfg,
         urdf_path=cfg.urdf,
         robot=robot,
-        ee_indices=ee_indices,
+        arms=arms,
         solver_cls=_Solver,
         command_size=command_size,
         default_port=8002 if name == "axol" else 8003,
@@ -277,11 +359,160 @@ def _resolve_path(value: str | Path) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def _parse_arms(data: dict[str, Any]) -> dict[str, RobotArmConfig]:
+    arms_data = data.get("arms")
+    if arms_data is None:
+        legacy_ee_links = data.get("ee_links")
+        if not isinstance(legacy_ee_links, dict):
+            raise ValueError("Robot config must define arms or legacy ee_links.")
+        arms_data = {
+            side: {"ee_link": legacy_ee_links[side]}
+            for side in SIDES
+        }
+    if not isinstance(arms_data, dict):
+        raise ValueError("arms must be a mapping.")
+
+    arms: dict[str, RobotArmConfig] = {}
+    for side in SIDES:
+        raw_arm = arms_data.get(side)
+        if not isinstance(raw_arm, dict):
+            raise ValueError(f"arms.{side} must be a mapping.")
+        ee_link = raw_arm.get("ee_link")
+        if not ee_link:
+            raise ValueError(f"arms.{side}.ee_link is required.")
+        joint_names = tuple(str(name) for name in (raw_arm.get("joint_names") or ()))
+        arms[side] = RobotArmConfig(
+            ee_link=str(ee_link),
+            joint_names=joint_names,
+            gripper_joints=_parse_gripper_joints(raw_arm.get("gripper_joints")),
+        )
+    return arms
+
+
+def _parse_gripper_joints(value: Any) -> tuple[GripperJointConfig, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("gripper_joints must be a list.")
+    joints: list[GripperJointConfig] = []
+    for item in value:
+        if isinstance(item, str):
+            joints.append(GripperJointConfig(name=item))
+            continue
+        if not isinstance(item, dict) or not item.get("name"):
+            raise ValueError("Each gripper_joints entry must be a name or mapping.")
+        open_value = item.get("open")
+        closed_value = item.get("closed", 0.0)
+        joints.append(
+            GripperJointConfig(
+                name=str(item["name"]),
+                closed_value=float(closed_value),
+                open_value=None if open_value is None else float(open_value),
+            )
+        )
+    return tuple(joints)
+
+
+def _resolve_arms(name: str, cfg: RobotConfig, robot: pk.Robot) -> dict[str, ArmRuntime]:
+    actuated_names = list(robot.joints.actuated_names)
+    link_names = list(robot.links.names)
+    arms: dict[str, ArmRuntime] = {}
+    for side in SIDES:
+        arm = cfg.arms[side]
+        joint_names = arm.joint_names or tuple(
+            joint_name
+            for joint_name in actuated_names
+            if joint_name.startswith(f"{side}_")
+        )
+        if not joint_names:
+            raise ValueError(
+                f"{name}: arms.{side}.joint_names is required because no "
+                f"actuated joints start with {side!r}."
+            )
+        missing_joints = [joint for joint in joint_names if joint not in actuated_names]
+        if missing_joints:
+            raise ValueError(
+                f"{name}: arms.{side}.joint_names not in URDF actuated joints: "
+                f"{missing_joints}"
+            )
+        if arm.ee_link not in link_names:
+            raise ValueError(
+                f"{name}: arms.{side}.ee_link {arm.ee_link!r} is not a URDF link."
+            )
+        arms[side] = ArmRuntime(
+            side=side,
+            ee_link=arm.ee_link,
+            ee_index=link_names.index(arm.ee_link),
+            joint_names=tuple(joint_names),
+            joint_indices=tuple(actuated_names.index(joint) for joint in joint_names),
+        )
+    return arms
+
+
+def _resolve_finger_joints(
+    urdf: yourdfpy.URDF,
+    robot: pk.Robot,
+    cfg: RobotConfig,
+    arms: dict[str, ArmRuntime],
+) -> dict[str, tuple[GripperJointRuntime, ...]]:
+    actuated_names = list(robot.joints.actuated_names)
+    fingers_by_side: dict[str, tuple[GripperJointRuntime, ...]] = {}
+    for side in SIDES:
+        configured = cfg.arms[side].gripper_joints
+        fingers: list[GripperJointRuntime] = []
+        if configured:
+            for gripper_joint in configured:
+                if gripper_joint.name not in actuated_names:
+                    raise ValueError(
+                        f"arms.{side}.gripper_joints contains non-actuated joint "
+                        f"{gripper_joint.name!r}."
+                    )
+                open_value = (
+                    gripper_joint.open_value
+                    if gripper_joint.open_value is not None
+                    else _joint_open_value(urdf, gripper_joint.name)
+                )
+                fingers.append(
+                    GripperJointRuntime(
+                        index=actuated_names.index(gripper_joint.name),
+                        closed_value=gripper_joint.closed_value,
+                        open_value=open_value,
+                    )
+                )
+        else:
+            for joint_name in arms[side].joint_names:
+                joint = urdf.joint_map.get(joint_name)
+                if joint is None or joint.type != "prismatic" or joint.limit is None:
+                    continue
+                fingers.append(
+                    GripperJointRuntime(
+                        index=actuated_names.index(joint_name),
+                        closed_value=0.0,
+                        open_value=_joint_open_value(urdf, joint_name),
+                    )
+                )
+        fingers_by_side[side] = tuple(fingers)
+    return fingers_by_side
+
+
+def _joint_open_value(urdf: yourdfpy.URDF, joint_name: str) -> float:
+    joint = urdf.joint_map.get(joint_name)
+    if joint is None or joint.limit is None:
+        raise ValueError(f"Cannot infer open value for {joint_name!r}; set open in YAML.")
+    lower, upper = float(joint.limit.lower), float(joint.limit.upper)
+    return upper if abs(upper) >= abs(lower) else lower
+
+
 __all__ = [
+    "ArmRuntime",
     "EMBODIMENT_NAMES",
+    "GripperJointConfig",
+    "GripperJointRuntime",
+    "RobotArmConfig",
     "RobotConfig",
     "RobotRealConfig",
     "RobotRuntime",
+    "available_robot_names",
     "load_embodiment",
     "load_robot_config",
     "yourdfpy_handler",

@@ -1,9 +1,27 @@
 kind: axol
 urdf: assets/axol/urdf/axol.urdf
 pkg_root: assets/axol/urdf
-ee_links:
-  left: left_gripper
-  right: right_gripper
+arms:
+  left:
+    ee_link: left_gripper
+    joint_names:
+      - left_e1_0
+      - left_e2_0
+      - left_s1_0
+      - left_s2_0
+      - left_s3_0
+      - left_w1_0
+      - left_w2_0
+  right:
+    ee_link: right_gripper
+    joint_names:
+      - right_e1_0
+      - right_e2_0
+      - right_s1_0
+      - right_s2_0
+      - right_s3_0
+      - right_w1_0
+      - right_w2_0
 home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 ik_weights:
   pos: 100.0

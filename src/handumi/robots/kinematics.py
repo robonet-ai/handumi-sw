@@ -121,6 +121,7 @@ class BimanualKinematicsSolver:
         *,
         robot: pk.Robot,
         ee_indices: tuple[int, int],
+        arm_joint_indices: dict[str, list[int]] | None = None,
         home_q: np.ndarray,
         config: KinematicsConfig,
     ) -> None:
@@ -129,8 +130,13 @@ class BimanualKinematicsSolver:
         self.home_q = np.asarray(home_q, dtype=np.float32)
         self.config = config
         self.l_ee_idx, self.r_ee_idx = ee_indices
-        self.left_indices = _side_indices(robot, "left")
-        self.right_indices = _side_indices(robot, "right")
+        arm_joint_indices = arm_joint_indices or {}
+        self.left_indices = list(
+            arm_joint_indices.get("left") or _side_indices(robot, "left")
+        )
+        self.right_indices = list(
+            arm_joint_indices.get("right") or _side_indices(robot, "right")
+        )
         self.left_joint_indices = self.left_indices
         self.right_joint_indices = self.right_indices
         self.l_elbow_idx = -1

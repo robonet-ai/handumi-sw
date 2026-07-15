@@ -1159,17 +1159,12 @@ def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.n
 
 def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
     import viser
-    import yourdfpy
     from viser.extras import ViserUrdf
 
     runtime = load_embodiment(args.robot)
     server = viser.ViserServer(port=args.port)
     server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-    urdf = yourdfpy.URDF.load(
-        str(runtime.urdf_path),
-        mesh_dir=str(runtime.urdf_path.parent),
-        load_meshes=True,
-    )
+    urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
     server.scene.add_spline_catmull_rom(

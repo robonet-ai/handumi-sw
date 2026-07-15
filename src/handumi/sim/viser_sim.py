@@ -111,6 +111,7 @@ class ViserSim:
         self,
         *,
         urdf_path: Path,
+        filename_handler: Callable[[str], str] | None = None,
         left_joint_names: list[str],
         right_joint_names: list[str],
         command_size: int,
@@ -122,6 +123,7 @@ class ViserSim:
         port: int,
     ) -> None:
         self._urdf_path = urdf_path
+        self._filename_handler = filename_handler
         self._left_joint_names = left_joint_names
         self._right_joint_names = right_joint_names
         self._command_size = command_size
@@ -200,15 +202,34 @@ class ViserSim:
             self._condition.notify()
 
     def _build_q(self) -> np.ndarray:
-        """Concatenate left-arm and right-arm URDF joint vectors."""
-        return np.concatenate([self._arm_q(self._last_left), self._arm_q(self._last_right)])
+        """Build one full robot-order vector from the per-arm commands."""
+        robot_order = self._robot_order()
+        q = np.zeros(len(robot_order), dtype=np.float32)
+        for names, command in (
+            (self._left_joint_names, self._last_left),
+            (self._right_joint_names, self._last_right),
+        ):
+            values = self._arm_q(command)
+            for name, value in zip(names, values, strict=False):
+                try:
+                    q[robot_order.index(name)] = value
+                except ValueError:
+                    continue
+        return q
+
+    def _robot_order(self) -> list[str]:
+        if self._joint_names is not None:
+            return list(self._joint_names)
+        return list(self._left_joint_names) + list(self._right_joint_names)
 
     def _run(self) -> None:
         """Blocking viser server loop (runs in a daemon thread)."""
         server = viser.ViserServer(port=self._port)
 
         urdf = yourdfpy.URDF.load(
-            str(self._urdf_path), mesh_dir=str(self._urdf_path.parent)
+            str(self._urdf_path),
+            filename_handler=self._filename_handler,
+            mesh_dir=str(self._urdf_path.parent),
         )
         viser_urdf = ViserUrdf(
             server,
@@ -218,11 +239,7 @@ class ViserSim:
             load_collision_meshes=False,
         )
 
-        # Build the solver-order joint list (left then right).
-        # ``_joint_names`` overrides the left-arm default when provided.
-        robot_order = (
-            self._joint_names or self._left_joint_names
-        ) + self._right_joint_names
+        robot_order = self._robot_order()
 
         viser_order = viser_urdf.get_actuated_joint_names()
         viser_to_robot: list[int] = []

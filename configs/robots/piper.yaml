@@ -2,12 +2,35 @@ kind: piper
 urdf: assets/piper/piper.urdf
 mjcf: assets/piper/piper.xml  # contact physics for handumi-teleop-sim --scene
 pkg_root: assets/piper
-ee_links:
-  left: left_tcp
-  right: right_tcp
-# Physical Piper start pose used by handumi-IK: joint5 +25 deg per arm.
-# Keeping simulation, conversion, and real-arm startup on the same home avoids
-# an artificial offset when the controller pose is anchored.
+mjcf_joint_prefix_map:
+  left_: izq_
+  right_: der_
+arms:
+  left:
+    ee_link: left_tcp
+    joint_names:
+      - left_joint1
+      - left_joint2
+      - left_joint3
+      - left_joint4
+      - left_joint5
+      - left_joint6
+      - left_joint7
+      - left_joint8
+  right:
+    ee_link: right_tcp
+    joint_names:
+      - right_joint1
+      - right_joint2
+      - right_joint3
+      - right_joint4
+      - right_joint5
+      - right_joint6
+      - right_joint7
+      - right_joint8
+# Physical Piper start pose: joint5 +25 deg per arm. Keeping simulation,
+# conversion, and real-arm startup on the same home avoids an artificial
+# offset when the controller pose is anchored.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.066
 # Physical tool assembly installed on HandUMI while demonstrating Piper tasks.
@@ -24,7 +47,7 @@ ik_weights:
   pos: 100.0
   ori: 4.5
   rest: 12.0
-  # 4 deg per IK frame, matching the validated handumi-IK teleop command.
+  # 4 deg per IK frame.
   max_joint_delta: 0.06981317
   max_reach: 0.45
 real:
