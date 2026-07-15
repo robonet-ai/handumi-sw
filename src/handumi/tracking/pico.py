@@ -73,12 +73,16 @@ def guess_lan_ip() -> str | None:
         return None
 
 
-def verify_adb_connection(timeout_s: float = 15.0) -> bool:
+def verify_adb_connection(
+    timeout_s: float = 15.0,
+    *,
+    runner=subprocess.run,
+) -> bool:
     """Return whether at least one ADB device is connected within ``timeout_s``."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
-            result = subprocess.run(
+            result = runner(
                 ["adb", "devices"], capture_output=True, text=True, timeout=5
             )
         except FileNotFoundError:
@@ -97,11 +101,11 @@ def verify_adb_connection(timeout_s: float = 15.0) -> bool:
     return False
 
 
-def setup_adb_reverse() -> None:
+def setup_adb_reverse(*, runner=subprocess.run) -> bool:
     """Set up ADB reverse port forwarding for PICO USB mode."""
     log.info(f"Setting up ADB reverse tunnel for PICO port {PICO_SERVICE_PORT} ...")
     try:
-        result = subprocess.run(
+        result = runner(
             ["adb", "reverse", f"tcp:{PICO_SERVICE_PORT}", f"tcp:{PICO_SERVICE_PORT}"],
             capture_output=True,
             text=True,
@@ -112,6 +116,7 @@ def setup_adb_reverse() -> None:
                 f"ADB reverse tcp:{PICO_SERVICE_PORT} -> localhost:{PICO_SERVICE_PORT} OK. "
                 "Set PC-service IP to 127.0.0.1 in the PICO app."
             )
+            return True
         else:
             log.warning(
                 f"adb reverse returned non-zero ({result.returncode}): {result.stderr.strip()}"
@@ -120,6 +125,79 @@ def setup_adb_reverse() -> None:
         log.warning("'adb' not found - skipping reverse tunnel setup.")
     except subprocess.TimeoutExpired:
         log.warning("adb reverse timed out - skipping.")
+    return False
+
+
+def keep_pico_awake(*, runner=subprocess.run) -> bool:
+    """Best-effort ADB nudges to keep a USB-connected PICO from sleeping."""
+    commands = [
+        ["adb", "shell", "svc", "power", "stayon", "usb"],
+        ["adb", "shell", "input", "keyevent", "WAKEUP"],
+    ]
+    ok = True
+    for command in commands:
+        try:
+            result = runner(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            log.warning("'adb' not found - cannot keep PICO awake.")
+            return False
+        except subprocess.TimeoutExpired:
+            log.warning("ADB command timed out: %s", " ".join(command))
+            ok = False
+            continue
+        if result.returncode != 0:
+            log.warning(
+                "ADB command failed (%s): %s",
+                " ".join(command),
+                (result.stderr or "").strip(),
+            )
+            ok = False
+    if ok:
+        log.info("PICO keep-awake over USB enabled.")
+    return ok
+
+
+def prepare_pico_adb_session(
+    *,
+    skip_adb_check: bool = False,
+    timeout_s: float = 15.0,
+    runner=subprocess.run,
+) -> bool:
+    """Validate USB ADB, configure reverse tunnel, and keep PICO awake."""
+    if not skip_adb_check:
+        log.info("Checking ADB connection ...")
+        if not verify_adb_connection(timeout_s=timeout_s, runner=runner):
+            raise SystemExit(
+                f"No ADB device found after {timeout_s:.0f} s. Connect the PICO via USB, "
+                "enable USB debugging, or pass --pico-wifi/--skip-adb-check."
+            )
+    reverse_ok = setup_adb_reverse(runner=runner)
+    awake_ok = keep_pico_awake(runner=runner)
+    return reverse_ok and awake_ok
+
+
+def stop_xrt_service(*, runner=subprocess.run) -> None:
+    """Best-effort cleanup of XRoboToolkit services before a relaunch."""
+    for pattern in (SERVICE_SCRIPT, "/opt/apps/roboticsservice"):
+        try:
+            runner(
+                ["pkill", "-f", pattern],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except FileNotFoundError:
+            return
+        except subprocess.TimeoutExpired:
+            log.warning("Timed out while stopping XRoboToolkit service.")
+            return
+    time.sleep(0.3)
 
 
 def launch_xrt_service() -> None:
@@ -669,14 +747,11 @@ class PicoTrackingProvider:
         self._packet_stream = TrackingPacketStream(2048)
 
     def start(self) -> None:
-        if self.transport == "adb" and not self.skip_adb_check:
-            log.info("Checking ADB connection ...")
-            if not verify_adb_connection(timeout_s=15.0):
-                raise SystemExit(
-                    "No ADB device found after 15 s. Connect the PICO via USB, "
-                    "enable USB debugging, or pass --pico-wifi/--skip-adb-check."
-                )
-            setup_adb_reverse()
+        if self.transport == "adb":
+            prepare_pico_adb_session(
+                skip_adb_check=self.skip_adb_check,
+                timeout_s=15.0,
+            )
         elif self.transport == "wifi":
             lan_ip = guess_lan_ip()
             if lan_ip:
@@ -690,10 +765,32 @@ class PicoTrackingProvider:
         else:
             log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
 
+        stop_xrt_service()
         launch_xrt_service()
         self.xrt = init_xrt()
         if not wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=15.0):
             log.warning("PICO %r data not available after 15 s; poses may be zero-filled.", self.mode)
+
+    def recover(self) -> bool:
+        """Best-effort reconnect after PICO tracking drops during teleop."""
+        log.warning("Trying to recover PICO tracking ...")
+        self.stop()
+        try:
+            if self.transport == "adb" and not self.skip_adb_check:
+                prepare_pico_adb_session(skip_adb_check=False, timeout_s=5.0)
+            elif self.transport == "wifi":
+                lan_ip = guess_lan_ip()
+                if lan_ip:
+                    log.info("PICO WiFi mode: PC-service IP should be %s:%d.", lan_ip, PICO_SERVICE_PORT)
+            stop_xrt_service()
+            launch_xrt_service()
+            self.xrt = init_xrt()
+            return wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=5.0)
+        except SystemExit as exc:
+            log.warning("PICO recovery failed: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - XR SDK recovery can fail in many ways.
+            log.warning("PICO recovery failed: %s", exc)
+        return False
 
     def stop(self) -> None:
         if self.xrt is not None:
@@ -734,6 +831,9 @@ class PicoTrackingProvider:
             left_pose_valid=tracked,
             right_pose_valid=tracked,
             hmd_pose=hmd,
+            left_device_controller_pose=left.copy(),
+            right_device_controller_pose=right.copy(),
+            device_hmd_pose=hmd.copy(),
             hmd_tracked=bool(np.any(hmd[:3])),
             device_time_ns=device_time_ns,
             pc_monotonic_ns=pc_time_ns,

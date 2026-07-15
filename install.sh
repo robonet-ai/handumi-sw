@@ -39,6 +39,15 @@ pip_installed() {
   uv pip show "$1" >/dev/null 2>&1
 }
 
+ensure_rig_config() {
+  if [[ -f "configs/rig.yaml" ]]; then
+    echo "==> Reusing local rig configuration (configs/rig.yaml)"
+    return 0
+  fi
+  cp configs/rig.example.yaml configs/rig.yaml
+  echo "==> Created configs/rig.yaml from the example; edit it for this machine"
+}
+
 # ── XRoboToolkit sources ──────────────────────────────────────────────────────
 
 ensure_xrobotoolkit_sources() {
@@ -159,6 +168,7 @@ ensure_xrobotoolkit_python_package() {
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+ensure_rig_config
 if [[ "$SKIP_XRT" -eq 1 ]]; then
   echo "==> --skip-xrt: skipping XRoboToolkit (PICO) sources/build/package"
 else

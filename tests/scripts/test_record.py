@@ -1,18 +1,33 @@
 import threading
+import argparse
+import json
+import os
+import pty
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
+    _capture_sources_metadata,
     _default_output_dir,
+    _EscapeStopListener,
+    _recording_tcp_calibration_metadata,
+    _robot_metadata,
+    _selected_camera_names,
+    _validate_finalized_lerobot_dataset,
+    _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
     build_features,
+    _write_dataset_readme,
     build_observation,
     record_episode,
 )
@@ -74,6 +89,9 @@ class _FakeDataset:
     def add_frame(self, frame: dict) -> None:
         self.frames.append(frame)
 
+    def clear_episode_buffer(self) -> None:
+        self.frames.clear()
+
 
 class _HealthyTracker:
     device = "meta"
@@ -117,11 +135,208 @@ def _clap_sequence() -> list[GripperWidths]:
     ]
 
 
+def _left_clap_sequence() -> list[GripperWidths]:
+    return [
+        _widths(50.0, 50.0),
+        _widths(2.0, 50.0),
+        _widths(50.0, 50.0),
+        _widths(2.0, 50.0),
+        _widths(50.0, 50.0),
+    ]
+
+
 class DefaultOutputDirTest(unittest.TestCase):
     def test_is_timestamped_under_outputs(self):
         out = _default_output_dir()
         self.assertEqual(out.parent, Path("outputs"))
         self.assertRegex(out.name, r"^\d{8}_\d{6}$")
+
+
+class CameraSelectionTest(unittest.TestCase):
+    @staticmethod
+    def _args(**overrides):
+        values = {
+            "wrist_cameras": False,
+            "workspace_camera": False,
+            "only_left_camera": False,
+            "only_right_camera": False,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_defaults_to_both_wrist_cameras(self):
+        self.assertEqual(
+            _selected_camera_names(self._args()),
+            ["left_wrist", "right_wrist"],
+        )
+
+    def test_all_three_cameras_can_be_selected(self):
+        self.assertEqual(
+            _selected_camera_names(
+                self._args(wrist_cameras=True, workspace_camera=True)
+            ),
+            ["left_wrist", "right_wrist", "workspace"],
+        )
+
+    def test_only_right_camera(self):
+        self.assertEqual(
+            _selected_camera_names(self._args(only_right_camera=True)),
+            ["right_wrist"],
+        )
+
+    def test_duplicate_camera_devices_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            _validate_unique_camera_ids(
+                ["right_wrist", "workspace"],
+                [4, 4],
+            )
+
+    def test_source_enablement_is_dataset_metadata(self):
+        sources = _capture_sources_metadata(
+            [{"name": "left_wrist"}, {"name": "right_wrist"}],
+            [object(), None],
+            grippers=None,
+        )
+
+        self.assertEqual(sources["tracking"], {"enabled": True})
+        self.assertEqual(sources["feetech"], {"enabled": False})
+        self.assertEqual(
+            sources["cameras"],
+            {
+                "left_wrist": {"enabled": True},
+                "right_wrist": {"enabled": False},
+            },
+        )
+
+
+class RobotMetadataTest(unittest.TestCase):
+    def test_snapshots_robot_config_and_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            path = config_dir / "piper.yaml"
+            path.write_text("kind: piper\nhome_q: [0.0]\n")
+
+            metadata = _robot_metadata("piper", config_dir)
+
+        self.assertEqual(metadata["name"], "piper")
+        self.assertEqual(metadata["configuration"]["kind"], "piper")
+        self.assertEqual(len(metadata["sha256"]), 64)
+
+    def test_robot_tool_tcp_setup_is_snapshotted_with_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calibration = root / "piper_meta_tcp.yaml"
+            calibration.write_text(
+                """\
+calibration:
+  controller_to_gripper_tcp:
+    left:
+      position: [0.1, 0.0, -0.2]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+    right:
+      position: [0.1, 0.0, -0.2]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+"""
+            )
+            robot_metadata = {
+                "name": "piper",
+                "configuration": {
+                    "handumi_tool": {
+                        "gripper": "piper_parallel_v1",
+                        "controller_mount": "handumi_v1",
+                    },
+                    "controller_tcp_calibrations": {"meta": str(calibration)},
+                },
+            }
+
+            metadata, source = _recording_tcp_calibration_metadata(
+                robot_metadata=robot_metadata,
+                device="meta",
+                explicit_path=None,
+            )
+
+        self.assertEqual(metadata["schema_version"], 2)
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["tracking_device"], "meta")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
+        self.assertIn("configured piper/meta", source)
+
+    def test_piper_meta_recording_uses_permanent_robot_tool_setup(self):
+        metadata, source = _recording_tcp_calibration_metadata(
+            robot_metadata=_robot_metadata("piper"),
+            device="meta",
+            explicit_path=None,
+        )
+
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
+        self.assertEqual(len(metadata["sha256"]), 64)
+        self.assertTrue(str(metadata["source_path"]).endswith("meta_controller_tcp.yaml"))
+        self.assertIn("configured piper/meta", source)
+
+
+class FinalizedDatasetGuaranteesTest(unittest.TestCase):
+    @staticmethod
+    def _valid_dataset(root: Path) -> None:
+        (root / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
+        (root / "data" / "chunk-000").mkdir(parents=True)
+        (root / "meta" / "stats.json").write_text("{}\n")
+        info = {
+            "codebase_version": "v3.0",
+            "total_episodes": 1,
+            "total_frames": 2,
+            "features": {},
+        }
+        (root / "meta" / "info.json").write_text(json.dumps(info))
+        pq.write_table(
+            pa.table({"task_index": [0], "task": ["test"]}),
+            root / "meta" / "tasks.parquet",
+        )
+        pq.write_table(
+            pa.table({"episode_index": [0]}),
+            root / "meta" / "episodes" / "chunk-000" / "file-000.parquet",
+        )
+        pq.write_table(
+            pa.table({"episode_index": [0, 0], "frame_index": [0, 1]}),
+            root / "data" / "chunk-000" / "file-000.parquet",
+        )
+
+    def test_writes_local_lerobot_card_and_validates_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._valid_dataset(root)
+
+            _write_dataset_readme(
+                root,
+                repo_id="local/test",
+                task="pick cube",
+                license_id="other",
+            )
+            _validate_finalized_lerobot_dataset(root)
+
+            readme = (root / "README.md").read_text()
+            self.assertIn("LeRobot", readme)
+            self.assertIn("HandUMI", readme)
+            self.assertIn("pick cube", readme)
+
+    def test_rejects_incomplete_data_parquet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._valid_dataset(root)
+            _write_dataset_readme(
+                root,
+                repo_id="local/test",
+                task="test",
+                license_id="other",
+            )
+            (root / "data" / "chunk-000" / "file-000.parquet").write_bytes(
+                b"incomplete"
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Parquet files are incomplete"):
+                _validate_finalized_lerobot_dataset(root)
 
 
 class WaitForClapTest(unittest.TestCase):
@@ -138,6 +353,21 @@ class WaitForClapTest(unittest.TestCase):
         self.assertFalse(_wait_for_clap(grippers, DoubleClapDetector(), stop))
 
 
+class EscapeStopListenerTest(unittest.TestCase):
+    def test_escape_sets_graceful_stop_event(self):
+        master_fd, slave_fd = pty.openpty()
+        stop = threading.Event()
+        listener = _EscapeStopListener(stop, fd=slave_fd)
+        try:
+            self.assertTrue(listener.start())
+            os.write(master_fd, b"\x1b")
+            self.assertTrue(stop.wait(timeout=1.0))
+        finally:
+            listener.stop()
+            os.close(master_fd)
+            os.close(slave_fd)
+
+
 class WaitForTrackingTest(unittest.TestCase):
     def test_waits_until_both_controllers_are_tracked(self):
         tracker = _ScriptedTracker([False, True])
@@ -152,7 +382,7 @@ class WaitForTrackingTest(unittest.TestCase):
 
 
 class RecordEpisodeClapControlTest(unittest.TestCase):
-    def test_double_clap_stops_the_episode(self):
+    def test_double_clap_stops_and_keeps_the_episode(self):
         dataset = _FakeDataset()
         n_frames, status = record_episode(
             dataset=dataset,
@@ -174,12 +404,61 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
             clap_detector=DoubleClapDetector(),
         )
         self.assertEqual(status, "recorded")
-        # The clap frames themselves are not recorded; only pre-clap ones.
-        self.assertGreaterEqual(n_frames, 1)
-        self.assertLess(n_frames, 10)
-        for frame in dataset.frames:
-            self.assertIn("observation.state", frame)
-            self.assertEqual(frame["observation.state"].dtype, np.float32)
+        self.assertGreater(n_frames, 0)
+        self.assertEqual(len(dataset.frames), n_frames)
+
+    def test_left_double_clap_discards_and_restarts_the_episode(self):
+        dataset = _FakeDataset()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_FakeTracker(),
+            grippers=_FakeGrippers(_left_clap_sequence()),
+            episode_time_s=9999.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            clap_detector=DoubleClapDetector(),
+        )
+        self.assertEqual(status, "repeat")
+        self.assertGreaterEqual(n_frames, 0)
+        self.assertEqual(dataset.frames, [])
+
+    def test_global_stop_discards_an_active_partial_episode(self):
+        dataset = _FakeDataset()
+        dataset.add_frame({"partial": True})
+        stop = threading.Event()
+        stop.set()
+
+        _, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_FakeTracker(),
+            grippers=_FakeGrippers([_widths(50.0, 50.0)]),
+            episode_time_s=9999.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=stop,
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+        )
+
+        self.assertEqual(status, "interrupted")
+        self.assertEqual(dataset.frames, [])
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):
@@ -262,7 +541,9 @@ class BuildObservationTest(unittest.TestCase):
         self.assertEqual(state.shape, (16,))
         self.assertAlmostEqual(float(state[14]), 0.011, places=5)
         self.assertAlmostEqual(float(state[15]), 0.022, places=5)
-        self.assertIn("observation.tracking.left_controller_pose", obs)
+        self.assertNotIn("observation.tracking.left_controller_pose", obs)
+        self.assertIn("observation.tracking.left_device_controller_pose", obs)
+        self.assertEqual(obs["observation.valid"].shape, (8,))
         self.assertNotIn("observation.tracking.left_tcp_pose", obs)
 
 

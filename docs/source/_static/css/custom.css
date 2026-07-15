@@ -1,0 +1,107 @@
+:root {
+  --handumi-black: #050505;
+  --handumi-ink: #111111;
+  --handumi-surface: #1a1a1a;
+  --handumi-surface-raised: #2a2a2a;
+  --handumi-muted: #777777;
+  --handumi-border: #d7d7d7;
+  --handumi-paper: #f7f7f5;
+  --handumi-red: #af0000;
+  --handumi-red-hover: #8f0000;
+}
+
+/* Keep a real document title for navigation without duplicating the cover. */
+section#handumi > h1:first-child {
+  display: none;
+}
+
+a {
+  text-underline-offset: 0.15em;
+}
+
+.navbar-brand.logo {
+  flex-direction: row;
+  gap: 0.8rem;
+  justify-content: flex-start;
+}
+
+.navbar-brand.logo .logo__image {
+  width: 4rem;
+  height: 4rem;
+  margin: 0;
+  object-fit: contain;
+}
+
+.navbar-brand.logo .logo__title {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+html[data-theme="light"] {
+  --pst-color-primary: var(--handumi-red);
+  --pst-color-link: var(--handumi-red);
+  --pst-color-link-hover: var(--handumi-red-hover);
+  --pst-color-background: var(--handumi-paper);
+  --pst-color-on-background: #ffffff;
+  --pst-color-surface: #ffffff;
+  --pst-color-on-surface: var(--handumi-paper);
+  --pst-color-text-base: var(--handumi-ink);
+  --pst-color-text-muted: #555555;
+  --pst-color-border: var(--handumi-border);
+}
+
+html[data-theme="dark"] {
+  --pst-color-primary: #e05a5a;
+  --pst-color-link: #e86c6c;
+  --pst-color-link-hover: #ff8a8a;
+  --pst-color-background: var(--handumi-black);
+  --pst-color-on-background: var(--handumi-surface);
+  --pst-color-surface: var(--handumi-surface);
+  --pst-color-on-surface: var(--handumi-surface-raised);
+  --pst-color-text-base: var(--handumi-paper);
+  --pst-color-text-muted: var(--handumi-border);
+  --pst-color-border: var(--handumi-surface-raised);
+}
+
+.handumi-cover {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border-radius: 0.75rem;
+}
+
+.sd-card {
+  border-radius: 0.75rem;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.sd-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0.5rem 1.25rem rgba(17, 24, 39, 0.12);
+}
+
+.sd-btn-primary {
+  border-color: var(--handumi-red) !important;
+  background-color: var(--handumi-red) !important;
+  color: #ffffff !important;
+}
+
+.sd-btn-primary:hover {
+  border-color: var(--handumi-red-hover) !important;
+  background-color: var(--handumi-red-hover) !important;
+}
+
+/* Match the wide three-column proportions used by the SONIC documentation. */
+@media (min-width: 1400px) {
+  html {
+    --pst-sidebar-secondary: 20rem;
+  }
+
+  .bd-sidebar-primary {
+    flex: 0 0 20rem;
+    width: 20rem;
+  }
+}

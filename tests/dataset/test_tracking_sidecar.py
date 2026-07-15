@@ -10,6 +10,12 @@ from handumi.body.model import (
     canonical_body_features,
 )
 from handumi.dataset.reader import load_raw_episode
+from handumi.dataset.raw import (
+    HANDUMI_CAPTURE_SCHEMA,
+    HANDUMI_STATE_SEMANTICS,
+    HANDUMI_TRACKING_SCHEMA,
+    TRACKING_VALIDITY_NAMES,
+)
 from handumi.dataset.tracking_sidecar import (
     TrackingSidecarWriter,
     discover_tracking_sidecars,
@@ -30,6 +36,17 @@ def _packet(seq: int = 1):
         clock_offset_ns=50,
         rtt_ns=10,
     )
+
+
+def _current_dataset_info() -> dict:
+    return {
+        "handumi": {
+            "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+            "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+            "state_semantics": HANDUMI_STATE_SEMANTICS,
+            "sources": {"feetech": {"enabled": False}, "cameras": {}},
+        }
+    }
 
 
 def test_84_joint_sidecar_round_trip_preserves_raw_and_typed_arrays(tmp_path):
@@ -192,18 +209,20 @@ def test_derived_writer_preserves_optional_body_and_sidecar_when_requested(tmp_p
     )["sessionId"] == "derived-source"
 
 
-def test_old_recording_without_body_loads_none_instead_of_invented_pose(tmp_path):
+def test_controller_only_recording_loads_none_instead_of_invented_pose(tmp_path):
     class Table:
-        column_names = ["observation.state"]
+        column_names = ["observation.state", "observation.valid"]
 
         def __getitem__(self, key):
-            assert key == "observation.state"
-            return np.zeros((2, 16), dtype=np.float32)
+            if key == "observation.state":
+                return np.zeros((2, 16), dtype=np.float32)
+            return np.ones((2, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64)
 
     class Dataset:
         fps = 30
         hf_dataset = Table()
         root = tmp_path
+        meta = type("Meta", (), {"info": _current_dataset_info()})()
 
     with mock.patch("handumi.dataset.reader.open_dataset", return_value=Dataset()):
         episode = load_raw_episode(
@@ -249,17 +268,26 @@ def test_mixed_derived_dataset_marks_old_episode_body_unavailable(tmp_path):
 
 def test_reader_discovers_optional_body_columns(tmp_path):
     class Table:
-        column_names = ["observation.state", "observation.body.joint_pose"]
+        column_names = [
+            "observation.state",
+            "observation.valid",
+            "observation.body.joint_pose",
+        ]
 
         def __getitem__(self, key):
             if key == "observation.state":
                 return np.zeros((2, 16), dtype=np.float32)
+            if key == "observation.valid":
+                return np.ones(
+                    (2, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64
+                )
             return [np.zeros((25, 7), dtype=np.float32) for _ in range(2)]
 
     class Dataset:
         fps = 30
         hf_dataset = Table()
         root = tmp_path
+        meta = type("Meta", (), {"info": _current_dataset_info()})()
 
     with mock.patch("handumi.dataset.reader.open_dataset", return_value=Dataset()):
         episode = load_raw_episode(

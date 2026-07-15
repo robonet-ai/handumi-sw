@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
-import yaml
 
 from handumi.cameras.base import CameraDevice, CameraSample
 from handumi.cameras.opencv import OpenCVCameraDevice
+from handumi.config import load_rig_section
 
 log = logging.getLogger("handumi.record")
 
@@ -20,11 +20,20 @@ CameraSpec = dict[str, Any]
 def build_camera_specs(
     cam_ids: list[int | str],
     *,
+    camera_names: Sequence[str] | None = None,
     laptop_camera: bool,
     laptop_cam_id: int,
     laptop_cam_name: str,
 ) -> tuple[list[CameraSpec], str | None]:
-    names = ["left_wrist", "right_wrist"]
+    if camera_names is None:
+        names = ["left_wrist", "right_wrist"]
+        names.extend(f"cam_{i}" for i in range(2, len(cam_ids)))
+    else:
+        names = list(camera_names)
+    if len(names) != len(cam_ids):
+        raise ValueError(
+            f"Expected {len(names)} camera IDs for {names}, got {len(cam_ids)}."
+        )
     specs = []
     for i, cam_id in enumerate(cam_ids):
         name = names[i] if i < len(names) else f"cam_{i}"
@@ -45,17 +54,22 @@ def build_camera_specs(
 
 def resolve_camera_ids(
     cam_ids: list[int | str] | None,
-    camera_config: Path,
+    rig_config: Path,
+    *,
+    camera_names: Sequence[str] | None = None,
 ) -> list[int | str]:
+    names = list(camera_names or ("left_wrist", "right_wrist"))
     if cam_ids is not None:
+        if camera_names is not None and len(cam_ids) != len(names):
+            raise ValueError(
+                f"Expected {len(names)} --cam-ids values for {names}, got {len(cam_ids)}."
+            )
         return cam_ids
-    if not camera_config.exists():
-        return [0, 2]
-    with camera_config.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    defaults = {"left_wrist": 0, "right_wrist": 2, "workspace": 4}
+    data = load_rig_section(rig_config, "cameras")
     return [
-        _read_camera_value(data, "left_wrist", 0),
-        _read_camera_value(data, "right_wrist", 2),
+        _read_camera_value(data, name, defaults.get(name, 0))
+        for name in names
     ]
 
 
@@ -168,12 +182,9 @@ def read_camera_samples(
         )
         health[f"camera.{name}"] = healthy
         frame[f"observation.images.{name}"] = sample.image
-        frame[f"{prefix}.enabled"] = _scalar_int(enabled)
         frame[f"{prefix}.healthy"] = _scalar_int(healthy if enabled else False)
         frame[f"{prefix}.sample_time_ns"] = _scalar_int(sample.capture_time_ns)
         frame[f"{prefix}.sequence"] = _scalar_int(sample.sequence)
-        frame[f"{prefix}.age_ms"] = _scalar_float(age_ns / 1e6)
-        frame[f"{prefix}.sync_error_ms"] = _scalar_float(sync_error_ns / 1e6)
     return frame, health
 
 
@@ -217,7 +228,3 @@ def _read_camera_value(data: dict[str, Any], key: str, default: int) -> int | st
 
 def _scalar_int(value: int | bool) -> np.ndarray:
     return np.array([int(value)], dtype=np.int64)
-
-
-def _scalar_float(value: float) -> np.ndarray:
-    return np.array([float(value)], dtype=np.float32)

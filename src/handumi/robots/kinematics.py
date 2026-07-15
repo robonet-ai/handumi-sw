@@ -26,6 +26,22 @@ class KinematicsConfig:
     max_reach: float | None = None
 
 
+def limit_joint_delta(
+    q_current: np.ndarray,
+    q_target: np.ndarray,
+    max_delta: float | None,
+) -> np.ndarray:
+    """Limit each joint's change while preserving the solver's direction."""
+    current = np.asarray(q_current, dtype=np.float32)
+    target = np.asarray(q_target, dtype=np.float32)
+    if max_delta is None:
+        return target
+    if max_delta <= 0.0:
+        raise ValueError("max_joint_delta must be > 0")
+    delta = np.clip(target - current, -float(max_delta), float(max_delta))
+    return (current + delta).astype(np.float32)
+
+
 @jdc.jit
 def _solve(
     robot,
@@ -174,7 +190,7 @@ class BimanualKinematicsSolver:
                     _pose_rotation_to_wxyz(np.asarray(rot, dtype=np.float32))
                 )
 
-        return solve_bimanual(
+        q_target = solve_bimanual(
             self.robot,
             self.ee_indices,
             np.asarray(tgt_pos, dtype=np.float32),
@@ -184,6 +200,7 @@ class BimanualKinematicsSolver:
             ori_weight=self.config.ori_weight,
             rest_weight=self.config.rest_weight,
         )
+        return limit_joint_delta(q_prev, q_target, self.config.max_joint_delta)
 
 
 def _side_indices(robot: pk.Robot, side: str) -> list[int]:

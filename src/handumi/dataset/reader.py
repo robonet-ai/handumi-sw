@@ -8,6 +8,12 @@ from typing import Any
 
 import numpy as np
 
+from handumi.dataset.raw import (
+    HANDUMI_CAPTURE_SCHEMA,
+    HANDUMI_STATE_SEMANTICS,
+    HANDUMI_TRACKING_SCHEMA,
+    TRACKING_VALIDITY_NAMES,
+)
 from handumi.dataset.writer import info_path, load_info
 from handumi.dataset.tracking_sidecar import discover_tracking_sidecars
 
@@ -63,7 +69,7 @@ class CanonicalBodyEpisode:
 
 @dataclass(frozen=True)
 class RawEpisode:
-    """Raw state plus scalar capture diagnostics for one episode."""
+    """Raw state plus derived diagnostics for one compact HandUMI episode."""
 
     states: np.ndarray
     fps: float
@@ -88,14 +94,25 @@ def recording_device(info_or_root: dict[str, Any] | str | Path) -> str | None:
 
 
 def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> None:
-    """Raise if a dataset advertises processed TCP poses as its main state."""
+    """Require the single current HandUMI layout stored in LeRobot v3."""
     meta = handumi_metadata(info_or_root)
     semantics = str(meta.get("state_semantics", ""))
     tracking_schema = str(meta.get("tracking_schema", ""))
-    if "tcp" in semantics.lower() or "tcp" in tracking_schema.lower():
+    capture_schema = str(meta.get("capture_schema", ""))
+    expected = {
+        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+        "state_semantics": HANDUMI_STATE_SEMANTICS,
+    }
+    actual = {
+        "tracking_schema": tracking_schema,
+        "capture_schema": capture_schema,
+        "state_semantics": semantics,
+    }
+    if actual != expected:
         raise ValueError(
-            "Expected raw controller state metadata, but dataset advertises "
-            f"state_semantics={semantics!r}, tracking_schema={tracking_schema!r}."
+            "Unsupported HandUMI raw layout. Re-record with the current "
+            f"handumi-record. Expected {expected}, got {actual}."
         )
 
 
@@ -139,6 +156,9 @@ def load_raw_episode(
         revision=revision,
         download_videos=download_videos,
     )
+    info = getattr(getattr(dataset, "meta", None), "info", {})
+    validate_raw_state_metadata(info if isinstance(info, dict) else {})
+    metadata = handumi_metadata(info if isinstance(info, dict) else {})
     fps = float(getattr(dataset, "fps", 30) or 30)
     table = dataset.hf_dataset
     if source not in table.column_names:
@@ -160,12 +180,13 @@ def load_raw_episode(
     )
     signals: dict[str, np.ndarray] = {}
     for key in table.column_names:
-        if not key.startswith(prefixes):
+        if key != "observation.valid" and not key.startswith(prefixes):
             continue
         values = np.asarray(table[key])
         if values.ndim == 2 and values.shape[1] == 1:
             values = values[:, 0]
         signals[key] = values
+    signals = normalize_raw_signals(states, signals, metadata=metadata)
     body_signals: dict[str, np.ndarray] = {}
     for key in table.column_names:
         if key.startswith("observation.body."):
@@ -189,6 +210,185 @@ def load_raw_episode(
         body=body,
         tracking_sidecars=sidecars,
     )
+
+
+def normalize_raw_signals(
+    states: np.ndarray,
+    signals: dict[str, np.ndarray],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, np.ndarray]:
+    """Derive diagnostics omitted from the single compact on-disk layout."""
+    states = np.asarray(states, dtype=np.float32)
+    frame_count = len(states)
+    normalized = {key: np.asarray(value) for key, value in signals.items()}
+    metadata = metadata or {}
+
+    validity = normalized.get("observation.valid")
+    expected_validity_shape = (frame_count, len(TRACKING_VALIDITY_NAMES))
+    if validity is None or np.asarray(validity).shape != expected_validity_shape:
+        shape = None if validity is None else np.asarray(validity).shape
+        raise ValueError(
+            "Current HandUMI layout requires observation.valid shape "
+            f"{expected_validity_shape}, got {shape}."
+        )
+
+    workspace = normalized.get("observation.tracking.workspace_from_device_pose")
+    device_hmd = normalized.get("observation.tracking.device_hmd_pose")
+    if (
+        "observation.tracking.hmd_pose" not in normalized
+        and workspace is not None
+        and device_hmd is not None
+    ):
+        workspace = np.asarray(workspace)
+        device_hmd = np.asarray(device_hmd)
+        if workspace.shape == device_hmd.shape == (frame_count, 7):
+            normalized["observation.tracking.hmd_pose"] = np.stack(
+                [
+                    _compose_pose7(a, b)
+                    for a, b in zip(workspace, device_hmd, strict=True)
+                ]
+            ).astype(np.float32)
+
+    aligned = _frame_signal(
+        normalized.get("observation.tracking.aligned_time_ns"), frame_count
+    )
+    device_time = _frame_signal(
+        normalized.get("observation.tracking.device_time_ns"), frame_count
+    )
+    if (
+        "observation.tracking.clock_offset_ns" not in normalized
+        and aligned is not None
+        and device_time is not None
+    ):
+        valid_clock = (aligned > 0) & (device_time > 0)
+        normalized["observation.tracking.clock_offset_ns"] = np.where(
+            valid_clock,
+            aligned.astype(np.int64) - device_time.astype(np.int64),
+            0,
+        )
+
+    _restore_enabled_signals(normalized, metadata, frame_count)
+    _derive_source_timing(normalized, frame_count)
+    return normalized
+
+
+def _restore_enabled_signals(
+    signals: dict[str, np.ndarray],
+    metadata: dict[str, Any],
+    frame_count: int,
+) -> None:
+    sources = metadata.get("sources")
+    if not isinstance(sources, dict):
+        raise ValueError("Current HandUMI layout requires handumi.sources metadata.")
+
+    feetech = sources.get("feetech")
+    if isinstance(feetech, dict) and "enabled" in feetech:
+        signals.setdefault(
+            "observation.feetech.enabled",
+            np.full(frame_count, int(bool(feetech["enabled"])), dtype=np.int64),
+        )
+
+    cameras = sources.get("cameras")
+    if not isinstance(cameras, dict):
+        return
+    for name, config in cameras.items():
+        if not isinstance(config, dict) or "enabled" not in config:
+            continue
+        signals.setdefault(
+            f"observation.camera.{name}.enabled",
+            np.full(frame_count, int(bool(config["enabled"])), dtype=np.int64),
+        )
+
+
+def _derive_source_timing(
+    signals: dict[str, np.ndarray], frame_count: int
+) -> None:
+    target = _frame_signal(
+        signals.get("observation.sync.target_time_ns"), frame_count
+    )
+    record = _frame_signal(
+        signals.get("observation.sync.record_time_ns"), frame_count
+    )
+    if target is None or record is None:
+        return
+
+    sources: dict[str, np.ndarray] = {}
+    aligned = _frame_signal(
+        signals.get("observation.tracking.aligned_time_ns"), frame_count
+    )
+    received = _frame_signal(
+        signals.get("observation.tracking.pc_monotonic_ns"), frame_count
+    )
+    if aligned is not None:
+        sources["observation.tracking"] = (
+            aligned
+            if received is None
+            else np.where(aligned > 0, aligned, received)
+        )
+
+    for key, value in tuple(signals.items()):
+        if not key.endswith(".sample_time_ns"):
+            continue
+        sample = _frame_signal(value, frame_count)
+        if sample is not None:
+            sources[key.removesuffix(".sample_time_ns")] = sample
+
+    missing_value_ms = np.iinfo(np.int64).max / 1e6
+    for prefix, sample in sources.items():
+        missing = sample <= 0
+        age_ms = np.where(missing, missing_value_ms, np.maximum(0, record - sample) / 1e6)
+        sync_error_ms = np.where(
+            missing,
+            missing_value_ms,
+            np.abs(sample - target) / 1e6,
+        )
+        signals.setdefault(f"{prefix}.age_ms", age_ms.astype(np.float32))
+        signals.setdefault(
+            f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32)
+        )
+
+
+def _frame_signal(value: Any, frame_count: int) -> np.ndarray | None:
+    if value is None:
+        return None
+    array = np.asarray(value)
+    if array.ndim == 2 and array.shape[1] == 1:
+        array = array[:, 0]
+    return array.reshape(-1) if array.size == frame_count else None
+
+
+def _compose_pose7(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    a = np.asarray(a, dtype=np.float64).reshape(7)
+    b = np.asarray(b, dtype=np.float64).reshape(7)
+    qa = _normalize_quaternion(a[3:7])
+    qb = _normalize_quaternion(b[3:7])
+    vector = qa[:3]
+    rotated = b[:3] + 2.0 * (
+        qa[3] * np.cross(vector, b[:3])
+        + np.cross(vector, np.cross(vector, b[:3]))
+    )
+    ax, ay, az, aw = qa
+    bx, by, bz, bw = qb
+    quaternion = _normalize_quaternion(
+        np.array(
+            [
+                aw * bx + ax * bw + ay * bz - az * by,
+                aw * by - ax * bz + ay * bw + az * bx,
+                aw * bz + ax * by - ay * bx + az * bw,
+                aw * bw - ax * bx - ay * by - az * bz,
+            ]
+        )
+    )
+    return np.concatenate([a[:3] + rotated, quaternion])
+
+
+def _normalize_quaternion(value: np.ndarray) -> np.ndarray:
+    quaternion = np.asarray(value, dtype=np.float64).reshape(4)
+    norm = float(np.linalg.norm(quaternion))
+    if norm <= 1e-12:
+        return np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+    return quaternion / norm
 
 
 def _parse_episodes(value: str | None) -> list[int] | None:

@@ -116,14 +116,11 @@ def _derive_handumi_metadata(
 
 
 def _raw_only_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Drop legacy metadata that describes processed controller->TCP data."""
-    blocked_keys = {"controller_tcp_calibration"}
+    """Drop legacy state-schema labels while preserving calibration provenance."""
     clean: dict[str, Any] = {}
     for key, value in metadata.items():
         key_l = str(key).lower()
         value_l = str(value).lower()
-        if key in blocked_keys:
-            continue
         if key_l in {"tracking_schema", "state_semantics"} and "tcp" in value_l:
             continue
         clean[key] = value

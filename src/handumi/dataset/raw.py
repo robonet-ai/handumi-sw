@@ -36,6 +36,9 @@ HANDUMI_RAW_STATE_NAMES: tuple[str, ...] = (
 )
 
 HANDUMI_RAW_STATE_SIZE = len(HANDUMI_RAW_STATE_NAMES)
+HANDUMI_TRACKING_SCHEMA = "controller_raw_compact"
+HANDUMI_CAPTURE_SCHEMA = "synchronized_sources"
+HANDUMI_STATE_SEMANTICS = "workspace_controller_pose7_plus_gripper_widths"
 
 LEFT_POSE_SLICE = slice(0, 7)
 RIGHT_POSE_SLICE = slice(7, 14)
@@ -45,6 +48,18 @@ RIGHT_GRIPPER_INDEX = 15
 HANDUMI_RAW_IMAGE_KEYS: tuple[str, ...] = (
     "observation.images.left_wrist",
     "observation.images.right_wrist",
+    "observation.images.workspace",
+)
+
+TRACKING_VALIDITY_NAMES: tuple[str, ...] = (
+    "left_device_tracked",
+    "left_pose_valid",
+    "right_device_tracked",
+    "right_pose_valid",
+    "hmd_tracked",
+    "clock_synced",
+    "connected",
+    "streaming",
 )
 
 
@@ -72,31 +87,28 @@ def scalar_feature(dtype: str) -> dict[str, Any]:
 
 
 def raw_tracking_features() -> dict[str, Any]:
-    """Common tracking schema recorded for every HandUMI tracking backend.
+    """Compact tracking schema recorded for every HandUMI tracking backend.
 
-    ``*_controller_pose`` is the raw controller anchor pose after only the
-    backend's required frame normalization. Processed controller->TCP poses are
+    Workspace controller poses already live in ``observation.state``. The
+    original device poses and the transform used to create that state remain
+    available for later recalibration. Processed controller->TCP poses are
     intentionally not part of the raw dataset schema.
     """
     features: dict[str, Any] = {}
     for side in ("left", "right"):
-        features[f"observation.tracking.{side}_controller_pose"] = pose7_feature()
+        features[f"observation.tracking.{side}_device_controller_pose"] = pose7_feature()
         features[f"observation.tracking.{side}_tracked"] = scalar_feature("int64")
-        features[f"observation.tracking.{side}_device_tracked"] = scalar_feature(
-            "int64"
-        )
-        features[f"observation.tracking.{side}_pose_valid"] = scalar_feature("int64")
-    features["observation.tracking.hmd_pose"] = pose7_feature()
-    features["observation.tracking.hmd_tracked"] = scalar_feature("int64")
+    features["observation.tracking.device_hmd_pose"] = pose7_feature()
     features["observation.tracking.workspace_from_device_pose"] = pose7_feature()
     features["observation.tracking.device_time_ns"] = scalar_feature("int64")
     features["observation.tracking.pc_monotonic_ns"] = scalar_feature("int64")
     features["observation.tracking.aligned_time_ns"] = scalar_feature("int64")
-    features["observation.tracking.clock_offset_ns"] = scalar_feature("int64")
-    for key in ("clock_synced", "connected", "streaming", "sequence"):
-        features[f"observation.tracking.{key}"] = scalar_feature("int64")
-    for key in ("age_ms", "sync_error_ms"):
-        features[f"observation.tracking.{key}"] = scalar_feature("float32")
+    features["observation.tracking.sequence"] = scalar_feature("int64")
+    features["observation.valid"] = {
+        "dtype": "int64",
+        "shape": (len(TRACKING_VALIDITY_NAMES),),
+        "names": list(TRACKING_VALIDITY_NAMES),
+    }
     return features
 
 
@@ -107,10 +119,8 @@ def feetech_features() -> dict[str, Any]:
         features[f"observation.feetech.{side}_ticks"] = scalar_feature("int64")
         features[f"observation.feetech.{side}_width_mm"] = scalar_feature("float32")
         features[f"observation.feetech.{side}_normalized"] = scalar_feature("float32")
-    for key in ("sample_time_ns", "sequence", "enabled", "healthy"):
+    for key in ("sample_time_ns", "sequence", "healthy"):
         features[f"observation.feetech.{key}"] = scalar_feature("int64")
-    for key in ("age_ms", "sync_error_ms"):
-        features[f"observation.feetech.{key}"] = scalar_feature("float32")
     return features
 
 
@@ -123,14 +133,12 @@ def capture_timing_features() -> dict[str, Any]:
 
 
 def camera_health_features(camera_names: Sequence[str]) -> dict[str, Any]:
-    """Per-camera source timing and health fields."""
+    """Per-camera source timestamp, sequence, and health fields."""
     features: dict[str, Any] = {}
     for name in camera_names:
         prefix = f"observation.camera.{name}"
-        for key in ("sample_time_ns", "sequence", "enabled", "healthy"):
+        for key in ("sample_time_ns", "sequence", "healthy"):
             features[f"{prefix}.{key}"] = scalar_feature("int64")
-        for key in ("age_ms", "sync_error_ms"):
-            features[f"{prefix}.{key}"] = scalar_feature("float32")
     return features
 
 
@@ -167,10 +175,14 @@ __all__ = [
     "HANDUMI_RAW_IMAGE_KEYS",
     "HANDUMI_RAW_STATE_NAMES",
     "HANDUMI_RAW_STATE_SIZE",
+    "HANDUMI_TRACKING_SCHEMA",
+    "HANDUMI_CAPTURE_SCHEMA",
+    "HANDUMI_STATE_SEMANTICS",
     "LEFT_GRIPPER_INDEX",
     "LEFT_POSE_SLICE",
     "RIGHT_GRIPPER_INDEX",
     "RIGHT_POSE_SLICE",
+    "TRACKING_VALIDITY_NAMES",
     "pose_to_state_vector",
     "camera_health_features",
     "canonical_body_features",

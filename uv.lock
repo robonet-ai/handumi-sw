@@ -909,6 +909,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cmake" },
+    { name = "huggingface-hub" },
     { name = "jax", extra = ["cuda13"] },
     { name = "jaxlie" },
     { name = "jaxls" },
@@ -942,6 +943,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cmake", specifier = ">=3.29" },
+    { name = "huggingface-hub", specifier = ">=1.0.0,<2.0.0" },
     { name = "jax", extras = ["cuda13"], specifier = ">=0.4.0" },
     { name = "jaxlie", specifier = ">=1.0.0" },
     { name = "jaxls", git = "https://github.com/brentyi/jaxls.git" },

@@ -1,0 +1,47 @@
+# Machine-local HandUMI configuration. Copy this file to configs/rig.yaml and
+# edit it for the connected cameras, Feetech adapters, and Quest network.
+
+cameras:
+  left_wrist:
+    index_or_path: 0
+  right_wrist:
+    index_or_path: 2
+  workspace:
+    index_or_path: 4
+
+feetech:
+  baudrate: 1000000
+  protocol_version: 0
+  left:
+    servo_id: 0
+    port: /dev/ttyACM0
+  right:
+    servo_id: 1
+    port: /dev/ttyACM1
+
+robots:
+  piper:
+    can:
+      bitrate: 1000000
+      restart_ms: 100
+      left_port: can0
+      right_port: can1
+
+meta_quest:
+  connection:
+    quest_ip: "192.168.1.100"
+    tcp_port: 65432
+    sync_port: 42000
+    connect_retry_s: 1.0
+  health:
+    frame_stale_timeout_s: 0.25
+
+spatial_calibration:
+  board:
+    id: opencv_charuco_5x7_30mm_v1
+    squares_x: 5
+    squares_y: 7
+    dictionary: DICT_5X5_100
+    square_length_m: 0.030
+    marker_length_m: 0.015
+    legacy_pattern: false

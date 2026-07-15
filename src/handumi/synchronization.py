@@ -112,10 +112,7 @@ def synchronized_gripper_frame(
     frame = {
         "observation.feetech.sample_time_ns": _scalar_int(sample.sample_time_ns),
         "observation.feetech.sequence": _scalar_int(sample.sequence),
-        "observation.feetech.enabled": _scalar_int(enabled),
         "observation.feetech.healthy": _scalar_int(healthy),
-        "observation.feetech.age_ms": _scalar_float(age_ns / 1e6),
-        "observation.feetech.sync_error_ms": _scalar_float(sync_error_ns / 1e6),
     }
     return SynchronizedGripperFrame(
         widths=sample.widths,
@@ -133,29 +130,5 @@ def capture_timing_frame(
     }
 
 
-def tracking_timing_frame(
-    sample: ControllerPairSample,
-    *,
-    target_time_ns: int,
-    record_time_ns: int,
-) -> dict[str, np.ndarray]:
-    sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
-    missing = sample_time_ns <= 0
-    age_ns = (
-        np.iinfo(np.int64).max if missing else max(0, record_time_ns - sample_time_ns)
-    )
-    sync_error_ns = (
-        np.iinfo(np.int64).max if missing else abs(sample_time_ns - target_time_ns)
-    )
-    return {
-        "observation.tracking.age_ms": _scalar_float(age_ns / 1e6),
-        "observation.tracking.sync_error_ms": _scalar_float(sync_error_ns / 1e6),
-    }
-
-
 def _scalar_int(value: int | bool) -> np.ndarray:
     return np.array([int(value)], dtype=np.int64)
-
-
-def _scalar_float(value: float) -> np.ndarray:
-    return np.array([float(value)], dtype=np.float32)

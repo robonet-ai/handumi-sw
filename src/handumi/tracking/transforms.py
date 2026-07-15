@@ -10,8 +10,7 @@ module converts them at the boundary and applies HandUMI calibration:
       -> to_workspace             (re-center on the reset reference / HMD)
       => gripper TCP pose in handumi_workspace
 
-The Unity->right-handed mapping is ported from yubi-sw
-(`airoa_quest/.../quest_bridge_node.py::_unity_pose_to_ros`):
+The HandUMI Quest App Unity-to-right-handed mapping is:
 
     position:    Unity(x, y, z)     -> (z, -x, y)
     quaternion:  Unity(x, y, z, w)  -> (z, -x, y, -w)

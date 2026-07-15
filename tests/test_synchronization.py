@@ -1,7 +1,5 @@
 from dataclasses import replace
 
-import numpy as np
-
 from handumi.feetech import GripperSample, GripperWidths
 from handumi.synchronization import (
     SustainedHealthGate,
@@ -53,7 +51,8 @@ def test_gripper_sample_is_selected_against_common_target():
     assert selected.healthy_for_gate
     assert selected.widths.left_mm == 20.0
     assert selected.frame["observation.feetech.sequence"].item() == 9
-    assert np.isclose(selected.frame["observation.feetech.sync_error_ms"].item(), 2.0)
+    assert selected.frame["observation.feetech.healthy"].item() == 1
+    assert "observation.feetech.sync_error_ms" not in selected.frame
 
 
 def test_disabled_feetech_does_not_block_health_gate():
@@ -66,7 +65,8 @@ def test_disabled_feetech_does_not_block_health_gate():
     )
 
     assert selected.healthy_for_gate
-    assert selected.frame["observation.feetech.enabled"].item() == 0
+    assert selected.frame["observation.feetech.healthy"].item() == 0
+    assert "observation.feetech.enabled" not in selected.frame
 
 
 def test_sustained_health_gate_tracks_recovery_and_timeout():

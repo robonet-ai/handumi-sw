@@ -9,6 +9,7 @@ from typing import Protocol
 import numpy as np
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.dataset.raw import TRACKING_VALIDITY_NAMES
 from handumi.robots.utils import IDENTITY_POSE7, pose_mul, quat_normalize
 
 
@@ -33,6 +34,15 @@ class ControllerPairSample:
     left_pose_valid: bool = False
     right_pose_valid: bool = False
     hmd_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
+    left_device_controller_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
+    right_device_controller_pose: np.ndarray = field(
+        default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
+    )
+    device_hmd_pose: np.ndarray = field(
         default_factory=lambda: IDENTITY_POSE7.astype(np.float32).copy()
     )
     hmd_tracked: bool = False
@@ -62,33 +72,26 @@ class ControllerPairSample:
         )
 
     def tracking_frame(self) -> dict[str, np.ndarray]:
+        validity = {
+            "left_device_tracked": self.left_device_tracked,
+            "left_pose_valid": self.left_pose_valid,
+            "right_device_tracked": self.right_device_tracked,
+            "right_pose_valid": self.right_pose_valid,
+            "hmd_tracked": self.hmd_tracked,
+            "clock_synced": self.clock_synced,
+            "connected": self.connected,
+            "streaming": self.streaming,
+        }
         return {
-            "observation.tracking.left_controller_pose": self.left_controller_pose,
-            "observation.tracking.right_controller_pose": self.right_controller_pose,
-            "observation.tracking.left_tcp_pose": self.left_tcp_pose,
-            "observation.tracking.right_tcp_pose": self.right_tcp_pose,
             "observation.tracking.left_tracked": np.array(
                 [int(self.left_tracked)], dtype=np.int64
             ),
             "observation.tracking.right_tracked": np.array(
                 [int(self.right_tracked)], dtype=np.int64
             ),
-            "observation.tracking.left_device_tracked": np.array(
-                [int(self.left_device_tracked)], dtype=np.int64
-            ),
-            "observation.tracking.right_device_tracked": np.array(
-                [int(self.right_device_tracked)], dtype=np.int64
-            ),
-            "observation.tracking.left_pose_valid": np.array(
-                [int(self.left_pose_valid)], dtype=np.int64
-            ),
-            "observation.tracking.right_pose_valid": np.array(
-                [int(self.right_pose_valid)], dtype=np.int64
-            ),
-            "observation.tracking.hmd_pose": self.hmd_pose,
-            "observation.tracking.hmd_tracked": np.array(
-                [int(self.hmd_tracked)], dtype=np.int64
-            ),
+            "observation.tracking.left_device_controller_pose": self.left_device_controller_pose,
+            "observation.tracking.right_device_controller_pose": self.right_device_controller_pose,
+            "observation.tracking.device_hmd_pose": self.device_hmd_pose,
             "observation.tracking.workspace_from_device_pose": self.workspace_from_device_pose,
             "observation.tracking.device_time_ns": np.array(
                 [int(self.device_time_ns)], dtype=np.int64
@@ -99,20 +102,12 @@ class ControllerPairSample:
             "observation.tracking.aligned_time_ns": np.array(
                 [int(self.aligned_time_ns)], dtype=np.int64
             ),
-            "observation.tracking.clock_offset_ns": np.array(
-                [int(self.clock_offset_ns)], dtype=np.int64
-            ),
-            "observation.tracking.clock_synced": np.array(
-                [int(self.clock_synced)], dtype=np.int64
-            ),
-            "observation.tracking.connected": np.array(
-                [int(self.connected)], dtype=np.int64
-            ),
-            "observation.tracking.streaming": np.array(
-                [int(self.streaming)], dtype=np.int64
-            ),
             "observation.tracking.sequence": np.array(
                 [int(self.sequence)], dtype=np.int64
+            ),
+            "observation.valid": np.asarray(
+                [int(validity[name]) for name in TRACKING_VALIDITY_NAMES],
+                dtype=np.int64,
             ),
         }
 

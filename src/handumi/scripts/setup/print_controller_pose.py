@@ -1,7 +1,6 @@
 """Print live left/right controller orientation to find the mounting-offset rotation.
 
-Two-stance method for ``configs/tracking_meta_quest.yaml``'s
-``calibration.controller_to_gripper_tcp.<side>.quaternion``:
+Two-stance method for the controller-to-TCP calibration quaternion:
 
   A) Hold the BARE controller in the natural handheld grip, pointing
      forward. Record the printed quaternion ``q_A``.
@@ -32,20 +31,26 @@ import sys
 import time
 from pathlib import Path
 
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
 from handumi.tracking.transforms import unity_pose_to_handumi
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
+    parser.add_argument(
+        "--rig-config",
+        dest="rig_config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+    )
     parser.add_argument("--quest-ip", type=str, default=None)
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
     parser.add_argument("--rate-hz", type=float, default=2.0)
     args = parser.parse_args()
 
-    config = MetaQuestConfig.from_yaml(args.tracking_config) if args.tracking_config.exists() else MetaQuestConfig(quest_ip="")
+    config = MetaQuestConfig.from_yaml(args.rig_config)
     config = MetaQuestConfig(
         quest_ip=args.quest_ip if args.quest_ip is not None else config.quest_ip,
         tcp_port=args.tcp_port if args.tcp_port is not None else config.tcp_port,

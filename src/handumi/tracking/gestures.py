@@ -2,7 +2,7 @@
 
 Shared by any script that needs a hands-free control signal while wearing the
 HandUMI shells (no free fingers to reach a controller button): today
-``handumi.scripts.live_tracking_quest`` uses it to reset the workspace, and
+``handumi.scripts.teleop_sim`` uses it to reset the workspace, and
 ``handumi.scripts.record`` uses it to start/stop an episode (--clap-control).
 """
 
@@ -36,7 +36,11 @@ class DoubleClapDetector:
 
     def update(self, left_mm: float, right_mm: float, now_s: float) -> bool:
         """Feed one width sample; returns True when either side double-claps."""
-        triggered = False
+        return self.update_side(left_mm, right_mm, now_s) is not None
+
+    def update_side(self, left_mm: float, right_mm: float, now_s: float) -> str | None:
+        """Return the side that double-clapped, preferring right if both fire."""
+        triggered: list[str] = []
         for side, mm in (("left", left_mm), ("right", right_mm)):
             if mm > self._open_mm:
                 self._armed[side] = True
@@ -49,7 +53,9 @@ class DoubleClapDetector:
                 last = self._last_clap_t[side]
                 if last is not None and now_s - last <= self._window_s:
                     self._last_clap_t[side] = None
-                    triggered = True
+                    triggered.append(side)
                 else:
                     self._last_clap_t[side] = now_s
-        return triggered
+        if "right" in triggered:
+            return "right"
+        return triggered[0] if triggered else None

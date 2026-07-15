@@ -8,6 +8,7 @@ from handumi.dataset.raw import (
     LEFT_POSE_SLICE,
     RIGHT_GRIPPER_INDEX,
     RIGHT_POSE_SLICE,
+    TRACKING_VALIDITY_NAMES,
     raw_state_feature,
     raw_tracking_features,
     feetech_features,
@@ -64,12 +65,13 @@ class RawSchemaTest(unittest.TestCase):
             },
         )
 
-    def test_raw_image_keys_are_left_and_right_wrist(self):
+    def test_raw_image_keys_include_workspace(self):
         self.assertEqual(
             HANDUMI_RAW_IMAGE_KEYS,
             (
                 "observation.images.left_wrist",
                 "observation.images.right_wrist",
+                "observation.images.workspace",
             ),
         )
 
@@ -81,19 +83,31 @@ class RawSchemaTest(unittest.TestCase):
 
     def test_capture_schema_preserves_health_and_source_timestamps(self):
         tracking = raw_tracking_features()
-        self.assertIn("observation.tracking.hmd_pose", tracking)
-        self.assertIn("observation.tracking.left_device_tracked", tracking)
-        self.assertIn("observation.tracking.left_pose_valid", tracking)
+        self.assertNotIn("observation.tracking.left_controller_pose", tracking)
+        self.assertNotIn("observation.tracking.hmd_pose", tracking)
+        self.assertIn("observation.tracking.left_device_controller_pose", tracking)
+        self.assertIn("observation.tracking.right_device_controller_pose", tracking)
+        self.assertIn("observation.tracking.workspace_from_device_pose", tracking)
+        self.assertIn("observation.tracking.left_tracked", tracking)
+        self.assertIn("observation.tracking.right_tracked", tracking)
         self.assertIn("observation.tracking.aligned_time_ns", tracking)
-        self.assertIn("observation.tracking.sync_error_ms", tracking)
+        self.assertEqual(
+            tracking["observation.valid"]["names"],
+            list(TRACKING_VALIDITY_NAMES),
+        )
+        self.assertNotIn("observation.tracking.sync_error_ms", tracking)
 
         feetech = feetech_features()
         self.assertIn("observation.feetech.sample_time_ns", feetech)
         self.assertIn("observation.feetech.healthy", feetech)
+        self.assertNotIn("observation.feetech.enabled", feetech)
+        self.assertNotIn("observation.feetech.age_ms", feetech)
 
         cameras = camera_health_features(["left_wrist"])
         self.assertIn("observation.camera.left_wrist.sample_time_ns", cameras)
         self.assertIn("observation.camera.left_wrist.healthy", cameras)
+        self.assertNotIn("observation.camera.left_wrist.enabled", cameras)
+        self.assertNotIn("observation.camera.left_wrist.sync_error_ms", cameras)
         self.assertIn("observation.sync.target_time_ns", capture_timing_features())
 
 

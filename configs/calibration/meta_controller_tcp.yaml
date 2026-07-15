@@ -3,9 +3,9 @@ calibration:
   controller_to_gripper_tcp:
     left:
       position:
-      - -0.0136
-      - -0.0559
-      - -0.0606
+      - 0.12068467
+      - 0.02142489
+      - -0.21669616
       quaternion:
       - -0.1464
       - 0.3536
@@ -13,9 +13,9 @@ calibration:
       - 0.8536
     right:
       position:
-      - -0.0136
-      - 0.0559
-      - -0.0606
+      - 0.12068467
+      - -0.02142489
+      - -0.21669616
       quaternion:
       - 0.1464
       - 0.3536

@@ -111,6 +111,39 @@ def raw_state_pose7_pair(state: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return left, right
 
 
+def absolute_table_robot_target_pose7(
+    state: np.ndarray,
+    robot_from_table_pose7: np.ndarray,
+    *,
+    left_tool_adapter_pose7: np.ndarray | None = None,
+    right_tool_adapter_pose7: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map both table-frame TCPs through one shared deployment transform.
+
+    Unlike per-arm anchoring, this rigid transform preserves distances and
+    intersections between the left and right trajectories.
+    """
+    left, right = raw_state_pose7_pair(state)
+    robot_from_table = np.asarray(robot_from_table_pose7, dtype=np.float32)
+    left = pose_mul(robot_from_table, left)
+    right = pose_mul(robot_from_table, right)
+    if left_tool_adapter_pose7 is not None:
+        left = pose_mul(left, left_tool_adapter_pose7)
+    if right_tool_adapter_pose7 is not None:
+        right = pose_mul(right, right_tool_adapter_pose7)
+    return left, right
+
+
+def orientation_only_pose_adapter(
+    source_pose7: np.ndarray,
+    target_pose7: np.ndarray,
+) -> np.ndarray:
+    """Return a right-side rotation adapter without changing TCP position."""
+    adapter = pose_between(source_pose7, target_pose7)
+    adapter[:3] = 0.0
+    return adapter.astype(np.float32)
+
+
 def pose7_to_wxyz(pose7: np.ndarray) -> np.ndarray:
     """Return a pose quaternion in Pyroki/JAXLie ``[qw, qx, qy, qz]`` order."""
     quat = quaternion_xyzw_normalize(np.asarray(pose7, dtype=np.float32)[3:7])

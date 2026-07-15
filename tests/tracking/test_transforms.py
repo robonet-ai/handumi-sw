@@ -167,8 +167,8 @@ class MountingOffsetsTest(unittest.TestCase):
 
     def test_meta_calibration_file_keeps_mirror_invariant(self):
         # The two HandUMI mounts are physical mirror-image twins across the
-        # Y=0 plane, so while meta_controller_tcp.yaml carries the mirrored
-        # CAD baseline, right must be the exact mirror of left: position
+        # Y=0 plane. The pivot-calibrated translation is projected onto that
+        # known symmetry, so right must be the exact mirror of left: position
         # (x, -y, z), quaternion (-x, y, -z, w). A broken mirror once showed
         # up as ~12cm of unwanted lateral offset between the arms. (The pico
         # file holds independent per-side measurements and is not checked.)
@@ -180,6 +180,9 @@ class MountingOffsetsTest(unittest.TestCase):
         lx_p, ly_p, lz_p = calibration.left[:3]
         self.assertTrue(
             np.allclose(calibration.right[:3], [lx_p, -ly_p, lz_p], atol=1e-6)
+        )
+        self.assertAlmostEqual(
+            float(np.linalg.norm(calibration.left[:3])), 0.25, delta=0.01
         )
         lx, ly, lz, lw = calibration.left[3:7]
         self.assertAlmostEqual(float(np.linalg.norm(calibration.left[3:7])), 1.0, places=4)

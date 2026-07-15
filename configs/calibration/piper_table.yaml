@@ -1,0 +1,13 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: piper
+source: configured_layout
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # Table convention: +X right, +Y away from the operator, +Z up.
+  # Piper robot world: +X forward, +Y left, +Z up. The table origin is placed
+  # at the configured task-scene origin, midway between the two arm bases.
+  robot_from_table:
+    position: [0.30, 0.0, 0.0]
+    quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

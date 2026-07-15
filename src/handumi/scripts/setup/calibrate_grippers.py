@@ -23,9 +23,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import (
-    PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
     load_config,
@@ -59,10 +59,12 @@ class Monitor:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor and calibrate HandUMI Feetech gripper encoders.")
     parser.add_argument(
+        "--rig-config",
         "--config",
+        dest="rig_config",
         type=Path,
-        default=PORTS_PATH,
-        help="Ports file (servo_id/port).",
+        default=DEFAULT_RIG_CONFIG,
+        help="Rig file containing Feetech servo_id/port values.",
     )
     parser.add_argument(
         "--calibration-config",
@@ -88,13 +90,13 @@ def main() -> None:
 
     args = parser.parse_args()
     args.calibration_config = args.calibration_config or user_calibration_path()
-    print(f"Using ports: {args.config}")
+    print(f"Using rig: {args.rig_config}")
     print(f"Using calibration cache: {args.calibration_config}")
     args.func(args)
 
 
 def cmd_monitor(args: argparse.Namespace) -> None:
-    config = load_config(args.config, args.calibration_config)
+    config = load_config(args.rig_config, args.calibration_config)
     left_port = _side_port(config, config.left, "left")
     right_port = _side_port(config, config.right, "right")
     monitors: list[Monitor] = []
@@ -134,7 +136,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 
 
 def cmd_calibrate(args: argparse.Namespace) -> None:
-    current = load_config(args.config, args.calibration_config)
+    current = load_config(args.rig_config, args.calibration_config)
     sides = ["left", "right"] if args.side == "both" else [args.side]
     side_width = {"left": args.left_max_width_mm, "right": args.right_max_width_mm}
 

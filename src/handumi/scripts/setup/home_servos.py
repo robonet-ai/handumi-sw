@@ -29,9 +29,9 @@ import select
 import sys
 from pathlib import Path
 
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import (
-    PORTS_PATH,
     FeetechConfig,
     GripperCalibration,
     load_ports,
@@ -46,10 +46,12 @@ def main() -> None:
         description="Centre HandUMI Feetech servos at 2048 (homing) to avoid the encoder seam."
     )
     parser.add_argument(
+        "--rig-config",
         "--config",
+        dest="rig_config",
         type=Path,
-        default=PORTS_PATH,
-        help="Ports file (servo_id/port); homing doesn't touch calibration.",
+        default=DEFAULT_RIG_CONFIG,
+        help="Rig file containing Feetech servo_id/port values.",
     )
     parser.add_argument(
         "--side",
@@ -60,8 +62,8 @@ def main() -> None:
     parser.add_argument("--interval-s", type=float, default=0.1)
     args = parser.parse_args()
 
-    print(f"Using ports: {args.config}")
-    config = load_ports(args.config)
+    print(f"Using rig: {args.rig_config}")
+    config = load_ports(args.rig_config)
     sides = ["left", "right"] if args.side == "both" else [args.side]
     for side in sides:
         calibration = getattr(config, side)

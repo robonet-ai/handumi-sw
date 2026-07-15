@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live preview: move the HandUMI and watch the robot follow in Viser (+ Rerun).
+"""Live simulation teleop: move the HandUMI and watch the robot follow in Viser (+ Rerun).
 
 Nothing is recorded. The same pipeline the post-hoc replay uses runs live:
 
@@ -15,15 +15,14 @@ tracking health and TCP calibration before a session.
 Rerun (on by default, --no-rerun to disable) shows the calibrated TCP
 trails in the workspace frame — tracking-side truth, before retargeting/IK.
 
-Per-arm anchoring (each arm fully independent). Two gestures, SAME action —
-(re-)anchor that arm: your hand pose at that instant maps to the arm's home
-TCP and the arm follows relative motion from there. Only fires while that
-side is tracked.
+Teleop anchoring maps your current HandUMI pose to the robot home TCP and the
+robot follows relative motion from there. The double-clap gesture (close/open
+one gripper twice) starts idle arms; once teleop is active, another double clap
+resets teleop by clearing anchors and parking enabled arms at home. Keyboard
+Space can also start idle arms when explicitly enabled with ``--space-start``.
 
-  X (left controller)   anchor the LEFT arm   (hands free, during setup)
-  A (right controller)  anchor the RIGHT arm
-  double clap LEFT      anchor the LEFT arm   (hands inside the HandUMIs)
-  double clap RIGHT     anchor the RIGHT arm
+  Space                 start both arms that are not anchored yet (--space-start)
+  double clap           start teleop, or reset/pause active teleop
 
 Both arms start parked at home until their first anchor. Spoken feedback
 ("left anchored", ...) — --no-sounds to mute.
@@ -38,23 +37,28 @@ Usage
 -----
 ::
 
-    handumi-live --device meta
-    handumi-live --device meta --quest-ip 127.0.0.1 --no-browser   # vs mock
-    handumi-live --device pico --pico-mode mandos
+    handumi-teleop-sim --device meta
+    handumi-teleop-sim --device meta --quest-ip 127.0.0.1 --no-browser
+    handumi-teleop-sim --device pico --pico-mode mandos
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import select
+import sys
+import termios
+import threading
 import time
+import tty
 import webbrowser
 from pathlib import Path
 
 import numpy as np
 
 from handumi.calibration.control_tcp import (
-    calibration_path_for_device,
+    calibration_path_for_robot_device,
     load_controller_tcp_calibration,
 )
 from handumi.cameras import (
@@ -64,34 +68,34 @@ from handumi.cameras import (
     read_camera_frames,
     resolve_camera_ids,
 )
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.raw import pose_to_state_vector
-from handumi.feetech import PORTS_PATH, zero_gripper_widths
+from handumi.feetech import zero_gripper_widths
 from handumi.retargeting.handumi_to_robot import (
-    raw_state_robot_target_pose7,
-    retarget_anchors_from_raw_state,
+    VR_TO_ROBOT,
+    local_frame_adapter,
+    local_relative_robot_target_pose7,
+    raw_state_pose7_pair,
 )
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker, connect_feetech
 from handumi.tracking.gestures import DoubleClapDetector
-from handumi.tracking.pico import read_start_button_value
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
+from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s - %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger("handumi.live")
+log = logging.getLogger("handumi.teleop_sim")
 
-# Same side palette as replay_in_sim's target markers.
-LEFT_COLOR = (255, 190, 50)
-RIGHT_COLOR = (80, 220, 130)
-BACKGROUND_COLOR = (40, 8, 8)  # dark red — the 3D view background
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
+SIDE_CHOICES = ("left", "right", "both")
 
 
 def parse_args() -> argparse.Namespace:
@@ -100,11 +104,29 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
+    p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
     p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C.")
+    p.add_argument(
+        "--translation-scale",
+        type=float,
+        default=1.0,
+        help="Scale HandUMI translation deltas before applying them to the robot TCP.",
+    )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
+    p.add_argument(
+        "--no-viser",
+        action="store_true",
+        help="Disable the Viser server and 3D robot view entirely (Rerun remains enabled).",
+    )
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
     p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
+    p.add_argument(
+        "--space-start",
+        action="store_true",
+        help="Allow keyboard Space to start any unanchored enabled arms.",
+    )
     p.add_argument(
         "--scene",
         type=str,
@@ -127,22 +149,36 @@ def parse_args() -> argparse.Namespace:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override configs/calibration/<device>_controller_tcp.yaml.",
+        help="Override the robot/device Controller->TCP setup calibration.",
+    )
+
+    p.add_argument(
+        "--rig-config",
+        type=Path,
+        default=DEFAULT_RIG_CONFIG,
+        help="Machine-local cameras, Feetech, and Meta Quest configuration.",
     )
 
     # Camera + Feetech flags, same names as handumi-record.
     p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
-    p.add_argument("--camera-config", type=Path, default=Path("configs/cameras.yaml"))
+    p.add_argument(
+        "--context-camera",
+        "--workspace-camera",
+        dest="context_camera",
+        action="store_true",
+        help=(
+            "Add the workspace/context camera from --rig-config to Rerun, "
+            "between the left and right wrist views."
+        ),
+    )
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
     p.add_argument("--skip-cameras", action="store_true")
-    p.add_argument("--feetech-config", type=Path, default=PORTS_PATH)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
 
     # Tracking flags, same names as handumi-record (shared build_tracker).
-    p.add_argument("--tracking-config", type=Path, default=Path("configs/tracking_meta_quest.yaml"))
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
@@ -154,17 +190,96 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+class KeyboardSpaceListener:
+    """Non-blocking Space listener for terminal-triggered sim start."""
+
+    def __init__(self, *, enabled: bool) -> None:
+        self.enabled = enabled and sys.stdin.isatty()
+        self._space = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self._thread = threading.Thread(
+            target=self._run,
+            name="handumi-teleop-sim-space",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def consume_space(self) -> bool:
+        if not self._space.is_set():
+            return False
+        self._space.clear()
+        return True
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not self._stop.is_set():
+                readable, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if not readable:
+                    continue
+                char = sys.stdin.read(1)
+                if char == " ":
+                    self._space.set()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def _camera_arg(value: str) -> int | str:
     return int(value) if value.isdigit() else value
+
+
+def _enabled_sides(side: str) -> tuple[str, ...]:
+    if side == "both":
+        return ("left", "right")
+    return (side,)
+
+
+def _start_sides(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Space only starts inactive arms; it does not re-anchor."""
+    return tuple(side for side in enabled_sides if anchors[side] is None)
+
+
+def _has_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    return any(anchors[side] is not None for side in enabled_sides)
+
+
+def _clear_enabled_anchors(
+    anchors: dict[str, dict[str, np.ndarray] | None],
+    enabled_sides: tuple[str, ...],
+) -> None:
+    for side in enabled_sides:
+        anchors[side] = None
 
 
 def _load_calibration(args: argparse.Namespace):
     from handumi.calibration.control_tcp import ControllerTcpCalibration
 
-    path = args.controller_tcp_calibration or calibration_path_for_device(args.device)
+    path, source = calibration_path_for_robot_device(
+        args.robot,
+        args.device,
+        explicit_path=args.controller_tcp_calibration,
+    )
     if path.exists():
         calibration = load_controller_tcp_calibration(path)
-        log.info("controller->TCP calibration: %s", path)
+        log.info("controller->TCP calibration: %s", source)
         return calibration
     log.warning(
         "No calibration at %s — previewing RAW controller poses. "
@@ -192,29 +307,6 @@ def _mjcf_name(urdf_joint_name: str) -> str:
     return urdf_joint_name.replace("left_", "izq_", 1).replace("right_", "der_", 1)
 
 
-def _anchor_buttons_pressed(tracker) -> dict[str, bool]:
-    """Raw pressed-state of the per-arm anchor buttons: X (left), A (right).
-
-    Meta: read from the receiver's latest frame. PICO: read via the XRT SDK.
-    Missing data reads as not-pressed.
-    """
-    if tracker.device == "meta":
-        frame = tracker.receiver.latest()
-        if frame is None:
-            return {"left": False, "right": False}
-        return {
-            "left": bool(frame.left.buttons.primary),
-            "right": bool(frame.right.buttons.primary),
-        }
-    xrt = getattr(tracker, "xrt", None)
-    if xrt is None:
-        return {"left": False, "right": False}
-    return {
-        "left": read_start_button_value(xrt, "X") >= 0.75,
-        "right": read_start_button_value(xrt, "A") >= 0.75,
-    }
-
-
 def _sample_state(sample, widths=None) -> np.ndarray:
     """16D raw state from a live sample's calibrated TCP poses + gripper widths."""
     left = Pose(sample.left_tcp_pose[:3], sample.left_tcp_pose[3:7])
@@ -224,16 +316,48 @@ def _sample_state(sample, widths=None) -> np.ndarray:
     return pose_to_state_vector(left, right, left_w, right_w)
 
 
+def _tracking_world_map(device: str) -> np.ndarray:
+    """Map the provider's TCP world axes into robot-world axes."""
+    # Meta poses are converted from Unity to HandUMI/robot axes at the tracking
+    # boundary. PICO/XRT poses remain in their native VR world here.
+    return VR_TO_ROBOT if device == "pico" else np.eye(3, dtype=np.float32)
+
+
+def _selected_camera_names(context_camera: bool) -> list[str]:
+    """Return live-camera names in their intended Rerun grid order."""
+    names = ["left_wrist", "right_wrist"]
+    if context_camera:
+        # The order is also the visual order of the Rerun camera row.
+        names.insert(1, "workspace")
+    return names
+
+
+def _validate_unique_camera_ids(
+    camera_names: list[str], camera_ids: list[int | str]
+) -> None:
+    """Reject camera mappings that would show one device in multiple grid cells."""
+    duplicates = {camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1}
+    if not duplicates:
+        return
+    mappings = ", ".join(
+        f"{name}={camera_id}" for name, camera_id in zip(camera_names, camera_ids)
+    )
+    raise SystemExit(
+        f"Selected cameras must use distinct devices ({mappings}). "
+        "Fix the cameras section in configs/rig.yaml or pass matching --cam-ids."
+    )
+
+
 def _init_rerun(enabled: bool, cam_names: list[str]):
     """Start Rerun with the classic live layout: 3D tracking on the left,
-    wrist cameras top-right, gripper-width chart bottom-right."""
+    cameras top-right, gripper-width chart bottom-right."""
     if not enabled:
         return None
     import rerun as rr
     import rerun.blueprint as rrb
     import rerun.datatypes as rdt
 
-    rr.init("handumi_live", spawn=True)
+    rr.init("handumi_teleop_sim", spawn=True)
     rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
     for path, name, color in (
         ("observation.feetech.left_width_mm", "left_width_mm", LEFT_COLOR),
@@ -335,17 +459,25 @@ def main() -> None:
     args = parse_args()
 
     calibration = _load_calibration(args)
-    # X is the left-arm anchor button here, so the provider must not consume
-    # it as a workspace reset (per-arm anchors absorb any workspace shift).
+    # Keep controller buttons from changing the tracking workspace during sim
+    # teleop. Gripper double-clap and optional Space are the only start inputs.
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
     tracker.start()
 
     cameras: list = []
     cam_names: list[str] = []
     if not args.skip_cameras:
-        cam_ids = resolve_camera_ids(args.cam_ids, args.camera_config)
+        camera_names = _selected_camera_names(args.context_camera)
+        cam_ids = resolve_camera_ids(
+            args.cam_ids, args.rig_config, camera_names=camera_names
+        )
+        _validate_unique_camera_ids(camera_names, cam_ids)
         camera_specs, _ = build_camera_specs(
-            cam_ids, laptop_camera=False, laptop_cam_id=0, laptop_cam_name="laptop"
+            cam_ids,
+            camera_names=camera_names,
+            laptop_camera=False,
+            laptop_cam_id=0,
+            laptop_cam_name="laptop",
         )
         cam_names = [spec["name"] for spec in camera_specs]
         cameras = connect_cameras(
@@ -365,17 +497,20 @@ def main() -> None:
     home_left_pose7, home_right_pose7 = solver.fk_pose7(q)
     max_reach = runtime.config.ik_weights.max_reach
 
-    import viser
-    import yourdfpy
-    from viser.extras import ViserUrdf
+    server = None
+    robot_view = None
+    if not args.no_viser:
+        import viser
+        import yourdfpy
+        from viser.extras import ViserUrdf
 
-    server = viser.ViserServer(port=args.port)
-    server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-    urdf = yourdfpy.URDF.load(
-        str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
-    )
-    robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
-    robot_view.update_cfg(q)
+        server = viser.ViserServer(port=args.port)
+        server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
+        urdf = yourdfpy.URDF.load(
+            str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
+        )
+        robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
+        robot_view.update_cfg(q)
 
     physics = None
     scene_frames: dict[str, object] = {}
@@ -390,20 +525,21 @@ def main() -> None:
             data = yaml.safe_load(scene_config.read_text()) or {}
             scene_position = tuple((data.get("scene") or {}).get("position", scene_position))
         # Props render under per-body frames so physics can move them.
-        for body in load_scene(args.scene, position=scene_position):
-            frame = server.scene.add_frame(
-                f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
-            )
-            scene_frames[body.name] = frame
-            for i, geom in enumerate(body.geoms):
-                sx, sy, sz = (2.0 * s for s in geom.size)
-                cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
-                server.scene.add_box(
-                    f"/scene/{body.name}/g{i}",
-                    dimensions=(sx, sy, sz),
-                    color=(cr, cg, cb),
-                    position=tuple(geom.local_position),
+        if server is not None:
+            for body in load_scene(args.scene, position=scene_position):
+                frame = server.scene.add_frame(
+                    f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
                 )
+                scene_frames[body.name] = frame
+                for i, geom in enumerate(body.geoms):
+                    sx, sy, sz = (2.0 * s for s in geom.size)
+                    cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
+                    server.scene.add_box(
+                        f"/scene/{body.name}/g{i}",
+                        dimensions=(sx, sy, sz),
+                        color=(cr, cg, cb),
+                        position=tuple(geom.local_position),
+                    )
         if runtime.config.mjcf is not None:
             from handumi.sim.mujoco_sim import MujocoPhysics
 
@@ -417,21 +553,26 @@ def main() -> None:
             log.info("Scene %r with MuJoCo contact physics at %s.", args.scene, scene_position)
         else:
             log.info("Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot)
-    target_markers = {
-        "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
-        "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
-    }
-    @server.on_client_connect
-    def _set_initial_camera(client: viser.ClientHandle) -> None:
-        # Behind the arms (operator's point of view — you see their backs),
-        # slightly elevated, framed so no manual zoom/orbit is needed.
-        client.camera.position = (-1.4, 0.0, 0.9)
-        client.camera.look_at = (0.2, 0.0, 0.35)
+    target_markers = {}
+    if server is not None:
+        target_markers = {
+            "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
+            "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
+        }
 
-    url = f"http://localhost:{server.get_port()}"
-    log.info("Live view ready: %s (Ctrl+C to stop)", url)
-    if not args.no_browser:
-        webbrowser.open(url)
+        @server.on_client_connect
+        def _set_initial_camera(client: viser.ClientHandle) -> None:
+            # Behind the arms (operator's point of view — you see their backs),
+            # slightly elevated, framed so no manual zoom/orbit is needed.
+            client.camera.position = (-1.4, 0.0, 0.9)
+            client.camera.look_at = (0.2, 0.0, 0.35)
+
+        url = f"http://localhost:{server.get_port()}"
+        log.info("Live view ready: %s (Ctrl+C to stop)", url)
+        if not args.no_browser:
+            webbrowser.open(url)
+    else:
+        log.info("Viser disabled; streaming live cameras and tracking only to Rerun.")
 
     rr = _init_rerun(not args.no_rerun, cam_names)
     max_points = max(2, int(_TRAIL_SECONDS * args.fps))
@@ -451,17 +592,31 @@ def main() -> None:
             anchor_ref[side][2] = args.anchor_z
         log.info("Table-anchor mode: anchor with the tip ON the table "
                  "(maps to z=%.3f in robot world).", args.anchor_z)
-    # Per-arm anchors: None = disengaged (arm holds home). X/A engage a side
-    # by snapshotting the current state; a per-side double clap disengages it.
-    anchors: dict[str, object] = {"left": None, "right": None}
-    prev_button = {"left": False, "right": False}
-    clap = {"left": DoubleClapDetector(), "right": DoubleClapDetector()}
+    # Per-arm anchors: None = disengaged (arm holds home). Each active anchor
+    # stores the calibrated source TCP and its local-frame SE(3) adapter.
+    anchors: dict[str, dict[str, np.ndarray] | None] = {"left": None, "right": None}
+    enabled_sides = _enabled_sides(args.side)
+    clap = DoubleClapDetector()
+    space_listener = KeyboardSpaceListener(enabled=args.space_start)
+    space_listener.start()
+    episode_start: float | None = None
+    frame = 0
     interval = 1.0 / args.fps
-    log.info("Arms idle at home. Anchor with X (left) / A (right), or with a "
-             "double clap of that side's gripper — both gestures re-anchor.")
+    if args.space_start:
+        log.info(
+            "Arms idle at home. Start with Space, or double clap a gripper "
+            "to start enabled arms."
+        )
+    else:
+        log.info(
+            "Arms idle at home. Double clap a gripper to start enabled arms."
+        )
     try:
         while True:
             loop_start = time.perf_counter()
+            if episode_start is not None:
+                if args.duration_s > 0.0 and loop_start - episode_start >= args.duration_s:
+                    break
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
 
@@ -477,38 +632,60 @@ def main() -> None:
                 rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
 
             state = _sample_state(sample, widths)
+            source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
 
-            # (Re-)anchor a side on either gesture — X/A rising edge (hands
-            # free, during setup) or that side's double clap (hands inside
-            # the HandUMIs, mid-operation). Both do exactly the same thing:
-            # snapshot that hand's current pose <-> the arm's home TCP, and
-            # the arm follows relative motion from there.
-            pressed = _anchor_buttons_pressed(tracker)
-            side_width_mm = {"left": widths.left_mm, "right": widths.right_mm}
+            # Double clap toggles teleop: first clap starts idle arms, next clap
+            # clears anchors so the robot parks at home and waits for a fresh
+            # start. Space remains an optional start shortcut for idle arms.
+            start_sides: tuple[str, ...] = ()
+            reset_this_frame = False
+            if args.space_start and space_listener.consume_space():
+                start_sides = _start_sides(anchors, enabled_sides)
+                if start_sides:
+                    log.info("Space pressed; starting %s.", "/".join(start_sides))
+            if clap.update(widths.left_mm, widths.right_mm, loop_start):
+                if _has_enabled_anchors(anchors, enabled_sides):
+                    _clear_enabled_anchors(anchors, enabled_sides)
+                    episode_start = None
+                    frame = 0
+                    reset_this_frame = True
+                    log.info("Double clap detected; teleop reset, arms parking at home.")
+                    log_say("teleop reset", play_sounds=play_sounds)
+                else:
+                    start_sides = enabled_sides
+                    log.info("Double clap detected; starting %s.", "/".join(start_sides))
+
+            anchored_this_frame = False
             for side in ("left", "right"):
-                rise = pressed[side] and not prev_button[side]
-                prev_button[side] = pressed[side]
-                # Feeding the same width to both detector channels makes the
-                # clap side-local.
-                clapped = clap[side].update(side_width_mm[side], side_width_mm[side], loop_start)
-                if not (rise or clapped):
+                if side not in enabled_sides:
+                    continue
+                if side not in start_sides:
                     continue
                 if not side_tracked[side]:
                     log.warning("%s anchor ignored — that controller is not tracked.", side)
                     continue
-                anchors[side] = retarget_anchors_from_raw_state(
-                    state,
-                    left_robot_pose7=anchor_ref["left"],
-                    right_robot_pose7=anchor_ref["right"],
-                    max_reach=max_reach,
-                )
+                source_pose = source_poses[side]
+                anchors[side] = {
+                    "source": source_pose.copy(),
+                    "adapter": local_frame_adapter(
+                        source_pose,
+                        anchor_ref[side],
+                        source_world_to_robot_world=_tracking_world_map(args.device),
+                    ),
+                }
+                anchored_this_frame = True
                 log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
-                if physics is not None:
-                    # Anchoring doubles as the episode reset: put every
-                    # scene prop (cube, box, ...) back at its initial pose.
-                    physics.reset()
-                    log.info("Scene reset to its initial state.")
+
+            if (anchored_this_frame or reset_this_frame) and physics is not None:
+                # Starting or resetting teleop also puts every scene prop
+                # (cube, box, ...) back at its initial pose.
+                physics.reset()
+                log.info("Scene reset to its initial state.")
+            if episode_start is None and anchored_this_frame:
+                episode_start = loop_start
+                frame = 0
+                log.info("Teleop timer started.")
 
             # Anchored + tracked sides follow their anchor via IK; anchored
             # but momentarily untracked sides hold the current pose (None
@@ -516,12 +693,22 @@ def main() -> None:
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
             ik_targets: dict[str, tuple | None] = {"left": None, "right": None}
-            for index, side in enumerate(("left", "right")):
-                if anchors[side] is None or not side_tracked[side]:
+            for side in ("left", "right"):
+                anchor = anchors[side]
+                if anchor is None or not side_tracked[side]:
                     continue
-                pose7 = raw_state_robot_target_pose7(state, anchors[side])[index]
+                pose7 = local_relative_robot_target_pose7(
+                    previous_source_pose7=anchor["source"],
+                    current_source_pose7=source_poses[side],
+                    base_robot_pose7=anchor_ref[side],
+                    adapter_rot=anchor["adapter"],
+                    home_robot_pose7=anchor_ref[side],
+                    translation_scale=args.translation_scale,
+                    max_reach=max_reach,
+                )
                 ik_targets[side] = (pose7[:3], pose7[3:7])
-                target_markers[side].position = tuple(pose7[:3])
+                if target_markers:
+                    target_markers[side].position = tuple(pose7[:3])
             q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
             for side in ("left", "right"):
                 if anchors[side] is None:
@@ -545,7 +732,8 @@ def main() -> None:
                 q_render = q.copy()
                 for i, name in enumerate(joint_names):
                     q_render[i] = settled.get(_mjcf_name(name), q[i])
-                robot_view.update_cfg(q_render)
+                if robot_view is not None:
+                    robot_view.update_cfg(q_render)
                 for body_name, frame in scene_frames.items():
                     pose = physics.body_pose(body_name)
                     if pose is not None:
@@ -553,7 +741,8 @@ def main() -> None:
                         frame.position = tuple(position.tolist())
                         frame.wxyz = tuple(quat_wxyz.tolist())
             else:
-                robot_view.update_cfg(q)
+                if robot_view is not None:
+                    robot_view.update_cfg(q)
 
             if rr is not None:
                 for side, tcp, raw, color in (
@@ -566,9 +755,12 @@ def main() -> None:
             dt = time.perf_counter() - loop_start
             if (sleep := interval - dt) > 0:
                 time.sleep(sleep)
+            if episode_start is not None:
+                frame += 1
     except KeyboardInterrupt:
         log.info("Stopping.")
     finally:
+        space_listener.close()
         if physics is not None:
             physics.close()
         disconnect_cameras(cameras)

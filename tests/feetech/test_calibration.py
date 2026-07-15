@@ -57,10 +57,11 @@ class PortsCalibrationSplitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ports_path = Path(tmp) / "feetech.yaml"
             ports_path.write_text(
-                "baudrate: 1000000\n"
-                "protocol_version: 0\n"
-                "left:\n  servo_id: 0\n  port: /dev/ttyUSB0\n"
-                "right:\n  servo_id: 1\n  port: /dev/ttyUSB1\n",
+                "feetech:\n"
+                "  baudrate: 1000000\n"
+                "  protocol_version: 0\n"
+                "  left:\n    servo_id: 0\n    port: /dev/ttyUSB0\n"
+                "  right:\n    servo_id: 1\n    port: /dev/ttyUSB1\n",
                 encoding="utf-8",
             )
             ports = load_ports(ports_path)
@@ -80,10 +81,11 @@ class PortsCalibrationSplitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ports_path = Path(tmp) / "feetech.yaml"
             ports_path.write_text(
-                "baudrate: 1000000\n"
-                "protocol_version: 0\n"
-                "left:\n  servo_id: 0\n  port: /dev/ttyUSB0\n"
-                "right:\n  servo_id: 1\n  port: /dev/ttyUSB1\n",
+                "feetech:\n"
+                "  baudrate: 1000000\n"
+                "  protocol_version: 0\n"
+                "  left:\n    servo_id: 0\n    port: /dev/ttyUSB0\n"
+                "  right:\n    servo_id: 1\n    port: /dev/ttyUSB1\n",
                 encoding="utf-8",
             )
             calibration_path = Path(tmp) / "calibration.yaml"
@@ -95,8 +97,9 @@ class PortsCalibrationSplitTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ports_path = Path(tmp) / "feetech.yaml"
             ports_path.write_text(
-                "left:\n  servo_id: 0\n  port: /dev/ttyUSB0\n"
-                "right:\n  servo_id: 1\n  port: /dev/ttyUSB1\n",
+                "feetech:\n"
+                "  left:\n    servo_id: 0\n    port: /dev/ttyUSB0\n"
+                "  right:\n    servo_id: 1\n    port: /dev/ttyUSB1\n",
                 encoding="utf-8",
             )
             merged = load_config(ports_path, Path(tmp) / "does-not-exist.yaml")

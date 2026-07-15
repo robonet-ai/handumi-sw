@@ -1,10 +1,14 @@
 [project]
 name = "handumi"
 version = "0.1.0"
-description = "handumi robotics project"
+description = "Robot-free bimanual demonstration recording and retargeting for HandUMI"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "lerobot[feetech]==0.5.1",
+    "huggingface-hub>=1.0.0,<2.0.0",
     "rerun-sdk>=0.24.0,<0.27.0",
     # Build tools for xrobotoolkit-sdk (CMake-based). Listed here so uv sync
     # tracks them in the lockfile and they are available when building the SDK.
@@ -23,12 +27,17 @@ dependencies = [
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
     # Viser utilities and pyroki transitive dependency, pinned direct.
     "viser>=1.0.0",
-    # Contact physics for handumi-live --scene (grasping in sim).
+    # Contact physics for handumi-teleop-sim --scene (grasping in sim).
     "mujoco>=3.9.0",
     "matplotlib>=3.11.0",
     "pyvista>=0.43.0",
     "scipy>=1.17.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/BrikHMP18/HandUMI"
+Repository = "https://github.com/robonet-ai/handumi-sw"
+Issues = "https://github.com/robonet-ai/handumi-sw/issues"
 
 [project.optional-dependencies]
 piper = [
@@ -37,14 +46,18 @@ piper = [
 
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
-handumi-live = "handumi.scripts.live:main"
+handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
+handumi-teleop-real = "handumi.scripts.teleop_real:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-validate = "handumi.scripts.validate:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
+handumi-setup-hardware = "handumi.scripts.setup.setup_hardware:main"
+handumi-set-servo-id = "handumi.scripts.setup.set_servo_id:main"
 handumi-home-servos = "handumi.scripts.setup.home_servos:main"
 handumi-calibrate-grippers = "handumi.scripts.setup.calibrate_grippers:main"
 handumi-print-controller-pose = "handumi.scripts.setup.print_controller_pose:main"
 handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
+handumi-calibrate-spatial = "handumi.scripts.setup.calibrate_spatial:main"
 handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
 handumi-quest-probe = "handumi.tracking.quest_probe:main"
 
@@ -66,10 +79,18 @@ packages = ["src/handumi"]
 [tool.hatch.build.targets.wheel.force-include]
 "assets/axol" = "handumi/assets/axol"
 "assets/piper" = "handumi/assets/piper"
+"configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/handumi"]
+include = [
+    "src/handumi",
+    "assets",
+    "configs",
+    "docs",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.uv]
 no-build-isolation-package = ["xrobotoolkit-sdk"]

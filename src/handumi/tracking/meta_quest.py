@@ -1,6 +1,6 @@
-"""Meta Quest native-app tracking receiver (Phase 2A, Step 1 — the pose pipe).
+"""HandUMI Quest App tracking receiver.
 
-yubi-sw model: the native Quest app is a TCP server that streams one
+The native Quest app is a TCP server that streams one
 newline-delimited JSON pose sample per frame; the workstation (this module)
 dials in, parses each sample, stamps a PC receive clock, and keeps the latest
 frame in a buffer. A companion UDP NTP-style loop estimates the Quest<->PC clock
@@ -9,9 +9,8 @@ offset so poses can be aligned with camera/Feetech frames in post-processing.
 This step does NOT transform coordinates — poses are kept as raw Unity values.
 ``handumi.tracking.transforms`` (Step 2) converts them.
 
-Reference:
-  ../yubi-sw/airoa_quest/airoa_quest_bridge/transport/tcp_json.py
-  ../yubi-sw/airoa_quest/airoa_quest_msgs/msg/QuestController.msg
+App and protocol reference:
+  https://github.com/robonet-ai/handumi-quest-app
 
 Wire protocol (see docs/phase-2-motion-tracking.md → TCP/JSON Payload):
   TCP : newline-delimited JSON pose samples (Quest app is the server).
@@ -34,9 +33,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-import yaml
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.config import load_rig_section
 from handumi.tracking.base import ControllerPairSample, apply_tcp_calibration_pose7
 from handumi.tracking.packet import (
     TRACKING_PACKET_SCHEMA,
@@ -83,7 +82,7 @@ _IDENTITY_QUAT = (0.0, 0.0, 0.0, 1.0)
 class ControllerButtons:
     """Per-controller inputs. Analog values are UI/debug only — never width.
 
-    The YubiQuestApp legacy TCP/JSON reports button *presses* only (no analog
+    The compatibility TCP/JSON format reports button *presses* only (no analog
     trigger/grip), so ``trigger``/``grip`` here are 0.0/1.0 from the pressed
     flags, not continuous values.
     """
@@ -166,7 +165,7 @@ def pose_to_pose7(pose: Pose) -> np.ndarray:
     return np.concatenate([pose.position, pose.quaternion]).astype(np.float32)
 
 
-# Flat YubiQuestApp wire keys, per side (from yubi-sw quest_bridge_node.py).
+# Flat HandUMI Quest App wire keys, per side.
 _POSE_KEYS = {
     "left": {
         "pos": "leftControllerPosition", "rot": "leftControllerRotation",
@@ -210,9 +209,9 @@ def _controller_from_msg(msg: dict[str, Any], side: str) -> ControllerState:
 
 
 def parse_frame(msg: dict[str, Any], *, pc_monotonic_ns: int) -> QuestFrame:
-    """Build a :class:`QuestFrame` from one decoded YubiQuestApp JSON sample.
+    """Build a :class:`QuestFrame` from one HandUMI Quest App JSON sample.
 
-    Wire format is the yubi-sw flat layout (Unity coordinates, dict-shaped
+    Wire format uses a flat layout (Unity coordinates, dict-shaped
     vectors). Pure function so it is trivial to unit-test against the contract.
     """
     hmd_pos = msg.get("hmdPosition")
@@ -517,8 +516,7 @@ class MetaQuestConfig:
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MetaQuestConfig":
-        with Path(path).open("r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
+        data = load_rig_section(Path(path), "meta_quest")
         conn = data.get("connection", {}) or {}
         health = data.get("health", {}) or {}
         streams = data.get("streams", {}) or {}
@@ -936,9 +934,9 @@ class MetaQuestTrackingProvider:
         self.receiver = MetaQuestReceiver(config)
         self.workspace = WorkspaceCalibration.identity()
         self.workspace_set = False
-        # When False, left X is left free for callers (e.g. handumi-live uses
-        # it as the left-arm anchor button); the workspace still initializes
-        # on the first tracked HMD frame.
+        self.workspace_locked = False
+        # When False, controller buttons cannot reset the workspace (for
+        # example, handumi-teleop-sim owns its anchoring behavior).
         self.reset_workspace_on_x = reset_workspace_on_x
         self._prev_reset = False
 
@@ -950,10 +948,19 @@ class MetaQuestTrackingProvider:
         self.receiver.stop()
 
     def reset_workspace(self) -> None:
-        """Re-center the workspace on the next tracked HMD frame (e.g. the
-        recorder calls this when a double clap starts an episode, so every
-        episode's poses share a fresh, consistent origin)."""
+        """Re-center on the next HMD frame unless a table calibration is locked."""
+        if self.workspace_locked:
+            log.info("Workspace is locked to the calibrated table frame; reset ignored.")
+            return
         self.workspace_set = False
+
+    def set_workspace_from_device_pose(self, pose7: np.ndarray, *, locked: bool = True) -> None:
+        """Set ``T_workspace_quest`` explicitly, normally from session calibration."""
+        value = np.asarray(pose7, dtype=np.float64).reshape(7)
+        self.workspace = WorkspaceCalibration(Pose(value[:3], value[3:]))
+        self.workspace_set = True
+        self.workspace_locked = bool(locked)
+        log.info("Workspace set from calibration (%s).", "locked" if locked else "unlocked")
 
     def latest(self) -> ControllerPairSample:
         return self._sample(self.receiver.aligned_at())
@@ -986,20 +993,22 @@ class MetaQuestTrackingProvider:
         )
         reset_edge = reset_pressed and not self._prev_reset
         self._prev_reset = reset_pressed
-        if streaming and frame.hmd.tracked and (reset_edge or not self.workspace_set):
+        if (
+            not self.workspace_locked
+            and streaming
+            and frame.hmd.tracked
+            and (reset_edge or not self.workspace_set)
+        ):
             self.workspace = workspace_from_hmd(frame.hmd)
             self.workspace_set = True
             log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
 
-        left_controller = self.workspace.apply(
-            unity_pose_to_handumi(frame.left.position, frame.left.quaternion)
-        )
-        right_controller = self.workspace.apply(
-            unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
-        )
-        hmd_pose = self.workspace.apply(
-            unity_pose_to_handumi(frame.hmd.position, frame.hmd.quaternion)
-        )
+        left_device = unity_pose_to_handumi(frame.left.position, frame.left.quaternion)
+        right_device = unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
+        hmd_device = unity_pose_to_handumi(frame.hmd.position, frame.hmd.quaternion)
+        left_controller = self.workspace.apply(left_device)
+        right_controller = self.workspace.apply(right_device)
+        hmd_pose = self.workspace.apply(hmd_device)
         left = pose_to_pose7(left_controller)
         right = pose_to_pose7(right_controller)
         left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
@@ -1016,6 +1025,9 @@ class MetaQuestTrackingProvider:
             left_pose_valid=bool(frame.left.valid),
             right_pose_valid=bool(frame.right.valid),
             hmd_pose=pose_to_pose7(hmd_pose),
+            left_device_controller_pose=pose_to_pose7(left_device),
+            right_device_controller_pose=pose_to_pose7(right_device),
+            device_hmd_pose=pose_to_pose7(hmd_device),
             hmd_tracked=bool(streaming and frame.hmd.tracked),
             workspace_from_device_pose=pose_to_pose7(
                 self.workspace.workspace_from_quest
@@ -1044,7 +1056,7 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 
 
 def _vec3(value: Any) -> np.ndarray:
-    """Parse a 3-vector from a yubi `{x,y,z}` dict (or an `[x,y,z]` list)."""
+    """Parse a 3-vector from an `{x,y,z}` dict (or an `[x,y,z]` list)."""
     out = np.zeros(3, dtype=np.float32)
     if isinstance(value, dict):
         out[0] = _as_float(value.get("x"))
@@ -1057,7 +1069,7 @@ def _vec3(value: Any) -> np.ndarray:
 
 
 def _quat(value: Any) -> np.ndarray:
-    """Parse a quaternion from a yubi `{x,y,z,w}` dict (or an `[x,y,z,w]` list)."""
+    """Parse a quaternion from an `{x,y,z,w}` dict (or an `[x,y,z,w]` list)."""
     out = np.array(_IDENTITY_QUAT, dtype=np.float32)
     if isinstance(value, dict):
         out[0] = _as_float(value.get("x"))
@@ -1093,7 +1105,7 @@ def _main() -> None:
     parser.add_argument("--tcp-port", type=int, default=65432)
     parser.add_argument("--sync-port", type=int, default=42000)
     parser.add_argument("--config", type=Path, default=None,
-                        help="Optional configs/tracking_meta_quest.yaml override.")
+                        help="Optional configs/rig.yaml override.")
     parser.add_argument("--print-raw", action="store_true",
                         help="Dump the first received raw JSON frame (verify wire format).")
     args = parser.parse_args()

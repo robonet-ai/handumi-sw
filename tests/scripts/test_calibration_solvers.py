@@ -1,8 +1,12 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from handumi.scripts.setup.calibrate_tcp_offset import solve_pivot
+from handumi.calibration.control_tcp import controller_tcp_calibration_metadata
 from handumi.tracking.transforms import quat_to_matrix
 
 
@@ -34,6 +38,44 @@ class SolvePivotTest(unittest.TestCase):
         self.assertTrue(np.allclose(t, t_true, atol=0.005))
         self.assertGreater(rms, 0.0005)
         self.assertLess(rms, 0.01)
+
+
+class CalibrationMetadataTest(unittest.TestCase):
+    def test_snapshot_contains_exact_offsets_and_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "meta_controller_tcp.yaml"
+            path.write_text(
+                """calibration:
+  controller_to_gripper_tcp:
+    left:
+      position: [0.1, 0.2, 0.3]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+    right:
+      position: [-0.1, 0.2, 0.3]
+      quaternion: [0.0, 0.0, 0.0, 1.0]
+"""
+            )
+            metadata = controller_tcp_calibration_metadata(
+                path,
+                applied_to_state=False,
+                source_robot="piper",
+                source_gripper="piper_parallel_v1",
+                tracking_device="meta",
+                controller_mount="handumi_v1",
+            )
+
+        self.assertEqual(metadata["schema_version"], 2)
+        self.assertFalse(metadata["applied_to_state"])
+        self.assertEqual(metadata["source_robot"], "piper")
+        self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
+        self.assertEqual(metadata["tracking_device"], "meta")
+        self.assertEqual(metadata["controller_mount"], "handumi_v1")
+        self.assertEqual(len(metadata["sha256"]), 64)
+        self.assertEqual(
+            metadata["controller_to_gripper_tcp"]["left"]["position"],
+            [0.10000000149011612, 0.20000000298023224, 0.30000001192092896],
+        )
+        json.dumps(metadata)
 
 
 if __name__ == "__main__":

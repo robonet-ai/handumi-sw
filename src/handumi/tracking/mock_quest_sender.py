@@ -51,13 +51,13 @@ def _xyzw(x: float, y: float, z: float, w: float) -> dict:
 
 
 def _make_frame(seq: int, t0: float, skew_ns: int) -> dict:
-    """Build one pose sample in the YubiQuestApp flat wire format (Unity coords)."""
+    """Build one HandUMI Quest App wire sample in raw Unity coordinates."""
     t = time.monotonic() - t0
     sway = 0.05 * math.sin(t)
     bob = 0.05 * math.sin(2.0 * t)
     reach = 0.05 * math.cos(t)
     return {
-        # Top-level timing (yubi legacy TCP/JSON has no seq).
+        # Top-level timing (the compatibility TCP/JSON format has no sequence).
         "ovrTimeNs": _device_time_ns(skew_ns),
         "deltaTime": 1.0 / 72.0,
         # HMD pose.

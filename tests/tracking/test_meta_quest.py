@@ -1,7 +1,9 @@
 import socket
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
 import numpy as np
 
@@ -48,8 +50,30 @@ def _identity_calibration() -> ControllerTcpCalibration:
     )
 
 
+class MetaQuestConfigTest(unittest.TestCase):
+    def test_loads_meta_quest_section_from_rig(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rig.yaml"
+            path.write_text(
+                "meta_quest:\n"
+                "  connection:\n"
+                "    quest_ip: 192.168.1.42\n"
+                "    tcp_port: 60000\n"
+                "    sync_port: 41000\n"
+                "  health:\n"
+                "    frame_stale_timeout_s: 0.5\n",
+                encoding="utf-8",
+            )
+            config = MetaQuestConfig.from_yaml(path)
+
+        self.assertEqual(config.quest_ip, "192.168.1.42")
+        self.assertEqual(config.tcp_port, 60000)
+        self.assertEqual(config.sync_port, 41000)
+        self.assertEqual(config.frame_stale_timeout_s, 0.5)
+
+
 class ParseFrameTest(unittest.TestCase):
-    """Parsing of the YubiQuestApp flat wire format (dict-shaped vectors)."""
+    """Parsing of the HandUMI Quest App wire format (dict-shaped vectors)."""
 
     def test_full_frame(self):
         frame = parse_frame(
@@ -213,6 +237,30 @@ class TrackingFreshnessTest(unittest.TestCase):
         self.assertTrue(sample.left_pose_valid)
         self.assertTrue(sample.hmd_tracked)
         self.assertEqual(sample.hmd_pose.shape, (7,))
+        self.assertEqual(sample.left_device_controller_pose.shape, (7,))
+
+    def test_calibrated_workspace_is_locked_and_preserves_device_pose(self):
+        provider = MetaQuestTrackingProvider(
+            config=self.config,
+            calibration=_identity_calibration(),
+        )
+        table_from_quest = np.array([1, 2, 3, 0, 0, 0, 1], dtype=np.float32)
+        provider.set_workspace_from_device_pose(table_from_quest, locked=True)
+        with provider.receiver._lock:
+            provider.receiver._connected = True
+            provider.receiver._latest = _tracked_frame()
+            provider.receiver._last_frame_mono = time.monotonic()
+
+        before = provider.latest()
+        provider.reset_workspace()
+        after = provider.latest()
+
+        np.testing.assert_allclose(before.workspace_from_device_pose, table_from_quest)
+        np.testing.assert_allclose(after.workspace_from_device_pose, table_from_quest)
+        np.testing.assert_allclose(
+            before.left_controller_pose[:3],
+            before.left_device_controller_pose[:3] + table_from_quest[:3],
+        )
 
     def test_receiver_selects_native_frame_nearest_aligned_pc_time(self):
         receiver = MetaQuestReceiver(self.config)

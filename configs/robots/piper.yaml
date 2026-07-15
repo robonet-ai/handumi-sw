@@ -1,17 +1,37 @@
 kind: piper
 urdf: assets/piper/piper.urdf
-mjcf: assets/piper/piper.xml  # contact physics for handumi-live --scene
+mjcf: assets/piper/piper.xml  # contact physics for handumi-teleop-sim --scene
 pkg_root: assets/piper
 ee_links:
   left: left_tcp
   right: right_tcp
-# Work-ready rest pose per arm: joint2 +1.2, joint3 -0.8, joint5 +0.4 —
-# elbow arched high with the gripper tilted ~41 deg down toward the table,
-# TCP at (x 0.36, z 0.19). Matches the natural HandUMI pick-and-place stance
-# while staying clear of the base-axis singularity.
-home_q: [0.0, 1.2, -0.8, 0.0, 0.4, 0.0, 0.0, 0.0, 0.0, 1.2, -0.8, 0.0, 0.4, 0.0, 0.0, 0.0]
+# Physical Piper start pose used by handumi-IK: joint5 +25 deg per arm.
+# Keeping simulation, conversion, and real-arm startup on the same home avoids
+# an artificial offset when the controller pose is anchored.
+home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
+gripper_max_width_m: 0.066
+# Physical tool assembly installed on HandUMI while demonstrating Piper tasks.
+# Changing this gripper or controller mount requires a new pivot calibration.
+handumi_tool:
+  gripper: piper_parallel_v1
+  controller_mount: handumi_v1
+# Validated physical HandUMI mount calibration for each tracking device.
+# New identity-bound dataset snapshots take precedence; this pairing replaces
+# stale legacy snapshots that did not identify their robot/gripper assembly.
+controller_tcp_calibrations:
+  meta: configs/calibration/meta_controller_tcp.yaml
 ik_weights:
   pos: 100.0
-  ori: 15.0
-  rest: 2.0
+  ori: 4.5
+  rest: 12.0
+  # 4 deg per IK frame, matching the validated handumi-IK teleop command.
+  max_joint_delta: 0.06981317
   max_reach: 0.45
+real:
+  command_rate_hz: 100
+  max_joint_speed_deg_s: 180
+  home_max_joint_speed_deg_s: 20
+  home_timeout_s: 30
+  home_tolerance_deg: 3
+  speed_percent: 80
+  gripper_effort: 1000

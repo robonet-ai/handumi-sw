@@ -70,6 +70,13 @@ class TrajectoryTrailTest(unittest.TestCase):
 
 
 class DoubleClapDetectorTest(unittest.TestCase):
+    def test_reports_triggering_side(self):
+        det = DoubleClapDetector(window_s=1.2)
+        self.assertIsNone(det.update_side(50.0, 50.0, 0.0))
+        self.assertIsNone(det.update_side(2.0, 50.0, 0.1))
+        self.assertIsNone(det.update_side(50.0, 50.0, 0.2))
+        self.assertEqual(det.update_side(2.0, 50.0, 0.3), "left")
+
     def _clap(self, det, t, left=True, right=True):
         """One clap: open -> closed -> (returns result of the closed sample)."""
         det.update(50.0, 50.0, t)

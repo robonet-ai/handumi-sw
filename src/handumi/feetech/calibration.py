@@ -3,8 +3,8 @@
 Two concerns, two homes:
 
 - **Ports** (``servo_id``, ``port``) are per-machine wiring that can change on
-  every replug/reboot. They live in the tracked ``configs/feetech.yaml``,
-  edited directly — the same pattern as ``configs/cameras.yaml``.
+  every replug/reboot. They live in the ``feetech`` section of the local
+  ``configs/rig.yaml``.
 - **Calibration** (``closed_ticks``, ``open_ticks``, ``max_width_mm``) is a
   measured property of the physical gripper that rarely changes once set. It
   lives in a per-user cache so it is never committed and each laptop
@@ -23,7 +23,9 @@ from typing import Any
 
 import yaml
 
-PORTS_PATH = Path("configs/feetech.yaml")
+from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
+
+RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
 
 
 def user_calibration_path() -> Path:
@@ -106,16 +108,13 @@ def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> N
     )
 
 
-def load_ports(path: Path = PORTS_PATH) -> FeetechConfig:
-    """Load servo_id/port/baudrate/protocol_version from the tracked ports file.
+def load_ports(path: Path = RIG_CONFIG_PATH) -> FeetechConfig:
+    """Load servo_id/port/baudrate/protocol_version from the local rig file.
 
     Calibration fields (closed/open ticks, max_width_mm) are always ``None``
     here; use :func:`load_config` to get the full, merged runtime config.
     """
-    if not path.exists():
-        return default_config()
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    data = load_rig_section(path, "feetech")
     return FeetechConfig(
         port=_optional_str(data.get("port")),
         baudrate=int(data.get("baudrate", 1_000_000)),
@@ -136,11 +135,11 @@ def load_calibration_values(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def load_config(
-    ports_path: Path = PORTS_PATH, calibration_path: Path | None = None
+    rig_path: Path = RIG_CONFIG_PATH, calibration_path: Path | None = None
 ) -> FeetechConfig:
-    """Merge the tracked ports file with the per-user calibration cache into
+    """Merge the local rig wiring with the per-user calibration cache into
     the full runtime :class:`FeetechConfig`."""
-    ports = load_ports(ports_path)
+    ports = load_ports(rig_path)
     values = load_calibration_values(calibration_path or user_calibration_path())
 
     def merged(side_ports: GripperCalibration, side: str) -> GripperCalibration:
@@ -164,7 +163,7 @@ def load_config(
 
 def save_calibration(config: FeetechConfig, path: Path | None = None) -> Path:
     """Persist only the measured calibration (closed/open ticks, max_width_mm)
-    to the per-user cache. Ports are untouched — they live in ``configs/feetech.yaml``."""
+    to the per-user cache. Ports are untouched — they live in ``configs/rig.yaml``."""
     path = path or user_calibration_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {

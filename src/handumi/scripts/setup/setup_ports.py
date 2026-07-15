@@ -2,8 +2,7 @@
 
 Watches udev for serial/camera changes, scans ``/dev/ttyACM*`` /
 ``/dev/ttyUSB*`` for Feetech servo IDs, and lists USB cameras via
-``v4l2-ctl``. Use this to fill in ``configs/feetech.yaml`` and
-``configs/cameras.yaml``.
+``v4l2-ctl``. Use this to fill in ``configs/rig.yaml``.
 
 Usage
 -----
@@ -25,8 +24,9 @@ import subprocess
 import time
 from datetime import datetime
 
+from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech.bus import FeetechBus
-from handumi.feetech.calibration import PORTS_PATH, default_config
+from handumi.feetech.calibration import default_config
 
 _USB_SERIAL_ADAPTERS = {
     ("1a86", "55d3"): ("QinHeng CH34x / USB Single Serial", "ch341"),
@@ -85,7 +85,7 @@ def _render_status(scan_ids: range) -> None:
     print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
     _print_serial_ports(scan_ids)
     _print_camera_ports()
-    print(f"\nEdit servo_id/port in: {PORTS_PATH} (Feetech), configs/cameras.yaml (cameras)")
+    print(f"\nEdit camera and Feetech assignments in: {DEFAULT_RIG_CONFIG}")
 
 
 def _start_udev_monitor() -> subprocess.Popen[str] | None:

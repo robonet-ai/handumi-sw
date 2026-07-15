@@ -37,6 +37,7 @@ cython_debug/
 
 # Virtual environments
 .venv/
+.venv-docs/
 .uv-cache/
 venv/
 env/
@@ -68,6 +69,8 @@ Thumbs.db
 external_dependencies/
 outputs/
 datasets/
+configs/rig.yaml
+docs/build/
 
 # Editor config
 .zed/
