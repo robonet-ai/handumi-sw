@@ -10,6 +10,7 @@ from handumi.retargeting.handumi_to_robot import VR_TO_ROBOT
 from handumi.robots.kinematics import limit_joint_delta
 from handumi.robots.registry import load_robot_config
 from handumi.scripts.teleop_sim import (
+    AutoStartCountdown,
     _clear_enabled_anchors,
     _has_enabled_anchors,
     _load_calibration,
@@ -17,6 +18,7 @@ from handumi.scripts.teleop_sim import (
     _sample_state,
     _selected_camera_names,
     _start_sides,
+    _tracking_ready_for_sides,
     _tracking_world_map,
     _validate_unique_camera_ids,
 )
@@ -150,6 +152,86 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
 
 
 class TeleopSimStartTest(unittest.TestCase):
+    def test_auto_start_tracking_requires_nonzero_pose_for_every_enabled_side(self):
+        poses = {
+            "left": np.array([0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]),
+            "right": np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        }
+        tracked = {"left": True, "right": True}
+
+        self.assertFalse(
+            _tracking_ready_for_sides(poses, tracked, ("left", "right"))
+        )
+        self.assertTrue(_tracking_ready_for_sides(poses, tracked, ("left",)))
+
+    def test_auto_start_flag_defaults_to_five_seconds(self):
+        with mock.patch(
+            "sys.argv", ["handumi-teleop-sim", "--device", "pico", "--auto-start"]
+        ):
+            args = parse_args()
+
+        self.assertTrue(args.auto_start)
+        self.assertEqual(args.auto_start_delay_s, 5.0)
+
+    def test_auto_start_requires_continuous_tracking_and_fires_once(self):
+        countdown = AutoStartCountdown(enabled=True, delay_s=5.0)
+        idle = ("left", "right")
+
+        self.assertEqual(
+            countdown.update(
+                now=10.0,
+                tracking_ready=True,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            (),
+        )
+        self.assertEqual(
+            countdown.update(
+                now=13.0,
+                tracking_ready=False,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            (),
+        )
+        self.assertEqual(
+            countdown.update(
+                now=14.0,
+                tracking_ready=True,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            (),
+        )
+        self.assertEqual(
+            countdown.update(
+                now=18.9,
+                tracking_ready=True,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            (),
+        )
+        self.assertEqual(
+            countdown.update(
+                now=19.0,
+                tracking_ready=True,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            idle,
+        )
+        self.assertEqual(
+            countdown.update(
+                now=25.0,
+                tracking_ready=True,
+                already_active=False,
+                idle_sides=idle,
+            ),
+            (),
+        )
+
     def test_space_start_only_returns_unanchored_enabled_sides(self):
         anchors = {"left": {"source": np.zeros(7)}, "right": None}
 

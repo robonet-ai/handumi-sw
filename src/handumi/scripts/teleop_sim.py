@@ -20,6 +20,8 @@ robot follows relative motion from there. The double-clap gesture (close/open
 one gripper twice) starts idle arms; once teleop is active, another double clap
 resets teleop by clearing anchors and parking enabled arms at home. Keyboard
 Space can also start idle arms when explicitly enabled with ``--space-start``.
+With ``--auto-start``, stable tracking starts a five-second countdown and then
+anchors the enabled arms through the same start path.
 
   Space                 start both arms that are not anchored yet (--space-start)
   double clap           start teleop, or reset/pause active teleop
@@ -107,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: down or hands_up).",
+        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
@@ -135,6 +137,20 @@ def parse_args() -> argparse.Namespace:
         "--space-start",
         action="store_true",
         help="Allow keyboard Space to start any unanchored enabled arms.",
+    )
+    p.add_argument(
+        "--auto-start",
+        action="store_true",
+        help=(
+            "Start enabled arms automatically after controller tracking remains "
+            "valid for --auto-start-delay-s."
+        ),
+    )
+    p.add_argument(
+        "--auto-start-delay-s",
+        type=float,
+        default=5.0,
+        help="Seconds of continuous valid tracking required by --auto-start.",
     )
     p.add_argument(
         "--scene",
@@ -247,6 +263,60 @@ class KeyboardSpaceListener:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+class AutoStartCountdown:
+    """One-shot start after continuous valid tracking for a safety delay."""
+
+    def __init__(self, *, enabled: bool, delay_s: float) -> None:
+        self.enabled = enabled
+        self.delay_s = delay_s
+        self.started_at: float | None = None
+        self.announced_seconds: int | None = None
+        self.completed = False
+
+    def update(
+        self,
+        *,
+        now: float,
+        tracking_ready: bool,
+        already_active: bool,
+        idle_sides: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if not self.enabled or self.completed:
+            return ()
+        if already_active:
+            self.completed = True
+            return ()
+        if not tracking_ready:
+            if self.started_at is not None:
+                log.info("Auto-start countdown cancelled: controller tracking lost.")
+            self.started_at = None
+            self.announced_seconds = None
+            return ()
+        if self.started_at is None:
+            self.started_at = now
+            self.announced_seconds = int(np.ceil(self.delay_s))
+            log.info(
+                "Controllers detected. Auto-start in %d s; hold them steady.",
+                self.announced_seconds,
+            )
+
+        remaining = self.delay_s - (now - self.started_at)
+        if remaining <= 0.0:
+            self.completed = True
+            if idle_sides:
+                log.info(
+                    "Auto-start countdown complete; starting %s.",
+                    "/".join(idle_sides),
+                )
+            return idle_sides
+
+        seconds = int(np.ceil(remaining))
+        if seconds < (self.announced_seconds or seconds):
+            self.announced_seconds = seconds
+            log.info("Auto-start in %d s ...", seconds)
+        return ()
+
+
 def _camera_arg(value: str) -> int | str:
     return int(value) if value.isdigit() else value
 
@@ -255,6 +325,20 @@ def _enabled_sides(side: str) -> tuple[str, ...]:
     if side == "both":
         return ("left", "right")
     return (side,)
+
+
+def _tracking_ready_for_sides(
+    source_poses: dict[str, np.ndarray],
+    side_tracked: dict[str, bool],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    """Require a real finite controller pose for every arm being auto-started."""
+    return all(
+        side_tracked[side]
+        and np.isfinite(source_poses[side]).all()
+        and float(np.linalg.norm(source_poses[side][:3])) > 1e-6
+        for side in enabled_sides
+    )
 
 
 def _start_sides(
@@ -478,6 +562,8 @@ def _log_rerun(
 
 def main() -> None:
     args = parse_args()
+    if args.auto_start_delay_s <= 0.0:
+        raise SystemExit("--auto-start-delay-s must be greater than zero.")
 
     calibration = _load_calibration(args)
     # Keep controller buttons from changing the tracking workspace during sim
@@ -645,10 +731,22 @@ def main() -> None:
     clap = DoubleClapDetector()
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     space_listener.start()
+    auto_start = AutoStartCountdown(
+        enabled=args.auto_start,
+        delay_s=args.auto_start_delay_s,
+    )
     episode_start: float | None = None
     frame = 0
     interval = 1.0 / args.fps
-    if args.space_start:
+    if args.auto_start:
+        manual_hint = " Space remains available." if args.space_start else ""
+        log.info(
+            "Arms idle at home. Waiting for controller tracking; auto-start "
+            "after %.1f s.%s",
+            args.auto_start_delay_s,
+            manual_hint,
+        )
+    elif args.space_start:
         log.info(
             "Arms idle at home. Start with Space, or double clap a gripper "
             "to start enabled arms."
@@ -702,6 +800,16 @@ def main() -> None:
                 start_sides = controller.idle_sides()
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
+            auto_start_sides = auto_start.update(
+                now=loop_start,
+                tracking_ready=_tracking_ready_for_sides(
+                    source_poses, side_tracked, enabled_sides
+                ),
+                already_active=controller.active,
+                idle_sides=controller.idle_sides(),
+            )
+            if auto_start_sides:
+                start_sides = auto_start_sides
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
                     q = controller.reset()
