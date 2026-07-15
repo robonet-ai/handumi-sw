@@ -195,6 +195,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
+        "--hide-trajectories",
+        action="store_true",
+        help=(
+            "Hide target and achieved TCP paths and markers in the Viser viewer, "
+            "showing only the robot and scene."
+        ),
+    )
+    parser.add_argument(
         "--scene",
         default=None,
         help=(
@@ -1167,56 +1175,58 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-    server.scene.add_spline_catmull_rom(
-        "/traj/target_left",
-        positions=rollout["target_left_pose7_robot_world"][:, :3],
-        color=(255, 190, 50),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/target_right",
-        positions=rollout["target_right_pose7_robot_world"][:, :3],
-        color=(80, 220, 130),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/achieved_left",
-        positions=rollout["achieved_left_pose7_robot_world"][:, :3],
-        color=(80, 160, 255),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/achieved_right",
-        positions=rollout["achieved_right_pose7_robot_world"][:, :3],
-        color=(255, 90, 90),
-        line_width=2.0,
-    )
-    target_left = server.scene.add_icosphere(
-        "/target/left", radius=0.018, color=(255, 190, 50)
-    )
-    target_right = server.scene.add_icosphere(
-        "/target/right", radius=0.018, color=(80, 220, 130)
-    )
-    achieved_left = server.scene.add_icosphere(
-        "/achieved/left", radius=0.014, color=(80, 160, 255)
-    )
-    achieved_right = server.scene.add_icosphere(
-        "/achieved/right", radius=0.014, color=(255, 90, 90)
-    )
+    if not args.hide_trajectories:
+        server.scene.add_spline_catmull_rom(
+            "/traj/target_left",
+            positions=rollout["target_left_pose7_robot_world"][:, :3],
+            color=(255, 190, 50),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/target_right",
+            positions=rollout["target_right_pose7_robot_world"][:, :3],
+            color=(80, 220, 130),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/achieved_left",
+            positions=rollout["achieved_left_pose7_robot_world"][:, :3],
+            color=(80, 160, 255),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/achieved_right",
+            positions=rollout["achieved_right_pose7_robot_world"][:, :3],
+            color=(255, 90, 90),
+            line_width=2.0,
+        )
+        target_left = server.scene.add_icosphere(
+            "/target/left", radius=0.018, color=(255, 190, 50)
+        )
+        target_right = server.scene.add_icosphere(
+            "/target/right", radius=0.018, color=(80, 220, 130)
+        )
+        achieved_left = server.scene.add_icosphere(
+            "/achieved/left", radius=0.014, color=(80, 160, 255)
+        )
+        achieved_right = server.scene.add_icosphere(
+            "/achieved/right", radius=0.014, color=(255, 90, 90)
+        )
     play = server.gui.add_checkbox("Play", True)
     frame = server.gui.add_slider("Frame", 0, len(rollout["qpos"]) - 1, 1, 0)
     err_text = server.gui.add_text("EE error (cm/deg)", "-", disabled=True)
 
     def draw(i: int) -> None:
         robot_view.update_cfg(rollout["qpos"][i])
-        target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
-        target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
-        achieved_left.position = tuple(
-            rollout["achieved_left_pose7_robot_world"][i, :3]
-        )
-        achieved_right.position = tuple(
-            rollout["achieved_right_pose7_robot_world"][i, :3]
-        )
+        if not args.hide_trajectories:
+            target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
+            target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
+            achieved_left.position = tuple(
+                rollout["achieved_left_pose7_robot_world"][i, :3]
+            )
+            achieved_right.position = tuple(
+                rollout["achieved_right_pose7_robot_world"][i, :3]
+            )
         err_text.value = (
             f"L={rollout['left_pos_error_m'][i] * 100:.1f}cm/"
             f"{rollout['left_rot_error_deg'][i]:.1f}deg "

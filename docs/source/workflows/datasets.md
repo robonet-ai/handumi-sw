@@ -17,6 +17,8 @@ handumi-replay-in-sim \
 In Viser, check the bimanual geometry, table alignment, motion continuity, and
 unreachable poses. Use `--headless` for automated checks and `--strict-ik` to
 fail when IK error exceeds the configured limits.
+Add `--hide-trajectories` to show only the robot and scene without the target
+and achieved TCP paths.
 
 Table-calibrated datasets preserve recorded bimanual geometry automatically.
 

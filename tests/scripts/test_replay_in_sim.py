@@ -311,6 +311,7 @@ def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
     args = build_parser().parse_args([])
 
     assert args.retarget_mode == "auto"
+    assert args.hide_trajectories is False
     assert args.use_dataset_tcp_calibration is False
     assert args.absolute_orientation == "relative-start"
     assert args.initial_solve_iterations == 12
@@ -318,6 +319,14 @@ def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
     assert args.max_ik_position_error_m == 0.03
     assert args.max_ik_rotation_error_deg == 45.0
     assert args.table_clearance_warning_m == 0.10
+
+
+def test_hide_trajectories_parser_flag():
+    from handumi.scripts.replay.replay_in_sim import build_parser
+
+    args = build_parser().parse_args(["--hide-trajectories"])
+
+    assert args.hide_trajectories is True
 
 
 def test_render_task_scene_maps_table_bodies_into_robot_world():
