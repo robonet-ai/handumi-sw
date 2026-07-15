@@ -32,7 +32,10 @@ import numpy as np
 import yaml
 
 from handumi.body import (
+    AnthropometricTable,
+    BodyProfile,
     CanonicalBodyFrame,
+    KinematicComEstimator,
     canonical_body_features,
     canonical_body_from_packet,
     canonical_body_metadata,
@@ -184,6 +187,58 @@ def build_features(
     if include_body:
         features.update(canonical_body_features())
     return features
+
+
+def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | None:
+    profile_path = getattr(args, "body_profile", None)
+    height_m = getattr(args, "body_height_m", None)
+    mass_kg = getattr(args, "body_mass_kg", None)
+    foot_length_m = getattr(args, "body_foot_length_m", None)
+    foot_width_m = getattr(args, "body_foot_width_m", None)
+    table_path = getattr(args, "anthropometric_table", None)
+
+    direct_values = (height_m, mass_kg, foot_length_m, foot_width_m)
+    if profile_path is not None and any(value is not None for value in direct_values):
+        raise SystemExit(
+            "--body-profile cannot be combined with direct --body-*-m values."
+        )
+    if profile_path is not None:
+        try:
+            profile = BodyProfile.from_yaml(profile_path)
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid body profile: {exc}") from exc
+    elif height_m is None and mass_kg is None:
+        if table_path is not None or foot_length_m is not None or foot_width_m is not None:
+            raise SystemExit(
+                "Body dimensions and anthropometric tables require both "
+                "--body-height-m and --body-mass-kg, or --body-profile."
+            )
+        return None
+    else:
+        if height_m is None or mass_kg is None:
+            raise SystemExit(
+                "--body-height-m and --body-mass-kg must be provided together."
+            )
+        try:
+            profile = BodyProfile(
+                height_m=height_m,
+                mass_kg=mass_kg,
+                foot_length_m=foot_length_m,
+                foot_width_m=foot_width_m,
+                source="recording_cli",
+            )
+        except ValueError as exc:
+            raise SystemExit(f"Invalid body profile: {exc}") from exc
+
+    try:
+        table = (
+            AnthropometricTable.from_yaml(table_path)
+            if table_path is not None
+            else None
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"Invalid anthropometric table: {exc}") from exc
+    return KinematicComEstimator(profile, table=table)
 
 
 def _tuple_shape(feature: dict) -> dict:
@@ -403,6 +458,7 @@ def record_episode(
     sensor_loss_timeout_s: float = 1.0,
     tracking_sidecar: TrackingSidecarWriter | None = None,
     world_calibration: HandumiWorldCalibration | None = None,
+    body_estimator: KinematicComEstimator | None = None,
     rerun: _RecordingRerun | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
@@ -505,6 +561,8 @@ def record_episode(
                 tracking_sidecar.nearest_packet(target_time_ns),
                 calibration=world_calibration,
             )
+            if body_estimator is not None:
+                body_frame = body_estimator.estimate(body_frame)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
             sample_time_ns > 0
@@ -711,6 +769,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
+    p.add_argument(
+        "--body-profile",
+        type=Path,
+        default=None,
+        help=(
+            "YAML body profile with required height_m and mass_kg. Enables "
+            "kinematic CoM/contact estimation."
+        ),
+    )
+    p.add_argument("--body-height-m", type=float, default=None)
+    p.add_argument("--body-mass-kg", type=float, default=None)
+    p.add_argument("--body-foot-length-m", type=float, default=None)
+    p.add_argument("--body-foot-width-m", type=float, default=None)
+    p.add_argument(
+        "--anthropometric-table",
+        type=Path,
+        default=None,
+        help="Optional custom versioned anthropometric segment table YAML.",
+    )
 
     p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
     pico_transport = p.add_mutually_exclusive_group()
@@ -848,6 +925,7 @@ def main() -> None:
         source_frame=f"{args.device}_right_handed_source",
         qualified=args.device == "meta",
     )
+    body_estimator = build_body_estimator(args)
 
     stop_event = threading.Event()
 
@@ -914,6 +992,8 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
+            if body_estimator is not None:
+                body_estimator.reset()
             tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             if rerun is not None:
@@ -945,6 +1025,7 @@ def main() -> None:
                     sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                     tracking_sidecar=tracking_sidecar,
                     world_calibration=world_calibration,
+                    body_estimator=body_estimator,
                     rerun=rerun,
                 )
             except BaseException:
@@ -1007,6 +1088,21 @@ def main() -> None:
             body_metadata = canonical_body_metadata(
                 transforms=[world_calibration.metadata()]
             )
+            com_estimator_metadata = (
+                body_estimator.metadata()
+                if body_estimator is not None
+                else {
+                    "schema": "handumi_kinematic_com_v1",
+                    "enabled": False,
+                    "reason": "body_profile_not_supplied",
+                }
+            )
+            body_metadata["estimator_version"] = (
+                com_estimator_metadata["schema"]
+                if body_estimator is not None
+                else "not_run"
+            )
+            body_metadata["com_estimator"] = com_estimator_metadata
             body_tracking_schema = body_metadata.pop("tracking_schema")
             updated_info = _update_info_json(
                 root,

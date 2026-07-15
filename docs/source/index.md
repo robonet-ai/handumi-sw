@@ -15,6 +15,7 @@ setup
 teleoperation
 record
 workflows/datasets
+workflows/body_tracking
 troubleshooting
 ```
 

@@ -32,9 +32,12 @@ used for body dynamics. Camera, legacy workspace, and optional mocap transforms
 remain named edges in an explicit transform graph.
 
 Unavailable floating-point values are NaN and have zero validity masks. Invalid
-source joints are never replaced with cached values. Heel, CoM, contact, and
-support-polygon values remain unavailable until a versioned estimator produces
-them; a future heel estimate must carry `INFERRED` provenance.
+source joints are never replaced with cached values. With a measured body
+profile, `handumi_kinematic_com_v1` produces covariance-bearing segment/whole
+CoM, smoothed derivatives, inferred heel/contact probabilities, and a support
+polygon. These remain explicitly inferred. Without a profile they stay
+unavailable, and center of pressure always stays unavailable without force or
+pressure measurements.
 
 The PICO 24-joint index table follows the public `BodyTrackerRole` order in the
 [XRoboToolkit Unity client](https://github.com/XR-Robotics/XRoboToolkit-Unity-Client/blob/main/PICO%20Unity%20Integration%20SDK/Runtime/Scripts/PXR_Plugin.cs).
@@ -43,9 +46,11 @@ Meta mappings follow the Meta XR SDK 74 `OVRSkeletonMapping` and
 
 ## Readers and conversion
 
-`load_raw_episode()` returns `body=None` for old/controller-only recordings.
-It never constructs empty body poses on behalf of an old dataset. New datasets
-return a typed optional body group and episode sidecar paths.
+`load_raw_episode()` returns `body=None` for current controller-only recordings.
+It never constructs empty body poses when body columns are absent. Body-enabled
+datasets return a typed optional body group and episode sidecar paths. Historic
+pre-compact HandUMI layouts remain subject to the mainline reader's explicit
+re-recording requirement.
 
 Derived robot datasets preserve the original behavior by default. Pass
 `handumi-convert --preserve-body` to carry aligned body columns and native

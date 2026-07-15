@@ -33,6 +33,9 @@ handumi-record \
 
 Use `--device pico` for PICO. Add `--push-to-hub` only after confirming the pilot locally.
 
+To record canonical full-body CoM/contact estimates, supply a measured body
+profile. See [Body Tracking and Kinematic CoM](workflows/body_tracking.md).
+
 Do not connect or configure a robot arm for this step. A target embodiment can
 be selected later during conversion or replay without modifying the raw
 recording.

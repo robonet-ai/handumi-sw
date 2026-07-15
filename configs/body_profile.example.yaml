@@ -1,0 +1,15 @@
+schema: handumi_body_profile_v1
+height_m: 1.75
+mass_kg: 70.0
+
+# Optional measured dimensions improve inferred heel/support geometry.
+arm_span_m: null
+leg_length_m: null
+foot_length_m: null
+foot_width_m: null
+shoulder_breadth_m: null
+hip_breadth_m: null
+
+measurement_uncertainty_m: 0.01
+mass_uncertainty_kg: 0.5
+source: operator_measurement

@@ -120,6 +120,24 @@ class CanonicalClockQuality(IntEnum):
     DIAGNOSTIC_ONLY = 4
 
 
+class ComProvenance(IntEnum):
+    UNAVAILABLE = 0
+    KINEMATIC_INFERRED = 1
+    FUSED_ESTIMATED = 2
+
+
+class ComDiagnostic(IntEnum):
+    UNAVAILABLE = 0
+    VALID = 1
+    MISSING_LANDMARKS = 2
+    UNRESOLVED_MASS = 3
+    EXCESSIVE_UNCERTAINTY = 4
+    GROUND_UNAVAILABLE = 5
+    TRAJECTORY_BOUNDARY = 6
+    TIMING_INVALID = 7
+    RELOCALIZATION = 8
+
+
 @dataclass(frozen=True)
 class CanonicalBodyFrame:
     """One aligned canonical body observation in ``handumi_world``."""
@@ -134,11 +152,34 @@ class CanonicalBodyFrame:
     platform_root_position_valid: np.ndarray
     platform_root_orientation_valid: np.ndarray
     whole_com: np.ndarray
+    whole_com_valid: np.ndarray
+    whole_com_confidence: np.ndarray
+    whole_com_covariance: np.ndarray
+    whole_com_provenance: np.ndarray
+    whole_com_diagnostic: np.ndarray
+    whole_com_unresolved_mass_fraction: np.ndarray
+    whole_com_ground_projection: np.ndarray
+    whole_com_ground_projection_valid: np.ndarray
+    whole_com_ground_projection_covariance: np.ndarray
+    whole_com_velocity: np.ndarray
+    whole_com_velocity_valid: np.ndarray
+    whole_com_acceleration: np.ndarray
+    whole_com_acceleration_valid: np.ndarray
+    whole_com_trajectory_diagnostic: np.ndarray
     segment_com: np.ndarray
+    segment_com_valid: np.ndarray
+    segment_com_confidence: np.ndarray
+    segment_com_covariance: np.ndarray
+    segment_com_provenance: np.ndarray
+    segment_mass_fraction: np.ndarray
     ground_plane: np.ndarray
     contact_probability: np.ndarray
+    contact_valid: np.ndarray
+    contact_provenance: np.ndarray
     support_polygon: np.ndarray
     support_polygon_valid: np.ndarray
+    center_of_pressure: np.ndarray
+    center_of_pressure_valid: np.ndarray
     source_time_ns: np.ndarray
     mapped_time_ns: np.ndarray
     receive_time_ns: np.ndarray
@@ -162,15 +203,48 @@ class CanonicalBodyFrame:
             platform_root_position_valid=np.zeros(1, dtype=np.int64),
             platform_root_orientation_valid=np.zeros(1, dtype=np.int64),
             whole_com=np.full(3, nan, dtype=np.float32),
+            whole_com_valid=np.zeros(1, dtype=np.int64),
+            whole_com_confidence=np.full(1, nan, dtype=np.float32),
+            whole_com_covariance=np.full((3, 3), nan, dtype=np.float32),
+            whole_com_provenance=np.zeros(1, dtype=np.int64),
+            whole_com_diagnostic=np.zeros(1, dtype=np.int64),
+            whole_com_unresolved_mass_fraction=np.full(1, nan, dtype=np.float32),
+            whole_com_ground_projection=np.full(3, nan, dtype=np.float32),
+            whole_com_ground_projection_valid=np.zeros(1, dtype=np.int64),
+            whole_com_ground_projection_covariance=np.full(
+                (3, 3), nan, dtype=np.float32
+            ),
+            whole_com_velocity=np.full(3, nan, dtype=np.float32),
+            whole_com_velocity_valid=np.zeros(1, dtype=np.int64),
+            whole_com_acceleration=np.full(3, nan, dtype=np.float32),
+            whole_com_acceleration_valid=np.zeros(1, dtype=np.int64),
+            whole_com_trajectory_diagnostic=np.zeros(1, dtype=np.int64),
             segment_com=np.full((CANONICAL_JOINT_COUNT, 3), nan, dtype=np.float32),
+            segment_com_valid=np.zeros(CANONICAL_JOINT_COUNT, dtype=np.int64),
+            segment_com_confidence=np.full(
+                CANONICAL_JOINT_COUNT, nan, dtype=np.float32
+            ),
+            segment_com_covariance=np.full(
+                (CANONICAL_JOINT_COUNT, 3, 3), nan, dtype=np.float32
+            ),
+            segment_com_provenance=np.zeros(
+                CANONICAL_JOINT_COUNT, dtype=np.int64
+            ),
+            segment_mass_fraction=np.zeros(
+                CANONICAL_JOINT_COUNT, dtype=np.float32
+            ),
             ground_plane=np.full(4, nan, dtype=np.float32),
             contact_probability=np.full(4, nan, dtype=np.float32),
+            contact_valid=np.zeros(4, dtype=np.int64),
+            contact_provenance=np.zeros(4, dtype=np.int64),
             support_polygon=np.full(
                 (MAX_SUPPORT_POLYGON_VERTICES, 3), nan, dtype=np.float32
             ),
             support_polygon_valid=np.zeros(
                 MAX_SUPPORT_POLYGON_VERTICES, dtype=np.int64
             ),
+            center_of_pressure=np.full(3, nan, dtype=np.float32),
+            center_of_pressure_valid=np.zeros(1, dtype=np.int64),
             source_time_ns=np.zeros(1, dtype=np.int64),
             mapped_time_ns=np.zeros(1, dtype=np.int64),
             receive_time_ns=np.zeros(1, dtype=np.int64),
@@ -193,11 +267,40 @@ class CanonicalBodyFrame:
             f"{BODY_PREFIX}.platform_root_position_valid": self.platform_root_position_valid,
             f"{BODY_PREFIX}.platform_root_orientation_valid": self.platform_root_orientation_valid,
             f"{BODY_PREFIX}.whole_com": self.whole_com,
+            f"{BODY_PREFIX}.whole_com_valid": self.whole_com_valid,
+            f"{BODY_PREFIX}.whole_com_confidence": self.whole_com_confidence,
+            f"{BODY_PREFIX}.whole_com_covariance": self.whole_com_covariance,
+            f"{BODY_PREFIX}.whole_com_provenance": self.whole_com_provenance,
+            f"{BODY_PREFIX}.whole_com_diagnostic": self.whole_com_diagnostic,
+            f"{BODY_PREFIX}.whole_com_unresolved_mass_fraction": (
+                self.whole_com_unresolved_mass_fraction
+            ),
+            f"{BODY_PREFIX}.whole_com_ground_projection": self.whole_com_ground_projection,
+            f"{BODY_PREFIX}.whole_com_ground_projection_valid": (
+                self.whole_com_ground_projection_valid
+            ),
+            f"{BODY_PREFIX}.whole_com_ground_projection_covariance": (
+                self.whole_com_ground_projection_covariance
+            ),
+            f"{BODY_PREFIX}.whole_com_velocity": self.whole_com_velocity,
+            f"{BODY_PREFIX}.whole_com_velocity_valid": self.whole_com_velocity_valid,
+            f"{BODY_PREFIX}.whole_com_acceleration": self.whole_com_acceleration,
+            f"{BODY_PREFIX}.whole_com_acceleration_valid": self.whole_com_acceleration_valid,
+            f"{BODY_PREFIX}.whole_com_trajectory_diagnostic": self.whole_com_trajectory_diagnostic,
             f"{BODY_PREFIX}.segment_com": self.segment_com,
+            f"{BODY_PREFIX}.segment_com_valid": self.segment_com_valid,
+            f"{BODY_PREFIX}.segment_com_confidence": self.segment_com_confidence,
+            f"{BODY_PREFIX}.segment_com_covariance": self.segment_com_covariance,
+            f"{BODY_PREFIX}.segment_com_provenance": self.segment_com_provenance,
+            f"{BODY_PREFIX}.segment_mass_fraction": self.segment_mass_fraction,
             f"{BODY_PREFIX}.ground_plane": self.ground_plane,
             f"{BODY_PREFIX}.contact_probability": self.contact_probability,
+            f"{BODY_PREFIX}.contact_valid": self.contact_valid,
+            f"{BODY_PREFIX}.contact_provenance": self.contact_provenance,
             f"{BODY_PREFIX}.support_polygon": self.support_polygon,
             f"{BODY_PREFIX}.support_polygon_valid": self.support_polygon_valid,
+            f"{BODY_PREFIX}.center_of_pressure": self.center_of_pressure,
+            f"{BODY_PREFIX}.center_of_pressure_valid": self.center_of_pressure_valid,
             f"{BODY_PREFIX}.source_time_ns": self.source_time_ns,
             f"{BODY_PREFIX}.mapped_time_ns": self.mapped_time_ns,
             f"{BODY_PREFIX}.receive_time_ns": self.receive_time_ns,
@@ -228,10 +331,57 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
         f"{BODY_PREFIX}.platform_root_position_valid": _feature("int64", (1,)),
         f"{BODY_PREFIX}.platform_root_orientation_valid": _feature("int64", (1,)),
         f"{BODY_PREFIX}.whole_com": _feature("float32", (3,), ["x", "y", "z"]),
+        f"{BODY_PREFIX}.whole_com_valid": _feature("int64", (1,)),
+        f"{BODY_PREFIX}.whole_com_confidence": _feature("float32", (1,)),
+        f"{BODY_PREFIX}.whole_com_covariance": _feature("float32", (3, 3)),
+        f"{BODY_PREFIX}.whole_com_provenance": _feature("int64", (1,)),
+        f"{BODY_PREFIX}.whole_com_diagnostic": _feature("int64", (1,)),
+        f"{BODY_PREFIX}.whole_com_unresolved_mass_fraction": _feature(
+            "float32", (1,)
+        ),
+        f"{BODY_PREFIX}.whole_com_ground_projection": _feature(
+            "float32", (3,), ["x", "y", "z"]
+        ),
+        f"{BODY_PREFIX}.whole_com_ground_projection_valid": _feature(
+            "int64", (1,)
+        ),
+        f"{BODY_PREFIX}.whole_com_ground_projection_covariance": _feature(
+            "float32", (3, 3)
+        ),
+        f"{BODY_PREFIX}.whole_com_velocity": _feature(
+            "float32", (3,), ["vx", "vy", "vz"]
+        ),
+        f"{BODY_PREFIX}.whole_com_velocity_valid": _feature("int64", (1,)),
+        f"{BODY_PREFIX}.whole_com_acceleration": _feature(
+            "float32", (3,), ["ax", "ay", "az"]
+        ),
+        f"{BODY_PREFIX}.whole_com_acceleration_valid": _feature("int64", (1,)),
+        f"{BODY_PREFIX}.whole_com_trajectory_diagnostic": _feature("int64", (1,)),
         f"{BODY_PREFIX}.segment_com": _feature("float32", (CANONICAL_JOINT_COUNT, 3)),
+        f"{BODY_PREFIX}.segment_com_valid": _feature(
+            "int64", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
+        f"{BODY_PREFIX}.segment_com_confidence": _feature(
+            "float32", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
+        f"{BODY_PREFIX}.segment_com_covariance": _feature(
+            "float32", (CANONICAL_JOINT_COUNT, 3, 3)
+        ),
+        f"{BODY_PREFIX}.segment_com_provenance": _feature(
+            "int64", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
+        f"{BODY_PREFIX}.segment_mass_fraction": _feature(
+            "float32", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
         f"{BODY_PREFIX}.ground_plane": _feature("float32", (4,), ["nx", "ny", "nz", "d"]),
         f"{BODY_PREFIX}.contact_probability": _feature(
             "float32", (4,), ["left_heel", "left_ball", "right_heel", "right_ball"]
+        ),
+        f"{BODY_PREFIX}.contact_valid": _feature(
+            "int64", (4,), ["left_heel", "left_ball", "right_heel", "right_ball"]
+        ),
+        f"{BODY_PREFIX}.contact_provenance": _feature(
+            "int64", (4,), ["left_heel", "left_ball", "right_heel", "right_ball"]
         ),
         f"{BODY_PREFIX}.support_polygon": _feature(
             "float32", (MAX_SUPPORT_POLYGON_VERTICES, 3)
@@ -239,6 +389,10 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
         f"{BODY_PREFIX}.support_polygon_valid": _feature(
             "int64", (MAX_SUPPORT_POLYGON_VERTICES,)
         ),
+        f"{BODY_PREFIX}.center_of_pressure": _feature(
+            "float32", (3,), ["x", "y", "z"]
+        ),
+        f"{BODY_PREFIX}.center_of_pressure_valid": _feature("int64", (1,)),
     }
     for key in (
         "source_time_ns",
@@ -321,6 +475,8 @@ __all__ = [
     "TRACKING_SCHEMA",
     "CanonicalBodyFrame",
     "CanonicalClockQuality",
+    "ComDiagnostic",
+    "ComProvenance",
     "CanonicalJoint",
     "CanonicalProvenance",
     "CanonicalTrackingState",

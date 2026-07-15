@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from handumi.cameras.base import CameraSample
+from handumi.body.model import CanonicalBodyFrame
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
     _capture_sources_metadata,
@@ -28,6 +29,7 @@ from handumi.scripts.record import (
     _wait_for_tracking,
     build_features,
     _write_dataset_readme,
+    build_body_estimator,
     build_observation,
     record_episode,
 )
@@ -122,6 +124,25 @@ class _StaleCamera:
             capture_time_ns=target_time_ns - 1_000_000_000,
             sequence=1,
         )
+
+
+class _FakeTrackingSidecar:
+    def drain_provider(self, provider) -> int:
+        return 0
+
+    def nearest_packet(self, target_time_ns: int):
+        return None
+
+
+class _FakeBodyEstimator:
+    def __init__(self):
+        self.calls = 0
+
+    def estimate(self, frame: CanonicalBodyFrame) -> CanonicalBodyFrame:
+        self.calls += 1
+        frame.whole_com[:] = [0.1, 0.2, 0.3]
+        frame.whole_com_valid[0] = 1
+        return frame
 
 
 def _clap_sequence() -> list[GripperWidths]:
@@ -527,6 +548,38 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
         self.assertEqual(status, "sensor_unhealthy")
         self.assertGreater(n_frames, 0)
 
+    def test_aligned_body_frame_runs_estimator_before_dataset_write(self):
+        dataset = _FakeDataset()
+        estimator = _FakeBodyEstimator()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=0.003,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            tracking_sidecar=_FakeTrackingSidecar(),
+            body_estimator=estimator,
+        )
+        self.assertEqual(status, "recorded")
+        self.assertEqual(estimator.calls, n_frames)
+        self.assertTrue(n_frames > 0)
+        for frame in dataset.frames:
+            np.testing.assert_allclose(
+                frame["observation.body.whole_com"], [0.1, 0.2, 0.3]
+            )
+            self.assertEqual(frame["observation.body.whole_com_valid"][0], 1)
+
 
 class BuildObservationTest(unittest.TestCase):
     def test_features_add_body_without_changing_legacy_state_width(self):
@@ -545,6 +598,51 @@ class BuildObservationTest(unittest.TestCase):
         self.assertIn("observation.tracking.left_device_controller_pose", obs)
         self.assertEqual(obs["observation.valid"].shape, (8,))
         self.assertNotIn("observation.tracking.left_tcp_pose", obs)
+
+
+class BodyEstimatorConfigurationTest(unittest.TestCase):
+    @staticmethod
+    def _args(**overrides):
+        values = {
+            "body_profile": None,
+            "body_height_m": None,
+            "body_mass_kg": None,
+            "body_foot_length_m": None,
+            "body_foot_width_m": None,
+            "anthropometric_table": None,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_profile_is_optional_and_missing_values_do_not_invent_com(self):
+        self.assertIsNone(build_body_estimator(self._args()))
+
+    def test_direct_height_and_mass_enable_versioned_estimator(self):
+        estimator = build_body_estimator(
+            self._args(
+                body_height_m=1.80,
+                body_mass_kg=75.0,
+                body_foot_length_m=0.27,
+            )
+        )
+        self.assertIsNotNone(estimator)
+        metadata = estimator.metadata()
+        self.assertEqual(metadata["schema"], "handumi_kinematic_com_v1")
+        self.assertEqual(
+            metadata["profile"]["values"]["height_m"], 1.80
+        )
+
+    def test_partial_or_conflicting_profiles_are_rejected(self):
+        with self.assertRaisesRegex(SystemExit, "provided together"):
+            build_body_estimator(self._args(body_height_m=1.80))
+        with self.assertRaisesRegex(SystemExit, "cannot be combined"):
+            build_body_estimator(
+                self._args(
+                    body_profile=Path("profile.yaml"),
+                    body_height_m=1.80,
+                    body_mass_kg=75.0,
+                )
+            )
 
 
 if __name__ == "__main__":
