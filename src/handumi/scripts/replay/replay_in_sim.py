@@ -1129,7 +1129,7 @@ def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.n
     from handumi.sim.scene import load_scene
 
     robot_from_table = transforms[0]
-    for body in load_scene(args.scene):
+    for body in load_scene(args.scene, position=(0.0, 0.0, 0.0)):
         body_table = np.concatenate(
             [
                 body.rest_position,

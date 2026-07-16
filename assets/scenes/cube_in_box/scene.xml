@@ -4,7 +4,7 @@
 
   This is a plain MJCF fragment, not a standalone robot: handumi.sim.mujoco_sim
   loads it as its own MjSpec and attaches it into whichever embodiment's MJCF at
-  a configurable offset (see configs/scene.yaml), so it is robot-agnostic.
+  a configurable offset (see handumi.sim.scene.DEFAULT_SCENE_POSITION), so it is robot-agnostic.
 
   Body/geom names are prefixed with the scene folder name ("cube_in_box_") to
   avoid clashing with any robot's own body/geom names once attached.

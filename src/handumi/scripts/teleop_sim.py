@@ -156,8 +156,8 @@ def parse_args() -> argparse.Namespace:
         "--scene",
         type=str,
         default=None,
-        help="Render a task scene (assets/scenes/<name>/scene.xml) in Viser, "
-        "placed per configs/scene.yaml, e.g. cube_in_box. Static props only.",
+        help="Render a task scene (assets/scenes/<name>/scene.xml) in Viser at "
+        "DEFAULT_SCENE_POSITION, e.g. cube_in_box. Static props only.",
     )
     p.add_argument(
         "--anchor-z",
@@ -633,17 +633,9 @@ def main() -> None:
     physics = None
     scene_frames: dict[str, Any] = {}
     if args.scene is not None:
-        import yaml
+        from handumi.sim.scene import DEFAULT_SCENE_POSITION, load_scene
 
-        from handumi.sim.scene import load_scene
-
-        scene_position = (0.0, 0.0, 0.0)
-        scene_config = Path("configs/scene.yaml")
-        if scene_config.exists():
-            data = yaml.safe_load(scene_config.read_text()) or {}
-            scene_position = tuple(
-                (data.get("scene") or {}).get("position", scene_position)
-            )
+        scene_position = DEFAULT_SCENE_POSITION
         # Props render under per-body frames so physics can move them.
         if server is not None:
             for body in load_scene(args.scene, position=scene_position):
