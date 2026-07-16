@@ -14,7 +14,7 @@ Ultima modificacion: 2026-07-15 18:32:28 -05 -0500
 
 getting_started/installation
 setup
-openarm_v1_setup
+real/openarm_v1_setup
 teleoperation
 record
 workflows/datasets
