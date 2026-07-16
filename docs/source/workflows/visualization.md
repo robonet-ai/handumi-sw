@@ -19,12 +19,33 @@ handumi-record \
   --repo-id your-name/full-body-demo \
   --output-dir outputs/datasets/full-body-demo \
   --body-profile configs/body_profile.yaml \
+  --wrist-cameras --workspace-camera \
   --rerun
 ```
 
 The recent controller, HMD, and whole-body CoM trails use bounded memory.
-Rerun failures disable only the viewer: recording, tracking, cameras, timing,
-protocols, state/action arrays, and episode gates continue unchanged.
+Live camera/body delivery uses a bounded background queue and drops stale
+viewer frames if rendering falls behind, while every dataset row is still
+recorded normally. Rerun failures disable only the viewer: recording,
+tracking, cameras, timing, protocols, state/action arrays, and episode gates
+continue unchanged. Geometry and cameras begin updating after the episode
+recording gate opens, not while the recorder is waiting at the prompt.
+
+Body-enabled Meta recording freezes one common workspace transform for the
+controllers, TCPs, and canonical body so an accidental X-button press cannot
+move only the controllers. For accurate table/ground alignment, pass the
+session calibration produced by `handumi-calibrate-spatial`:
+
+```bash
+handumi-record ... \
+  --session-calibration outputs/calibration/session.yaml \
+  --controller-tcp-calibration configs/calibration/meta_controller_tcp.yaml
+```
+
+The session transform aligns the coordinate frames. The controller-to-TCP
+pivot calibration aligns each rendered TCP with the physical HandUMI tip;
+body wrist estimates are not used as a substitute for that physical
+calibration.
 
 `handumi-teleop-sim` still uses controller/TCP-only visualization because that
 pipeline does not expose an aligned canonical body frame. It never fabricates
@@ -102,6 +123,9 @@ violet; kinematic inference is amber; future learned estimates are magenta;
 and fused CoM/contact output is white. Unknown future numeric provenance uses a
 neutral gray fallback and is never relabeled as measured. Lower confidence
 reduces alpha and increments the synchronized low-confidence quality signal.
+Joint, segment, contact, and CoM point labels are intentionally hidden in the
+3D view so they cannot cover the skeleton; the same provenance and diagnostic
+details remain available under `/quality/body`.
 
 Tracking state, joint/segment provenance and confidence, CoM provenance and
 diagnostics, unresolved mass, contact probabilities/provenance, and clock

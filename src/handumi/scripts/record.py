@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import select
 import signal
 import sys
@@ -199,6 +200,26 @@ def _discard_tracking_backlog(provider: object) -> int:
     return discarded
 
 
+def _body_calibration_from_workspace(
+    workspace_from_device_pose: np.ndarray,
+    *,
+    device: str,
+    qualified: bool,
+) -> HandumiWorldCalibration:
+    """Use the controller workspace for body geometry and its source ground."""
+    value = np.asarray(workspace_from_device_pose, dtype=np.float64).reshape(7)
+    world_from_source = Pose(value[:3], value[3:])
+    rotation = world_from_source.as_matrix()[:3, :3]
+    normal = rotation @ np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+    offset = -float(np.dot(normal, world_from_source.position))
+    return HandumiWorldCalibration(
+        world_from_source,
+        ground_plane=np.concatenate([normal, [offset]]),
+        source_frame=f"{device}_right_handed_source",
+        qualified=qualified,
+    )
+
+
 def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | None:
     profile_path = getattr(args, "body_profile", None)
     height_m = getattr(args, "body_height_m", None)
@@ -323,9 +344,21 @@ def _wait_for_tracking(
 
 
 class _RecordingRerun:
-    """Live Rerun stream owned by the recorder (never opens another device)."""
+    """Bounded asynchronous Rerun stream owned by the recorder."""
 
     def __init__(self, cam_names: list[str], fps: int) -> None:
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._frames: queue.Queue[
+            tuple[
+                dict,
+                ControllerPairSample,
+                GripperWidths,
+                CanonicalBodyFrame | None,
+            ]
+        ] = queue.Queue(maxsize=2)
+        self._dropped_frames = 0
+        self._worker: threading.Thread | None = None
         self.stream = initialize_rerun(
             "handumi_record",
             cam_names,
@@ -335,6 +368,13 @@ class _RecordingRerun:
             include_quality=True,
             on_error=self._on_error,
         )
+        if self.stream is not None:
+            self._worker = threading.Thread(
+                target=self._run,
+                name="handumi_rerun",
+                daemon=True,
+            )
+            self._worker.start()
         self.set_status("READY", "Waiting to start the first episode")
 
     @staticmethod
@@ -344,7 +384,8 @@ class _RecordingRerun:
     def set_status(self, state: str, detail: str) -> None:
         """Show the current recorder state as a persistent operator flag."""
         if self.stream is not None:
-            self.stream.set_status(state, detail)
+            with self._lock:
+                self.stream.set_status(state, detail)
 
     def log(
         self,
@@ -354,14 +395,65 @@ class _RecordingRerun:
         *,
         body_frame: CanonicalBodyFrame | None = None,
     ) -> None:
-        """Log a frame without allowing a viewer problem to stop recording."""
-        if self.stream is not None:
-            self.stream.log_frame(
-                cam_frames,
-                sample,
-                widths,
-                body_frame=body_frame,
+        """Queue the newest synchronized frame without blocking capture."""
+        if self.stream is None or self._stop.is_set():
+            return
+        item = (cam_frames, sample, widths, body_frame)
+        try:
+            self._frames.put_nowait(item)
+        except queue.Full:
+            try:
+                self._frames.get_nowait()
+                self._frames.task_done()
+            except queue.Empty:
+                pass
+            self._dropped_frames += 1
+            try:
+                self._frames.put_nowait(item)
+            except queue.Full:
+                self._dropped_frames += 1
+
+    @property
+    def pending_frames(self) -> int:
+        return self._frames.qsize()
+
+    @property
+    def dropped_frames(self) -> int:
+        return self._dropped_frames
+
+    def close(self, timeout_s: float = 2.0) -> None:
+        """Flush the bounded queue best-effort and stop the worker."""
+        self._stop.set()
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout=max(0.0, timeout_s))
+            if worker.is_alive():
+                log.warning("Rerun worker did not flush before shutdown.")
+        self._worker = None
+        if self._dropped_frames:
+            log.info(
+                "Rerun dropped %d stale live frames to keep recording responsive.",
+                self._dropped_frames,
             )
+
+    def _run(self) -> None:
+        while not self._stop.is_set() or not self._frames.empty():
+            try:
+                cam_frames, sample, widths, body_frame = self._frames.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            try:
+                stream = self.stream
+                if stream is not None:
+                    with self._lock:
+                        stream.log_frame(
+                            cam_frames,
+                            sample,
+                            widths,
+                            body_frame=body_frame,
+                        )
+            finally:
+                self._frames.task_done()
 
 
 def record_episode(
@@ -789,13 +881,18 @@ def main() -> None:
         spatial_session_metadata = session_calibration_metadata(args.session_calibration)
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid session calibration: {exc}") from exc
+    body_estimator = build_body_estimator(args)
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
         left=IDENTITY_POSE7.astype(np.float32).copy(),
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-    tracker = build_tracker(args, calibration)
+    tracker = build_tracker(
+        args,
+        calibration,
+        reset_workspace_on_x=body_estimator is None,
+    )
     if args.session_calibration is not None:
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
         if set_workspace is None:
@@ -857,9 +954,8 @@ def main() -> None:
     tracking_sidecar = TrackingSidecarWriter(dataset.root)
     world_calibration = HandumiWorldCalibration.identity(
         source_frame=f"{args.device}_right_handed_source",
-        qualified=args.device == "meta",
+        qualified=False,
     )
-    body_estimator = build_body_estimator(args)
 
     stop_event = threading.Event()
 
@@ -898,9 +994,10 @@ def main() -> None:
                         break
                     # A calibrated table workspace is locked and ignores this
                     # legacy HMD recenter; uncalibrated sessions retain it.
-                    reset_workspace = getattr(tracker, "reset_workspace", None)
-                    if reset_workspace is not None:
-                        reset_workspace()
+                    if body_estimator is None:
+                        reset_workspace = getattr(tracker, "reset_workspace", None)
+                        if reset_workspace is not None:
+                            reset_workspace()
             elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),
@@ -928,6 +1025,18 @@ def main() -> None:
                 break
             _discard_tracking_backlog(tracker)
             if body_estimator is not None:
+                alignment_sample = tracker.latest()
+                world_calibration = _body_calibration_from_workspace(
+                    alignment_sample.workspace_from_device_pose,
+                    device=args.device,
+                    qualified=spatial_session_metadata is not None,
+                )
+                log.info(
+                    "Body/controller visualization locked to the %s workspace.",
+                    "calibrated table"
+                    if spatial_session_metadata is not None
+                    else "episode HMD-recentered",
+                )
                 body_estimator.reset()
             tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
@@ -1091,6 +1200,8 @@ def main() -> None:
             finalization_error = exc
             log.exception("Dataset finalization failed; do not upload this dataset.")
         finally:
+            if rerun is not None:
+                rerun.close()
             disconnect_cameras(cameras)
             if grippers is not None:
                 grippers.stop()

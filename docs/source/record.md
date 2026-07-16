@@ -40,6 +40,11 @@ beside the unchanged controller, camera, gripper, and recorder-status views.
 See [Body and Trajectory Visualization](workflows/visualization.md) for live
 layers, masks, colors, and offline replay.
 
+For Meta full-body capture, use `--session-calibration` to place controllers,
+TCPs, body, and ground in the same calibrated table frame. Without a session
+calibration, body-enabled recording freezes a common HMD-recentered frame for
+visual consistency, but that fallback is not a calibrated table frame.
+
 Do not connect or configure a robot arm for this step. A target embodiment can
 be selected later during conversion or replay without modifying the raw
 recording.

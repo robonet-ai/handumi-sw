@@ -141,6 +141,18 @@ def test_invalid_current_data_explicitly_clears_previous_entities():
         assert _op(invalid, path).archetype == "clear"
 
 
+def test_body_geometry_omits_labels_to_keep_the_skeleton_visible():
+    plan = body_render_plan(synthetic_body_frame())
+    for path in (
+        BODY_JOINTS_PATH,
+        SEGMENT_COM_PATH,
+        WHOLE_COM_PATH,
+        COM_PROJECTION_PATH,
+        CONTACTS_PATH,
+    ):
+        assert "labels" not in _op(plan, path).kwargs
+
+
 def test_nan_values_never_reach_render_archetypes():
     frame = synthetic_body_frame()
     frame.joint_pose[3, :3] = np.nan

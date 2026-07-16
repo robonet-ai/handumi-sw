@@ -17,6 +17,8 @@ from handumi.cameras.base import CameraSample
 from handumi.body.model import CanonicalBodyFrame
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
+    _RecordingRerun,
+    _body_calibration_from_workspace,
     _capture_sources_metadata,
     _default_output_dir,
     _EscapeStopListener,
@@ -106,6 +108,66 @@ class TrackingBacklogTest(unittest.TestCase):
 
     def test_provider_without_native_packet_stream_is_unchanged(self):
         self.assertEqual(_discard_tracking_backlog(object()), 0)
+
+
+class BodyWorkspaceAlignmentTest(unittest.TestCase):
+    def test_body_positions_and_ground_use_the_controller_workspace(self):
+        angle = np.pi / 4.0
+        workspace = np.array(
+            [1.0, 2.0, 3.0, 0.0, np.sin(angle), 0.0, np.cos(angle)],
+            dtype=np.float32,
+        )
+        calibration = _body_calibration_from_workspace(
+            workspace,
+            device="meta",
+            qualified=False,
+        )
+
+        source_ground_point = np.array([0.4, -0.2, 0.0])
+        aligned = calibration.apply_position(source_ground_point)
+        np.testing.assert_allclose(
+            np.dot(calibration.ground_plane[:3], aligned)
+            + calibration.ground_plane[3],
+            0.0,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            calibration.world_from_source.position,
+            workspace[:3],
+        )
+
+
+class AsyncRecordingRerunTest(unittest.TestCase):
+    def test_slow_viewer_drops_stale_frames_without_blocking_recording(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class _SlowStream:
+            def set_status(self, state, detail):
+                pass
+
+            def log_frame(self, *args, **kwargs):
+                started.set()
+                release.wait(timeout=2.0)
+
+        stream = _SlowStream()
+        with mock.patch(
+            "handumi.scripts.record.initialize_rerun",
+            return_value=stream,
+        ):
+            viewer = _RecordingRerun([], fps=30)
+
+        sample = ControllerPairSample.empty("meta")
+        widths = _widths(0.0, 0.0)
+        viewer.log({}, sample, widths)
+        self.assertTrue(started.wait(timeout=1.0))
+        for _ in range(10):
+            viewer.log({}, sample, widths)
+
+        self.assertLessEqual(viewer.pending_frames, 2)
+        self.assertGreater(viewer.dropped_frames, 0)
+        release.set()
+        viewer.close()
 
 
 class _HealthyTracker:

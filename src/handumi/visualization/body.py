@@ -301,7 +301,6 @@ def body_render_plan(
     ops: list[RenderOp] = []
     joint_points: list[np.ndarray] = []
     joint_colors: list[tuple[int, int, int, int]] = []
-    joint_labels: list[str] = []
     for joint in CANONICAL_JOINTS:
         point = _valid_point(
             frame.joint_pose[joint.index, :3], frame.position_valid[joint.index]
@@ -313,15 +312,13 @@ def body_render_plan(
         )
         joint_points.append(point)
         joint_colors.append(style.color)
-        suffix = " [low confidence]" if style.low_confidence else ""
-        joint_labels.append(f"{joint.identifier}: {style.provenance_label}{suffix}")
     if joint_points:
         ops.append(
             RenderOp(
                 BODY_JOINTS_PATH,
                 "points3d",
                 np.asarray(joint_points),
-                {"colors": joint_colors, "radii": 0.012, "labels": joint_labels},
+                {"colors": joint_colors, "radii": 0.012},
             )
         )
     else:
@@ -359,7 +356,6 @@ def body_render_plan(
 
     segment_points: list[np.ndarray] = []
     segment_colors: list[tuple[int, int, int, int]] = []
-    segment_labels: list[str] = []
     for joint in CANONICAL_JOINTS:
         point = _valid_point(frame.segment_com[joint.index], frame.segment_com_valid[joint.index])
         if point is None:
@@ -371,14 +367,13 @@ def body_render_plan(
         )
         segment_points.append(point)
         segment_colors.append(style.color)
-        segment_labels.append(f"{joint.identifier} CoM: {style.provenance_label}")
     if segment_points:
         ops.append(
             RenderOp(
                 SEGMENT_COM_PATH,
                 "points3d",
                 np.asarray(segment_points),
-                {"colors": segment_colors, "radii": 0.009, "labels": segment_labels},
+                {"colors": segment_colors, "radii": 0.009},
             )
         )
     else:
@@ -399,7 +394,6 @@ def body_render_plan(
                 {
                     "colors": [whole_style.color],
                     "radii": 0.018,
-                    "labels": [f"whole-body CoM: {whole_style.provenance_label}"],
                 },
             )
         )
@@ -435,7 +429,6 @@ def body_render_plan(
                 {
                     "colors": [[245, 245, 245, 220]],
                     "radii": 0.014,
-                    "labels": ["ground-projected CoM (not CoP)"],
                 },
             )
         )
@@ -469,7 +462,6 @@ def body_render_plan(
 
     contact_points: list[np.ndarray] = []
     contact_colors: list[tuple[int, int, int, int]] = []
-    contact_labels: list[str] = []
     for contact_index, joint_name in enumerate(_CONTACT_JOINTS):
         joint_index = _JOINT_INDEX[joint_name]
         point = _valid_point(
@@ -484,19 +476,15 @@ def body_render_plan(
         style = provenance_style(
             frame.contact_provenance[contact_index], probability, com=True
         )
-        state = "contact" if probability >= 0.5 else "no contact"
         contact_points.append(point)
         contact_colors.append(style.color)
-        contact_labels.append(
-            f"{joint_name}: {state} p={probability:.2f} {style.provenance_label}"
-        )
     if contact_points:
         ops.append(
             RenderOp(
                 CONTACTS_PATH,
                 "points3d",
                 np.asarray(contact_points),
-                {"colors": contact_colors, "radii": 0.016, "labels": contact_labels},
+                {"colors": contact_colors, "radii": 0.016},
             )
         )
     else:
@@ -524,7 +512,7 @@ def body_render_plan(
                 CENTER_OF_PRESSURE_PATH,
                 "points3d",
                 np.asarray([cop]),
-                {"colors": [[255, 100, 100, 255]], "radii": 0.014, "labels": ["CoP"]},
+                {"colors": [[255, 100, 100, 255]], "radii": 0.014},
             )
         )
 
