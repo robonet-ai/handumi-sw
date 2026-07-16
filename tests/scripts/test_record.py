@@ -23,6 +23,7 @@ from handumi.scripts.record import (
     _recording_tcp_calibration_metadata,
     _robot_metadata,
     _selected_camera_names,
+    _discard_tracking_backlog,
     _validate_finalized_lerobot_dataset,
     _validate_unique_camera_ids,
     _wait_for_clap,
@@ -93,6 +94,18 @@ class _FakeDataset:
 
     def clear_episode_buffer(self) -> None:
         self.frames.clear()
+
+
+class TrackingBacklogTest(unittest.TestCase):
+    def test_pre_episode_packets_are_drained_without_a_sidecar_write(self):
+        provider = mock.Mock()
+        provider.drain_packets.return_value = [object(), object(), object()]
+
+        self.assertEqual(_discard_tracking_backlog(provider), 3)
+        provider.drain_packets.assert_called_once_with()
+
+    def test_provider_without_native_packet_stream_is_unchanged(self):
+        self.assertEqual(_discard_tracking_backlog(object()), 0)
 
 
 class _HealthyTracker:

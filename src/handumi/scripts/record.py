@@ -184,6 +184,21 @@ def build_features(
     return features
 
 
+def _discard_tracking_backlog(provider: object) -> int:
+    """Drop native-rate packets received before the recording gate opened."""
+    drain = getattr(provider, "drain_packets", None)
+    if not callable(drain):
+        return 0
+    packets = drain()
+    try:
+        discarded = len(packets)
+    except TypeError:
+        discarded = sum(1 for _ in packets)
+    if discarded:
+        log.info("Discarded %d pre-episode tracking packets.", discarded)
+    return discarded
+
+
 def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | None:
     profile_path = getattr(args, "body_profile", None)
     height_m = getattr(args, "body_height_m", None)
@@ -911,6 +926,7 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
+            _discard_tracking_backlog(tracker)
             if body_estimator is not None:
                 body_estimator.reset()
             tracking_sidecar.start_episode(dataset.num_episodes)
