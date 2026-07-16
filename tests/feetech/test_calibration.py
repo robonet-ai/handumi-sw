@@ -38,6 +38,25 @@ class FeetechCalibrationTest(unittest.TestCase):
         self.assertEqual(calibration.normalized_width(1500), 0.5)
         self.assertEqual(calibration.normalized_width(1000), 1.0)
 
+    def test_wraparound_ticks_are_supported(self):
+        calibration = GripperCalibration(
+            servo_id=0,
+            closed_ticks=3966,
+            open_ticks=1298,
+        )
+        self.assertEqual(calibration.normalized_width(3966), 0.0)
+        self.assertAlmostEqual(calibration.normalized_width(584), 0.5)
+        self.assertEqual(calibration.normalized_width(1298), 1.0)
+
+    def test_wraparound_accepts_continuously_unwrapped_ticks(self):
+        calibration = GripperCalibration(
+            servo_id=0,
+            closed_ticks=3966,
+            open_ticks=1298,
+        )
+        self.assertAlmostEqual(calibration.normalized_width(4096 + 584), 0.5)
+        self.assertEqual(calibration.normalized_width(4096 + 1298), 1.0)
+
     def test_width_units(self):
         calibration = GripperCalibration(
             servo_id=0,

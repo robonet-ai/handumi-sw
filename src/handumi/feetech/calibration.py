@@ -26,6 +26,22 @@ import yaml
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 
 RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
+_ENCODER_RESOLUTION = 4096
+_HALF_TURN = _ENCODER_RESOLUTION // 2
+
+
+def _nearest_encoder_delta(value: int, reference: int) -> int:
+    """Return the signed modulo-4096 delta nearest ``reference``.
+
+    Feetech ``Present_Position`` wraps at 4096. Calibration endpoints are raw
+    encoder values, so a physically short motion across 4095/0 must not be
+    mistaken for motion through most of a revolution.
+    """
+    return int(
+        (int(value) - int(reference) + _HALF_TURN)
+        % _ENCODER_RESOLUTION
+        - _HALF_TURN
+    )
 
 
 def user_calibration_path() -> Path:
@@ -55,10 +71,11 @@ class GripperCalibration:
     def normalized_width(self, ticks: int) -> float:
         if self.closed_ticks is None or self.open_ticks is None:
             raise ValueError(f"Servo {self.servo_id} is not calibrated.")
-        span = self.open_ticks - self.closed_ticks
+        span = _nearest_encoder_delta(self.open_ticks, self.closed_ticks)
         if span == 0:
             raise ValueError(f"Servo {self.servo_id} has identical open/closed ticks.")
-        return float(min(1.0, max(0.0, (ticks - self.closed_ticks) / span)))
+        delta = _nearest_encoder_delta(ticks, self.closed_ticks)
+        return float(min(1.0, max(0.0, delta / span)))
 
     def width_mm(self, ticks: int) -> float:
         if self.max_width_mm is None:
