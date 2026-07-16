@@ -15,27 +15,26 @@ from handumi.feetech.calibration import (
     user_calibration_path,
 )
 from handumi.feetech.setup import ensure_feetech_serial_permissions, run_feetech_wizard
-from handumi.real.can_setup import (
-    ensure_can_interfaces_ready,
-    ensure_rig_config,
-    run_piper_can_wizard,
-)
-from handumi.real.piper_can import load_piper_can_settings
+from handumi.calibration.control_tcp import calibration_path_for_robot_device
+from handumi.real.backends import REAL_BACKEND_NAMES
+from handumi.real.backends.setup import RobotSetupOptions, run_robot_setup
+from handumi.real.can_setup import ensure_rig_config
 from handumi.scripts.setup import calibrate_grippers, home_servos
 from handumi.tracking.pico import prepare_pico_adb_session
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--robot", choices=("piper",), default="piper")
+    parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
     parser.add_argument("--device", choices=("pico", "meta"), default="pico")
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
     parser.add_argument("--bitrate", type=int, default=1_000_000)
     parser.add_argument("--restart-ms", type=int, default=100)
+    parser.add_argument("--dbitrate", type=int, default=5_000_000)
     parser.add_argument(
         "--skip-can-map",
         action="store_true",
-        help="Use the existing rig.yaml CAN mapping instead of the replug wizard.",
+        help="Use the existing rig.yaml CAN mapping instead of the mapping wizard.",
     )
     parser.add_argument(
         "--skip-can-repair",
@@ -75,6 +74,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip ADB reverse and PICO keep-awake setup.",
     )
     parser.add_argument("--skip-adb-check", action="store_true")
+    parser.add_argument(
+        "--skip-openarm-motor-check",
+        action="store_true",
+        help="Skip the read-only J1-J8 OpenArm diagnostic.",
+    )
+    parser.add_argument(
+        "--calibrate-openarm-zero",
+        action="store_true",
+        help="Explicitly run the vendor mechanical-zero procedure; this moves motors.",
+    )
+    parser.add_argument(
+        "--openarm-zero-side",
+        choices=("right", "left", "both"),
+        default="both",
+        help="Arm(s) calibrated by --calibrate-openarm-zero (default: both).",
+    )
+    parser.add_argument(
+        "--controller-tcp-calibration",
+        type=Path,
+        default=None,
+        help="Use an explicit Controller-to-TCP calibration file.",
+    )
     return parser.parse_args(argv)
 
 
@@ -85,21 +106,21 @@ def main() -> None:
     if not args.skip_feetech_map:
         ensure_feetech_serial_permissions()
 
-    if args.robot == "piper":
-        if not args.skip_can_map:
-            run_piper_can_wizard(
-                rig_config=args.rig_config,
-                bitrate=args.bitrate,
-                restart_ms=args.restart_ms,
-            )
-        settings = load_piper_can_settings(args.rig_config)
-        if not args.skip_can_repair:
-            ensure_can_interfaces_ready(
-                [settings.left_port, settings.right_port],
-                bitrate=settings.bitrate,
-                restart_ms=settings.restart_ms,
-            )
-            print("CAN listo.")
+    run_robot_setup(
+        RobotSetupOptions(
+            robot=args.robot,
+            rig_config=args.rig_config,
+            bitrate=args.bitrate,
+            dbitrate=args.dbitrate,
+            restart_ms=args.restart_ms,
+            skip_can_map=args.skip_can_map,
+            skip_can_repair=args.skip_can_repair,
+            skip_motor_check=args.skip_openarm_motor_check,
+            calibrate_openarm_zero=args.calibrate_openarm_zero,
+            openarm_zero_side=args.openarm_zero_side,
+        )
+    )
+    print("Robot transport listo.")
 
     if not args.skip_feetech_map:
         run_feetech_wizard(
@@ -116,8 +137,22 @@ def main() -> None:
         prepare_pico_adb_session(skip_adb_check=args.skip_adb_check)
         print("PICO listo por USB/ADB.")
 
+    default_calibration_path, _ = calibration_path_for_robot_device(
+        args.robot, args.device
+    )
+    calibration_path = args.controller_tcp_calibration or default_calibration_path
+    if not calibration_path.exists():
+        raise SystemExit(
+            f"Missing {args.robot}/{args.device} Controller->TCP calibration: "
+            f"{calibration_path}\n"
+            "Capture the physical tool pivot calibration before real teleop."
+        )
+
     print("\nSetup listo. Prueba:")
-    print(f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}")
+    command = f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}"
+    if args.controller_tcp_calibration is not None:
+        command += f" --controller-tcp-calibration {calibration_path}"
+    print(command)
 
 
 def ensure_feetech_calibration(args: argparse.Namespace) -> None:
@@ -191,7 +226,9 @@ def _calibration_sides(config: FeetechConfig, *, force: bool) -> list[str]:
     return [side for side in ("left", "right") if not getattr(config, side).is_complete]
 
 
-def _side_port(config: FeetechConfig, calibration: GripperCalibration, side: str) -> str:
+def _side_port(
+    config: FeetechConfig, calibration: GripperCalibration, side: str
+) -> str:
     port = calibration.port or config.port
     if not port:
         raise SystemExit(f"{side} Feetech port is not configured.")

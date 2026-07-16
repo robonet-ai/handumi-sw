@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pyroki as pk
@@ -12,10 +13,17 @@ import yaml
 import yourdfpy
 
 from handumi.robots.kinematics import BimanualKinematicsSolver, KinematicsConfig
-from handumi.sim.viser_sim import ViserSim
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFIG_DIR = REPO_ROOT / "configs" / "robots"
+if TYPE_CHECKING:
+    from handumi.sim.viser_sim import ViserSim
+
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+RESOURCE_ROOT = (
+    SOURCE_ROOT if (SOURCE_ROOT / "configs" / "robots").exists() else PACKAGE_ROOT
+)
+REPO_ROOT = RESOURCE_ROOT  # Backward-compatible name for callers/tests.
+CONFIG_DIR = RESOURCE_ROOT / "configs" / "robots"
 SIDES: tuple[str, str] = ("left", "right")
 
 
@@ -86,12 +94,15 @@ class RobotConfig:
     arms: dict[str, RobotArmConfig]
     ee_links: dict[str, str]
     home_q: np.ndarray
+    home_poses: dict[str, np.ndarray]
+    default_home_pose: str
     ik_weights: KinematicsConfig
     gripper_max_width_m: float
     controller_tcp_calibrations: dict[str, Path]
     handumi_gripper: str | None
     handumi_controller_mount: str | None
     real: RobotRealConfig
+    real_options: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -139,10 +150,23 @@ class RobotRuntime:
     def arm_joint_names(self, side: str) -> list[str]:
         return list(self.arms[side].joint_names)
 
+    def home_q(self, name: str | None = None) -> np.ndarray:
+        """Return a copy of a named safe starting pose."""
+        pose_name = name or self.config.default_home_pose
+        try:
+            return self.config.home_poses[pose_name].astype(np.float32).copy()
+        except KeyError as exc:
+            available = ", ".join(sorted(self.config.home_poses))
+            raise ValueError(
+                f"Unknown home pose {pose_name!r} for {self.name}; use {available}."
+            ) from exc
+
     def arm_joint_indices(self, side: str) -> list[int]:
         return list(self.arms[side].joint_indices)
 
-    def set_finger_positions(self, q: np.ndarray, normalized: dict[str, float]) -> np.ndarray:
+    def set_finger_positions(
+        self, q: np.ndarray, normalized: Mapping[str, float]
+    ) -> np.ndarray:
         """Write the gripper-finger joint values for a 0-1 opening per side
         into ``q`` (in place) and return it."""
         for side, fingers in (self.finger_joints or {}).items():
@@ -188,7 +212,9 @@ class RobotRuntime:
         joint_names: list[str] | None = None,
         default_q: np.ndarray | None = None,
         scene_bodies: list | None = None,
-    ) -> ViserSim:
+    ) -> "ViserSim":
+        from handumi.sim.viser_sim import ViserSim
+
         return ViserSim(
             urdf_path=self.urdf_path,
             filename_handler=yourdfpy_handler(self.config.pkg_root),
@@ -244,6 +270,19 @@ def load_robot_config(name: str) -> RobotConfig:
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
+    default_home_pose = str(data.get("default_home_pose") or "default")
+    raw_home_poses = data.get("home_poses") or {}
+    home_poses = {
+        str(pose_name): np.asarray(values, dtype=np.float32)
+        for pose_name, values in raw_home_poses.items()
+    }
+    if not home_poses:
+        home_poses[default_home_pose] = home_q
+    elif default_home_pose not in home_poses:
+        raise ValueError(
+            f"default_home_pose {default_home_pose!r} is not present in home_poses."
+        )
+    home_q = home_poses[default_home_pose]
     arms = _parse_arms(data)
     controller_tcp_calibrations = {
         str(device): _resolve_path(value)
@@ -266,6 +305,8 @@ def load_robot_config(name: str) -> RobotConfig:
         arms=arms,
         ee_links={side: arm.ee_link for side, arm in arms.items()},
         home_q=home_q,
+        home_poses=home_poses,
+        default_home_pose=default_home_pose,
         gripper_max_width_m=float(data.get("gripper_max_width_m", 0.08)),
         controller_tcp_calibrations=controller_tcp_calibrations,
         handumi_gripper=(
@@ -296,12 +337,15 @@ def load_robot_config(name: str) -> RobotConfig:
         real=RobotRealConfig(
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),
             max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),
-            home_max_joint_speed_deg_s=float(real.get("home_max_joint_speed_deg_s", 20.0)),
+            home_max_joint_speed_deg_s=float(
+                real.get("home_max_joint_speed_deg_s", 20.0)
+            ),
             home_timeout_s=float(real.get("home_timeout_s", 30.0)),
             home_tolerance_deg=float(real.get("home_tolerance_deg", 3.0)),
             speed_percent=int(real.get("speed_percent", 80)),
             gripper_effort=int(real.get("gripper_effort", 1000)),
         ),
+        real_options={str(key): value for key, value in real.items()},
     )
 
 
@@ -315,11 +359,8 @@ def load_embodiment(name: str) -> RobotRuntime:
     )
     robot = pk.Robot.from_urdf(urdf)
     arms = _resolve_arms(name, cfg, robot)
-    ee_indices = tuple(arms[side].ee_index for side in SIDES)
-    arm_joint_indices = {
-        side: list(arms[side].joint_indices)
-        for side in SIDES
-    }
+    ee_indices = (arms["left"].ee_index, arms["right"].ee_index)
+    arm_joint_indices = {side: list(arms[side].joint_indices) for side in SIDES}
     home_q = cfg.home_q
     if home_q.size == 0:
         home_q = np.zeros(robot.joints.num_actuated_joints, dtype=np.float32)
@@ -328,6 +369,12 @@ def load_embodiment(name: str) -> RobotRuntime:
             f"{name} home_q has {len(home_q)} values, expected "
             f"{robot.joints.num_actuated_joints}."
         )
+    for pose_name, pose_q in cfg.home_poses.items():
+        if len(pose_q) != robot.joints.num_actuated_joints:
+            raise ValueError(
+                f"{name} home pose {pose_name!r} has {len(pose_q)} values, expected "
+                f"{robot.joints.num_actuated_joints}."
+            )
 
     class _Solver(BimanualKinematicsSolver):
         def __init__(self, config: KinematicsConfig | None = None) -> None:
@@ -354,9 +401,27 @@ def load_embodiment(name: str) -> RobotRuntime:
     )
 
 
+def resolve_home_q(
+    runtime: RobotRuntime,
+    *,
+    rig_config: Path | None = None,
+    explicit_name: str | None = None,
+) -> tuple[str, np.ndarray]:
+    """Resolve CLI, machine-local, then embodiment default home selection."""
+    name = explicit_name
+    if name is None and rig_config is not None and rig_config.exists():
+        with rig_config.open("r", encoding="utf-8") as handle:
+            data: dict[str, Any] = yaml.safe_load(handle) or {}
+        local = ((data.get("robots") or {}).get(runtime.name) or {}).get("home_pose")
+        if local:
+            name = str(local)
+    name = name or runtime.config.default_home_pose
+    return name, runtime.home_q(name)
+
+
 def _resolve_path(value: str | Path) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else REPO_ROOT / path
+    return path if path.is_absolute() else RESOURCE_ROOT / path
 
 
 def _parse_arms(data: dict[str, Any]) -> dict[str, RobotArmConfig]:
@@ -365,10 +430,7 @@ def _parse_arms(data: dict[str, Any]) -> dict[str, RobotArmConfig]:
         legacy_ee_links = data.get("ee_links")
         if not isinstance(legacy_ee_links, dict):
             raise ValueError("Robot config must define arms or legacy ee_links.")
-        arms_data = {
-            side: {"ee_link": legacy_ee_links[side]}
-            for side in SIDES
-        }
+        arms_data = {side: {"ee_link": legacy_ee_links[side]} for side in SIDES}
     if not isinstance(arms_data, dict):
         raise ValueError("arms must be a mapping.")
 
@@ -413,7 +475,9 @@ def _parse_gripper_joints(value: Any) -> tuple[GripperJointConfig, ...]:
     return tuple(joints)
 
 
-def _resolve_arms(name: str, cfg: RobotConfig, robot: pk.Robot) -> dict[str, ArmRuntime]:
+def _resolve_arms(
+    name: str, cfg: RobotConfig, robot: pk.Robot
+) -> dict[str, ArmRuntime]:
     actuated_names = list(robot.joints.actuated_names)
     link_names = list(robot.links.names)
     arms: dict[str, ArmRuntime] = {}
@@ -498,7 +562,9 @@ def _resolve_finger_joints(
 def _joint_open_value(urdf: yourdfpy.URDF, joint_name: str) -> float:
     joint = urdf.joint_map.get(joint_name)
     if joint is None or joint.limit is None:
-        raise ValueError(f"Cannot infer open value for {joint_name!r}; set open in YAML.")
+        raise ValueError(
+            f"Cannot infer open value for {joint_name!r}; set open in YAML."
+        )
     lower, upper = float(joint.limit.lower), float(joint.limit.upper)
     return upper if abs(upper) >= abs(lower) else lower
 

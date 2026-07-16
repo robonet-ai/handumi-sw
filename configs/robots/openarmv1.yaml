@@ -30,10 +30,44 @@ arms:
     gripper_joints:
       - name: openarm_right_finger_joint1
         open: 0.044
-home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+default_home_pose: forward_open
+home_poses:
+  down: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  arms_90: [0.0, 0.0, 0.0, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
+  # J2 spreads the elbows away from the center column; J3 brings the hands
+  # back toward a useful forward-facing stance. The real backend establishes
+  # this shoulder clearance before bending J4 to 90 degrees.
+  forward_open: [0.0, -0.34906585, 0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.34906585, -0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.088
+handumi_tool:
+  gripper: openarm_parallel_v1
+  controller_mount: handumi_v1
+controller_tcp_calibrations:
+  meta: configs/calibration/openarmv1_meta_controller_tcp.yaml
+  pico: configs/calibration/pico_controller_tcp.yaml
 ik_weights:
   pos: 100.0
   ori: 10.0
   rest: 3.0
   max_joint_delta: 0.08726646
+real:
+  backend: openarm_can
+  gripper:
+    # Official OpenArm v1 zero calibration: fully closed is 0 rad and fully
+    # open is -60 degrees on both arms. openarm_can expects raw J8 radians.
+    closed_position_rad: 0.0
+    open_position_rad: -1.04719755
+  control:
+    command_rate_hz: 100
+    max_joint_speed_rad_s: 1.0
+    home_max_joint_speed_rad_s: 0.25
+    home_timeout_s: 30
+    # Low-gain distal joints can settle a few degrees from the target under
+    # gravity. This only gates completion of the slow startup home; the
+    # independent following-error safety limit remains stricter below.
+    home_tolerance_rad: 0.10
+    watchdog_timeout_s: 0.15
+    following_error_rad: 0.35
+  gains:
+    kp: [70.0, 70.0, 70.0, 60.0, 10.0, 10.0, 10.0]
+    kd: [2.75, 2.5, 2.0, 2.0, 0.7, 0.6, 0.5]

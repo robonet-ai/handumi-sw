@@ -1,5 +1,7 @@
 # Add a New Robot Embodiment
 
+Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+
 The HandUMI recorder and raw dataset are robot agnostic. An embodiment is a
 downstream adapter for conversion, simulation, or real-robot control; adding
 one must not add vendor-specific requirements to HandUMI setup or recording.
@@ -87,10 +89,11 @@ Existing references:
 - [Piper configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/piper.yaml)
 - [Axol configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/axol.yaml)
 
-## 3. Register the Model Name
+## 3. Discover the Model
 
-Add the name to `EMBODIMENT_NAMES` in
-`src/handumi/robots/registry.py`.
+Robot names are discovered from `configs/robots/*.yaml`; no central list needs
+editing. A real robot additionally registers one lazy backend factory so its
+vendor SDK is imported only when selected.
 
 If the robot assets must be shipped in the wheel, add them to the package-data
 configuration in `pyproject.toml`.
@@ -226,11 +229,12 @@ Large IK errors commonly indicate an incorrect TCP link, unreachable
 
 Model replay does not automatically provide real hardware control.
 
-A new real robot currently requires an implementation equivalent to
-`src/handumi/real/piper_can.py` and integration in real teleoperation/setup.
-Keep vendor units, SDK objects, communication threads, and watchdog behavior
-inside that backend. Core retargeting and dataset code must continue using
-meters, radians, and pose7 quaternions in XYZW order.
+A new real robot implements the shared backend contract: prepare transport,
+connect, read/hold feedback, home, command joints/grippers, report health, and
+close safely. Keep vendor units, SDK objects, communication threads, and
+watchdog behavior inside that backend. The shared teleoperation engine and
+dataset code continue using meters, radians, normalized gripper openings, and
+pose7 quaternions in XYZW order.
 
 ## Completion Checklist
 

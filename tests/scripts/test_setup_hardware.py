@@ -17,6 +17,9 @@ class SetupHardwareArgsTest(unittest.TestCase):
         self.assertEqual(args.device, "pico")
         self.assertEqual(args.bitrate, 1_000_000)
         self.assertEqual(args.restart_ms, 100)
+        self.assertEqual(args.dbitrate, 5_000_000)
+        self.assertEqual(args.openarm_zero_side, "both")
+        self.assertIsNone(args.controller_tcp_calibration)
         self.assertFalse(args.skip_can_map)
         self.assertFalse(args.skip_feetech_map)
         self.assertFalse(args.skip_feetech_calibration)
@@ -76,7 +79,9 @@ class SetupHardwareFeetechCalibrationTest(unittest.TestCase):
         with (
             mock.patch.object(setup_hardware, "load_config", return_value=config),
             mock.patch.object(setup_hardware.home_servos, "_home_side") as home,
-            mock.patch.object(setup_hardware.calibrate_grippers, "_calibrate_side") as calibrate,
+            mock.patch.object(
+                setup_hardware.calibrate_grippers, "_calibrate_side"
+            ) as calibrate,
         ):
             ensure_feetech_calibration(self._args())
 

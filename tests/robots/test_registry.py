@@ -25,6 +25,23 @@ def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
     }
 
 
+def test_openarm_arms_90_pose_bends_both_elbows_to_pi_over_two():
+    runtime = load_embodiment("openarmv1")
+    q = runtime.home_q("arms_90")
+
+    np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
+    assert runtime.config.default_home_pose == "forward_open"
+
+
+def test_openarm_default_pose_spreads_elbows_and_points_tcp_forward():
+    runtime = load_embodiment("openarmv1")
+    q = runtime.home_q()
+
+    np.testing.assert_allclose(q[[1, 8]], [-np.pi / 9, np.pi / 9], atol=1e-7)
+    np.testing.assert_allclose(q[[2, 9]], [np.pi / 18, -np.pi / 18], atol=1e-7)
+    np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
+
+
 def test_openarm_gripper_mapping_matches_urdf_convention():
     runtime = load_embodiment("openarmv1")
 

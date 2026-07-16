@@ -20,17 +20,12 @@ dependencies = [
     "opencv-python>=4.10,<5",
     # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
-    "jax[cuda13]>=0.4.0",
+    "jax>=0.4.0",
     "jaxlie>=1.0.0",
     "jaxls @ git+https://github.com/brentyi/jaxls.git",
     "yourdfpy",
     "pyroki @ git+https://github.com/chungmin99/pyroki.git",
-    # Viser utilities and pyroki transitive dependency, pinned direct.
-    "viser>=1.0.0",
-    # Contact physics for handumi-teleop-sim --scene (grasping in sim).
-    "mujoco>=3.9.0",
     "matplotlib>=3.11.0",
-    "pyvista>=0.43.0",
     "scipy>=1.17.1",
 ]
 
@@ -43,11 +38,23 @@ Issues = "https://github.com/robonet-ai/handumi-sw/issues"
 piper = [
     "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
 ]
+openarm = [
+    "openarm_can @ git+https://github.com/enactic/openarm_can.git@1.2.9#subdirectory=python",
+]
+sim = [
+    "viser>=1.0.0",
+    "mujoco>=3.9.0",
+    "pyvista>=0.43.0",
+]
+cuda = [
+    "jax[cuda13]>=0.4.0",
+]
 
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
 handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
 handumi-teleop-real = "handumi.scripts.teleop_real:main"
+handumi-pico-camera = "handumi.scripts.pico_camera:main"
 handumi-convert = "handumi.scripts.conversion:main"
 handumi-validate = "handumi.scripts.validate:main"
 handumi-setup-ports = "handumi.scripts.setup.setup_ports:main"
@@ -81,6 +88,7 @@ packages = ["src/handumi"]
 "assets/piper" = "handumi/assets/piper"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
 "configs/robots" = "handumi/configs/robots"
+"configs/calibration" = "handumi/configs/calibration"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -102,6 +110,8 @@ no-build-isolation-package = ["xrobotoolkit-sdk"]
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
-stubPath = "typings"
 extraPaths = ["external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"]
 reportMissingModuleSource = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

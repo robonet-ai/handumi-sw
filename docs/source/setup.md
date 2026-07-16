@@ -1,5 +1,7 @@
 # HandUMI Setup and Calibration
 
+Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+
 Complete this page before recording. No robot arm is required: these steps
 configure HandUMI, its tracking device, cameras, grippers, and workspace.
 Some calibrations are permanent for one physical assembly; the table/session
@@ -178,7 +180,10 @@ Controller-to-TCP reconstructs the physical HandUMI tool-tip pose from each
 tracked controller. It is a property of the HandUMI gripper/tool and controller
 mount, not of a connected robot arm. Recalibrate only when that physical
 assembly changes. Fix the tip in a firm indentation. For 25 seconds, keep it
-stationary while rotating and tilting the handle through varied orientations.
+fixed while rotating the tracked assembly through varied orientations. If the
+same calibrated HandUMI tool is used for another robot, validate and copy the
+result to that robot's identity-bound calibration path; the wizard never
+silently assumes two physical tool assemblies are identical.
 
 :::{dropdown} Capture and fit both sides
 Capture the left side:

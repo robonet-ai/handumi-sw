@@ -21,3 +21,56 @@ calibration:
       - -0.476044625043869
       - 0.3014245927333832
       - -0.7172929048538208
+  metadata:
+    source: pico_calibration_tcp
+    method: right/left pivot windows + orientation hold episodes
+    tcp_world_orientation_assumption: +Z forward, +Y up in PICO/XRoboToolkit world;
+      quaternion identity [0,0,0,1]
+    pivot_windows:
+      left:
+        episode: 1
+        start_frame: 564
+        end_frame_exclusive: 684
+        samples: 120
+        rms_error_m: 0.0010509040439501405
+        max_error_m: 0.0029079108498990536
+        condition: 36.57481875937046
+        fixed_tcp_point_world_m:
+        - -0.09225056320428848
+        - -0.34894099831581116
+        - -0.037902578711509705
+      right:
+        episode: 0
+        start_frame: 18
+        end_frame_exclusive: 198
+        samples: 180
+        rms_error_m: 0.0011058100499212742
+        max_error_m: 0.002599170897156
+        condition: 61.32991504791137
+        fixed_tcp_point_world_m:
+        - -0.0928342193365097
+        - -0.34237974882125854
+        - -0.04103802144527435
+    orientation_episodes:
+      left:
+        episode: 3
+        start_frame: 0
+        end_frame_exclusive: null
+        desired_tcp_quat_world_xyzw:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 1.0
+        rms_error_deg: 0.9163809677712739
+        max_error_deg: 1.6717450265944596
+      right:
+        episode: 2
+        start_frame: 0
+        end_frame_exclusive: null
+        desired_tcp_quat_world_xyzw:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 1.0
+        rms_error_deg: 0.6910250099793301
+        max_error_deg: 1.4934163878178293

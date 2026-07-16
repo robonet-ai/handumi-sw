@@ -45,14 +45,19 @@ def _rgba4(text: str) -> tuple[float, float, float, float]:
 
 SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
 
+# Scene origin in the robot world: midpoint between arm bases, at base height.
+DEFAULT_SCENE_POSITION = (0.30, 0.0, 0.0)
 
-def load_scene(name: str, *, position=(0.0, 0.0, 0.0)) -> list[SceneBody]:
+
+def load_scene(
+    name: str, *, position: tuple[float, float, float] = DEFAULT_SCENE_POSITION
+) -> list[SceneBody]:
     """Load ``assets/scenes/<name>/scene.xml`` (a plain MJCF fragment) into
     static :class:`SceneBody` primitives for the Viser renderer.
 
     Pure XML parsing — no MuJoCo. Only ``box`` geoms are supported; body
-    ``pos`` offsets are added to the scene-level ``position`` (the placement
-    in the robot world, see configs/scene.yaml).
+    ``pos`` offsets are added to the scene-level ``position`` (robot-world
+    placement, default :data:`DEFAULT_SCENE_POSITION`).
     """
     path = SCENES_DIR / name / "scene.xml"
     if not path.is_file():
@@ -90,4 +95,4 @@ def load_scene(name: str, *, position=(0.0, 0.0, 0.0)) -> list[SceneBody]:
     return bodies
 
 
-__all__ = ["SceneBody", "SceneGeom", "load_scene"]
+__all__ = ["DEFAULT_SCENE_POSITION", "SceneBody", "SceneGeom", "load_scene"]

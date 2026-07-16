@@ -5,15 +5,27 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 SKIP_XRT=0
-for arg in "$@"; do
-  case "$arg" in
+ROBOT=""
+WITH_SIM=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --skip-xrt) SKIP_XRT=1 ;;
+    --sim) WITH_SIM=1 ;;
+    --robot)
+      shift
+      if [[ $# -eq 0 || ( "$1" != "piper" && "$1" != "openarmv1" ) ]]; then
+        echo "error: --robot expects piper or openarmv1" >&2
+        exit 1
+      fi
+      ROBOT="$1"
+      ;;
     *)
-      echo "error: unknown argument: $arg" >&2
-      echo "       usage: $0 [--skip-xrt]" >&2
+      echo "error: unknown argument: $1" >&2
+      echo "       usage: $0 [--skip-xrt] [--sim] [--robot piper|openarmv1]" >&2
       exit 1
       ;;
   esac
+  shift
 done
 
 XROBO_DIR="external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64"
@@ -148,7 +160,28 @@ ensure_venv() {
 
 ensure_project_deps() {
   echo "==> Syncing project dependencies (update only if needed)"
-  UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync
+  local extras=()
+  [[ "$WITH_SIM" -eq 1 ]] && extras+=(--extra sim)
+  [[ -n "$ROBOT" ]] && extras+=(--extra "${ROBOT/openarmv1/openarm}")
+  UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync "${extras[@]}"
+}
+
+ensure_openarm_system_deps() {
+  [[ "$ROBOT" == "openarmv1" ]] || return 0
+  if command -v openarm-can-cli >/dev/null 2>&1 && \
+     dpkg-query -W -f='${Status}' libopenarm-can-dev 2>/dev/null | grep -q "install ok installed"; then
+    echo "==> OpenArm CAN system library and tools already installed"
+    return 0
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "error: automatic OpenArm system setup currently supports Ubuntu/Debian" >&2
+    exit 1
+  fi
+  echo "==> Installing official OpenArm CAN system packages"
+  sudo apt-get install -y software-properties-common
+  sudo add-apt-repository -y ppa:openarm/main
+  sudo apt-get update
+  sudo apt-get install -y libopenarm-can-dev openarm-can-utils
 }
 
 # ── XRoboToolkit Python package ───────────────────────────────────────────────
@@ -176,6 +209,7 @@ else
   ensure_xrobotoolkit_native_lib
 fi
 ensure_venv
+ensure_openarm_system_deps
 ensure_project_deps
 if [[ "$SKIP_XRT" -ne 1 ]]; then
   ensure_xrobotoolkit_python_package

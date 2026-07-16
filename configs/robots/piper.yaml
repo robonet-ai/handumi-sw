@@ -43,6 +43,7 @@ handumi_tool:
 # stale legacy snapshots that did not identify their robot/gripper assembly.
 controller_tcp_calibrations:
   meta: configs/calibration/meta_controller_tcp.yaml
+  pico: configs/calibration/pico_controller_tcp.yaml
 ik_weights:
   pos: 100.0
   ori: 4.5

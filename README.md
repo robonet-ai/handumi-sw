@@ -1,5 +1,7 @@
 # HandUMI
 
+Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
@@ -50,8 +52,8 @@ Raw captures remain robot-agnostic. Robot configuration and physical controller-
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
-- Robot models and simulation: Piper and Axol.
-- Real-robot teleoperation: AgileX Piper.
+- Robot models and simulation: Piper, OpenArm v1, and Axol.
+- Real-robot teleoperation: AgileX Piper and OpenArm v1 through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 
 ## Safety

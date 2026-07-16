@@ -7,9 +7,11 @@ import yaml
 
 from handumi.real.can_setup import (
     can_ready,
+    ensure_can_fd_interfaces_ready,
     ensure_can_interfaces_ready,
     identify_can_by_replug,
     read_can_status,
+    run_openarm_can_wizard,
     run_piper_can_wizard,
 )
 
@@ -26,7 +28,9 @@ class CanStatusTest(unittest.TestCase):
           bitrate 1000000 sample-point 0.750
 """
 
-        status = read_can_status("can0", runner=lambda *a, **kw: _completed(a[0], stdout=text))
+        status = read_can_status(
+            "can0", runner=lambda *a, **kw: _completed(a[0], stdout=text)
+        )
 
         self.assertTrue(status.exists)
         self.assertTrue(status.up)
@@ -46,6 +50,24 @@ class CanStatusTest(unittest.TestCase):
 
 
 class CanRepairTest(unittest.TestCase):
+    def test_validation_only_never_requests_sudo(self):
+        calls = []
+
+        def runner(cmd, **kwargs):
+            calls.append(cmd)
+            return _completed(cmd, stdout="1: can0: <NOARP,ECHO> mtu 16\n")
+
+        with self.assertRaisesRegex(SystemExit, "CAN is not ready"):
+            ensure_can_interfaces_ready(
+                ["can0"],
+                bitrate=1_000_000,
+                restart_ms=100,
+                repair=False,
+                runner=runner,
+            )
+
+        self.assertNotIn(["sudo", "-v"], calls)
+
     def test_repairs_not_ready_interface_with_explicit_sudo(self):
         calls = []
         show_count = 0
@@ -74,7 +96,9 @@ class CanRepairTest(unittest.TestCase):
                 )
             return _completed(cmd)
 
-        ensure_can_interfaces_ready(["can0"], bitrate=1_000_000, restart_ms=100, runner=runner)
+        ensure_can_interfaces_ready(
+            ["can0"], bitrate=1_000_000, restart_ms=100, runner=runner
+        )
 
         self.assertIn(["sudo", "-v"], calls)
         self.assertIn(["sudo", "ip", "link", "set", "can0", "down"], calls)
@@ -225,6 +249,75 @@ class CanWizardTest(unittest.TestCase):
         self.assertEqual(data["robots"]["piper"]["can"]["left_port"], "can0")
         self.assertEqual(data["robots"]["piper"]["can"]["right_port"], "can1")
         self.assertEqual(data["robots"]["piper"]["can"]["restart_ms"], 100)
+
+    def test_openarm_wizard_saves_fd_mapping_and_stable_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sysfs = root / "net"
+            sysfs.mkdir()
+            rig = root / "rig.yaml"
+            rig.write_text("robots: {}\n", encoding="utf-8")
+            (sysfs / "can0").mkdir()
+            (sysfs / "can1").mkdir()
+            answers = iter(("can0", "can1"))
+
+            left, right = run_openarm_can_wizard(
+                rig_config=rig,
+                sys_class_net=sysfs,
+                input_fn=lambda _prompt: next(answers),
+                poll_s=0.001,
+            )
+            data = yaml.safe_load(rig.read_text(encoding="utf-8"))
+
+        can = data["robots"]["openarmv1"]["can"]
+        self.assertEqual((left, right), ("can1", "can0"))
+        self.assertTrue(can["fd"])
+        self.assertEqual(can["bitrate"], 1_000_000)
+        self.assertEqual(can["dbitrate"], 5_000_000)
+        self.assertTrue(can["left_usb_path"].endswith("/can1"))
+        self.assertTrue(can["right_usb_path"].endswith("/can0"))
+
+    def test_openarm_wizard_rejects_duplicate_side_mapping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sysfs = root / "net"
+            sysfs.mkdir()
+            (sysfs / "can0").mkdir()
+            (sysfs / "can1").mkdir()
+            rig = root / "rig.yaml"
+            rig.write_text("robots: {}\n", encoding="utf-8")
+            answers = iter(("can0", "can0"))
+
+            with self.assertRaisesRegex(SystemExit, "different CAN interfaces"):
+                run_openarm_can_wizard(
+                    rig_config=rig,
+                    sys_class_net=sysfs,
+                    input_fn=lambda _prompt: next(answers),
+                )
+
+    def test_fd_validation_accepts_matching_links_without_sudo(self):
+        calls = []
+        status = (
+            "1: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 72\n"
+            "    link/can <FD>\n"
+            "    can state ERROR-ACTIVE\n"
+            "          bitrate 1000000 dbitrate 5000000\n"
+        )
+
+        def runner(cmd, **kwargs):
+            calls.append(cmd)
+            return _completed(cmd, stdout=status)
+
+        result = ensure_can_fd_interfaces_ready(
+            ["can0"],
+            bitrate=1_000_000,
+            dbitrate=5_000_000,
+            repair=False,
+            runner=runner,
+        )
+
+        self.assertTrue(result["can0"].fd)
+        self.assertNotIn(["sudo", "-v"], calls)
 
 
 if __name__ == "__main__":
