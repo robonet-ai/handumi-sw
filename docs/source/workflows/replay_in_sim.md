@@ -103,13 +103,47 @@ to `assets/trlc-dk1`. If Viser prints `Can't find meshes/...` and shows only
 trajectory lines, update the checkout and restart the replay process so the
 URDF is loaded again.
 
+## Axol
+
+Axol supports bimanual kinematic replay in simulation with the same automatic
+absolute-table flow:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
+  --repo-id Autobrik/handumi-screws \
+  --dataset-root outputs/datasets/handumi-screws \
+  --robot axol \
+  --episode 0
+```
+
+The Axol URDF uses `+X` toward its left arm, `+Y` toward the operator, and
+`+Z` upward. Its provisional simulation calibration therefore rotates the
+HandUMI table frame 180 degrees about Z and places the demonstrated workspace
+at `[0.05714, 0.12376, 0.25022]` m in Axol world. This placement is fitted to
+the complete three-episode validation recording and remains `verified: false`;
+it is not a physical table measurement.
+
+With the configured offline replay joint step, all three episodes pass the
+default strict IK thresholds:
+
+| Episode | Mean position error | Maximum position error | Maximum orientation error |
+| --- | ---: | ---: | ---: |
+| 0 | 0.04 cm | 2.72 cm | 9.30 degrees |
+| 1 | 0.03 cm | 1.52 cm | 5.26 degrees |
+| 2 | 0.03 cm | 0.38 cm | 7.05 degrees |
+
+The supplied Axol model represents `left_gripper` and `right_gripper` as fixed
+links. Recorded gripper openings remain in the rollout metadata, but the mesh
+cannot visibly open or close until an Axol URDF with actuated finger joints is
+available. Axol does not currently provide a real-hardware backend.
+
 ## Reading the Diagnostics
 
 Replay prints the source tool identity and calibration hash before solving.
-Seeing `source tool: robot=piper` while replaying OpenArm or TRLC is expected
-when Piper was the physical tool used to make the recording. The identity-bound
-Controller-to-TCP snapshot reconstructs the demonstrated Piper TCP; the target
-embodiment is applied afterward.
+Seeing `source tool: robot=piper` while replaying OpenArm, TRLC, or Axol is
+expected when Piper was the physical tool used to make the recording. The
+identity-bound Controller-to-TCP snapshot reconstructs the demonstrated Piper
+TCP; the target embodiment is applied afterward.
 
 Important output fields are:
 

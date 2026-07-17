@@ -88,6 +88,46 @@ def test_piper_mjcf_prefix_mapping_stays_in_robot_config():
     assert runtime.mjcf_actuator_name("right_joint8") == "der_joint8"
 
 
+def test_axol_bimanual_layout_and_replay_profile():
+    runtime = load_embodiment("axol")
+
+    assert runtime.arm_joint_names("left") == [
+        "left_e1_0",
+        "left_e2_0",
+        "left_s1_0",
+        "left_s2_0",
+        "left_s3_0",
+        "left_w1_0",
+        "left_w2_0",
+    ]
+    assert runtime.arm_joint_names("right") == [
+        "right_e1_0",
+        "right_e2_0",
+        "right_s1_0",
+        "right_s2_0",
+        "right_s3_0",
+        "right_w1_0",
+        "right_w2_0",
+    ]
+    assert runtime.arm_joint_indices("left") == list(range(7))
+    assert runtime.arm_joint_indices("right") == list(range(7, 14))
+    assert runtime.config.replay_max_joint_delta == 0.35
+    assert runtime.finger_joints == {"left": (), "right": ()}
+
+
+def test_axol_home_fk_is_symmetric_and_visual_meshes_load():
+    runtime = load_embodiment("axol")
+    solver = runtime.solver_cls()
+
+    left_pose7, right_pose7 = solver.fk_pose7(runtime.config.home_q)
+    np.testing.assert_allclose(left_pose7[0], -right_pose7[0], atol=1e-6)
+    np.testing.assert_allclose(left_pose7[1:3], right_pose7[1:3], atol=1e-6)
+
+    urdf = runtime.load_urdf(load_meshes=True)
+    assert urdf.scene is not None
+    assert len(urdf.scene.geometry) == 18
+
+
 def test_trlc_dk1_bimanual_layout_and_joint_mapping():
     runtime = load_embodiment("trlc_dk1")
 

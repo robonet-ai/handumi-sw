@@ -22,8 +22,21 @@ arms:
       - right_s3_0
       - right_w1_0
       - right_w2_0
+# Symmetric zero pose from the supplied bimanual URDF. Both gripper links are
+# fixed in this model, so all 14 actuated values belong to the two arms.
 home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+gripper_max_width_m: 0.08
+handumi_tool:
+  gripper: axol_parallel_v1
+  controller_mount: handumi_v1
+
+# Generic full-pose IK profile for Axol's seven-DoF arms. Physical speed
+# limits still need validation before adding a real-hardware backend.
 ik_weights:
   pos: 100.0
-  ori: 15.0
-  rest: 2.0
+  ori: 10.0
+  rest: 3.0
+  max_joint_delta: 0.12
+  max_reach: 0.60
+replay:
+  max_joint_delta: 0.35
