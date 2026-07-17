@@ -10,14 +10,16 @@
   +Y forward/away from the operator, and +Z up.
 -->
 <robot name="yam_bimanual">
-  <material name="yam_base_purple"><color rgba="0.317647 0.121569 0.498039 1"/></material>
-  <material name="yam_link1_brown"><color rgba="0.72549 0.45098 0.317647 1"/></material>
-  <material name="yam_link2_blue"><color rgba="0 0.4 0.6 1"/></material>
-  <material name="yam_link3_olive"><color rgba="0.552941 0.580392 0.203922 1"/></material>
-  <material name="yam_link4_gray"><color rgba="0.545098 0.52549 0.419608 1"/></material>
-  <material name="yam_link5_pink"><color rgba="0.827451 0.623529 0.784314 1"/></material>
-  <material name="yam_gripper_green"><color rgba="0.109804 0.286275 0.0117647 1"/></material>
-  <material name="yam_tip_blue"><color rgba="0.596078 0.788235 0.921569 1"/></material>
+  <!-- The I2RT CAD export assigns a different engineering color per part.
+       Use YAM's physical white-link/black-joint finish in HandUMI instead. -->
+  <material name="yam_base_purple"><color rgba="0.055 0.060 0.065 1"/></material>
+  <material name="yam_link1_brown"><color rgba="0.075 0.080 0.085 1"/></material>
+  <material name="yam_link2_blue"><color rgba="0.810 0.825 0.840 1"/></material>
+  <material name="yam_link3_olive"><color rgba="0.865 0.875 0.885 1"/></material>
+  <material name="yam_link4_gray"><color rgba="0.070 0.075 0.080 1"/></material>
+  <material name="yam_link5_pink"><color rgba="0.835 0.845 0.855 1"/></material>
+  <material name="yam_gripper_green"><color rgba="0.045 0.050 0.055 1"/></material>
+  <material name="yam_tip_blue"><color rgba="0.100 0.110 0.120 1"/></material>
   <material name="yam_mount"><color rgba="0.16 0.17 0.20 1"/></material>
 
   <link name="yam_bimanual_base">

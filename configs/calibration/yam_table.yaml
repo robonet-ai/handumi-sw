@@ -6,11 +6,11 @@ verified: false
 calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   # Both frames use +X right, +Y away from the operator, and +Z up, so no
-  # rotation is required. This provisional simulation translation fits the
-  # complete 2,010-frame validation trajectory inside the shared YAM workspace
-  # while keeping its lowest TCP target above the mounting rail. It moves the
-  # table frame; the YAM mounting rail and arm bases remain fixed at world Z=0.
+  # rotation is required. The YAM mounting rail and tabletop share world Z=0,
+  # so the table transform has no vertical offset. The forward translation
+  # centers the validated trajectory in the shared workspace without raising
+  # the visual table above the robot base.
   # Measure the physical installation and set verified: true before hardware use.
   robot_from_table:
-    position: [0.01286, 0.16, 0.15]
+    position: [0.01286, 0.16, 0.0]
     quaternion: [0.0, 0.0, 0.0, 1.0]
