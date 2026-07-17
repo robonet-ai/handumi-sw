@@ -56,6 +56,17 @@ def test_openarm_gripper_mapping_matches_urdf_convention():
     np.testing.assert_allclose(q[[14, 15]], [0.044, 0.0])
 
 
+def test_openarm_closed_fingers_keep_the_urdf_center_clear():
+    runtime = load_embodiment("openarmv1")
+    urdf = runtime.load_urdf()
+
+    for side in ("left", "right"):
+        first = urdf.joint_map[f"openarm_{side}_finger_joint1"]
+        second = urdf.joint_map[f"openarm_{side}_finger_joint2"]
+        np.testing.assert_allclose(first.origin[:3, 3], [0.0, -0.008, 0.1025])
+        np.testing.assert_allclose(second.origin[:3, 3], [0.0, 0.008, 0.1025])
+
+
 def test_openarm_solver_fk_returns_two_tcp_poses():
     runtime = load_embodiment("openarmv1")
     solver = runtime.solver_cls()
