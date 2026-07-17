@@ -1,6 +1,6 @@
 # Add a New Robot Embodiment
 
-Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+Ultima modificacion: 2026-07-16
 
 The HandUMI recorder and raw dataset are robot agnostic. An embodiment is a
 downstream adapter for conversion, simulation, or real-robot control; adding
@@ -11,7 +11,8 @@ parallel gripper per side.
 
 Adding a model for replay/simulation is configuration-driven. Adding real
 hardware also requires a hardware backend; real teleoperation is currently
-implemented only for Piper.
+implemented for Piper and OpenArm v1. TRLC-DK1 currently supports simulation
+and replay only.
 
 ## Required Files
 
@@ -36,16 +37,21 @@ Place the URDF and meshes under `assets/<robot>/`.
 The current loader requires:
 
 - both arms in one URDF;
-- actuated joints prefixed with `left_` and `right_`;
 - one TCP link per side at the physical gripper tip;
 - a fixed base;
 - one parallel gripper per side.
 
+Joint and TCP names are declared explicitly under `arms`, so the loader does
+not depend on a hard-coded prefix. Prefixing bimanual links and joints with
+`left_` and `right_` is still recommended because it prevents collisions when
+combining two copies of a vendor's single-arm URDF.
+
 These are current implementation constraints, not requirements of the raw
 HandUMI dataset format.
 
-Use `package://...` mesh paths when needed. `pkg_root` in the robot YAML
-resolves them.
+Both `package://...` paths and paths relative to `pkg_root` are supported. For
+example, TRLC-DK1 uses `meshes/visual/base_link.glb` with
+`pkg_root: assets/trlc-dk1`.
 
 ## 2. Add the Robot Configuration
 
@@ -57,11 +63,25 @@ urdf: assets/myrobot/myrobot.urdf
 mjcf: assets/myrobot/myrobot.xml
 pkg_root: assets/myrobot
 
-ee_links:
-  left: left_tcp
-  right: right_tcp
+arms:
+  left:
+    ee_link: left_tcp
+    joint_names: [left_joint1, left_joint2]
+    gripper_joints:
+      - name: left_finger_joint
+        closed: 0.0
+        open: 0.035
+  right:
+    ee_link: right_tcp
+    joint_names: [right_joint1, right_joint2]
+    gripper_joints:
+      - name: right_finger_joint
+        closed: 0.0
+        open: 0.035
 
-home_q: [0.0, 0.0]
+default_home_pose: replay_ready
+home_poses:
+  replay_ready: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.07
 
 # Physical gripper and mount installed on HandUMI for this robot.
@@ -79,15 +99,24 @@ ik_weights:
   rest: 2.0
   max_joint_delta: 0.06981317
   max_reach: 0.45
+
+# Optional offline override. It does not change real-hardware safety limits.
+replay:
+  max_joint_delta: 0.20
 ```
 
-`home_q` must contain one value for every actuated URDF joint, including any
-actuated gripper joints.
+Every named home pose must contain one value for every actuated URDF joint,
+including actuated gripper joints. `joint_names` lists arm joints; gripper
+joints are configured separately so normalized HandUMI openings can be mapped
+to the URDF convention.
 
 Existing references:
 
 - [Piper configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/piper.yaml)
 - [Axol configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/axol.yaml)
+- [OpenArm v1 configuration](https://github.com/robonet-ai/handumi-sw/blob/main/configs/robots/openarmv1.yaml)
+- `configs/robots/trlc_dk1.yaml` for a namespaced bimanual model with two
+  prismatic finger joints per side.
 
 ## 3. Discover the Model
 
@@ -210,6 +239,7 @@ Legacy snapshots can be forced only for investigation with
 
 ```bash
 uv run pytest -q \
+  tests/robots/test_registry.py \
   tests/retargeting/test_handumi_to_robot.py \
   tests/scripts/test_replay_in_sim.py
 ```
@@ -224,6 +254,17 @@ Check the replay output for:
 
 Large IK errors commonly indicate an incorrect TCP link, unreachable
 `robot_from_table`, invalid `home_q`, or unsuitable IK weights.
+
+Also load visual meshes explicitly. A kinematic model can pass FK/IK tests even
+when Viser cannot resolve its GLB/STL paths:
+
+```bash
+JAX_PLATFORMS=cpu uv run python -c \
+  "from handumi.robots.registry import load_embodiment; r=load_embodiment('myrobot'); print(len(r.load_urdf(load_meshes=True).scene.geometry))"
+```
+
+See [Replay a Local Recording in Simulation](../workflows/replay_in_sim.md) for
+local dataset commands and interpretation of replay diagnostics.
 
 ## 9. Add Real Hardware Support
 

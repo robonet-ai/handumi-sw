@@ -1,6 +1,6 @@
 # HandUMI
 
-Ultima modificacion: 2026-07-15 18:32:28 -05 -0500
+Ultima modificacion: 2026-07-16
 
 ```{image} _static/HandUMI.png
 :alt: HandUMI hardware
@@ -17,6 +17,7 @@ setup
 real/openarm_v1_setup
 teleoperation
 record
+workflows/replay_in_sim
 workflows/datasets
 troubleshooting
 ```

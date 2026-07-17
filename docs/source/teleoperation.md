@@ -1,6 +1,6 @@
 # Teleoperation
 
-Ultima modificacion: 2026-07-15 18:32:28 -05 -0500
+Ultima modificacion: 2026-07-16
 
 HandUMI produces robot-agnostic live tool poses and gripper commands. A selected
 robot embodiment maps those commands to its kinematics; an optional hardware
@@ -71,6 +71,7 @@ handumi-teleop-real --robot <robot_id> --device meta
 | --- | --- | --- |
 | Piper | Supported | Supported |
 | OpenArm v1 | Supported (kinematic) | Supported through optional `openarm` backend |
+| TRLC-DK1 | Supported (kinematic) | Not yet supported |
 | Axol | Supported | Not yet supported |
 | Other robots | Add an embodiment | Add a hardware backend |
 
@@ -138,4 +139,5 @@ override that canonical file.
 Keep the workspace clear and an emergency stop accessible. Enforce joint, velocity, acceleration, workspace, and collision limits. Run `handumi-teleop-real --help` for backend-specific options.
 
 To inspect an existing recording rather than live motion, continue with
-[Quality Assurance](workflows/datasets.md).
+[Replay a Local Recording in Simulation](workflows/replay_in_sim.md), then run
+the checks in [Quality Assurance](workflows/datasets.md).

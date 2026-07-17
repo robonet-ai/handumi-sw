@@ -54,6 +54,42 @@ test the first `/dev/video*` node associated with that physical device.
 
 Inspect `meta/handumi_quality.json`. The common causes are tracking loss, stale cameras, synchronization errors, frozen poses, large motion jumps, or an episode that is too short.
 
+## Replay Prints a CUPTI Traceback
+
+If JAX reports `Unable to load cuPTI` but replay continues, force the supported
+CPU path for the command:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
+  --dataset-root outputs/20260714_224135 \
+  --robot openarmv1 \
+  --episode 0
+```
+
+This warning concerns optional CUDA profiling libraries, not the dataset or
+robot IK.
+
+## Viser Shows Trajectories but No Robot
+
+Messages such as `Can't find meshes/visual/base_link.glb` mean the URDF loaded
+but its visual asset paths did not resolve. Restart replay after updating the
+checkout. TRLC-DK1 meshes must exist under:
+
+```text
+assets/trlc-dk1/meshes/visual/
+assets/trlc-dk1/meshes/collision/
+```
+
+Run this check from the repository root:
+
+```bash
+JAX_PLATFORMS=cpu uv run python -c \
+  "from handumi.robots.registry import load_embodiment; u=load_embodiment('trlc_dk1').load_urdf(load_meshes=True); print(len(u.scene.geometry))"
+```
+
+The current GLB assets expand to hundreds of internal submeshes; a nonzero
+count without `Can't find` messages confirms that the visuals loaded.
+
 ## Piper CAN Is Down or BUS-OFF
 
 This applies only to physical Piper teleoperation. Check robot power and wiring,

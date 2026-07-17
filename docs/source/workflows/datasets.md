@@ -5,6 +5,20 @@ replay, then run automated validation and inspect the captured signals.
 
 ## 1. Replay and Inspect
 
+For local recordings, pass only the local root; `--repo-id` is unnecessary and
+no dataset is downloaded:
+
+```bash
+JAX_PLATFORMS=cpu handumi-replay-in-sim \
+  --dataset-root outputs/20260714_224135 \
+  --robot openarmv1 \
+  --episode 0
+```
+
+See [Replay a Local Recording in Simulation](replay_in_sim.md) for the current
+OpenArm v1 and TRLC-DK1 commands, calibration semantics, measured IK results,
+and Viser mesh troubleshooting.
+
 Choose the target robot explicitly. Piper is a currently available example:
 
 ```bash
