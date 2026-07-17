@@ -50,6 +50,10 @@ ik_weights:
   ori: 10.0
   rest: 3.0
   max_joint_delta: 0.08726646
+# Offline replay may follow recorded targets faster than real-time teleoperation.
+# This does not change the real OpenArm command-rate or speed safety limits below.
+replay:
+  max_joint_delta: 0.35
 real:
   backend: openarm_can
   gripper:

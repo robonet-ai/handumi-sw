@@ -97,6 +97,7 @@ class RobotConfig:
     home_poses: dict[str, np.ndarray]
     default_home_pose: str
     ik_weights: KinematicsConfig
+    replay_max_joint_delta: float | None
     gripper_max_width_m: float
     controller_tcp_calibrations: dict[str, Path]
     handumi_gripper: str | None
@@ -265,6 +266,7 @@ def load_robot_config(name: str) -> RobotConfig:
         data: dict[str, Any] = yaml.safe_load(fh) or {}
 
     weights = data.get("ik_weights") or {}
+    replay = data.get("replay") or {}
     real = data.get("real") or {}
     urdf = _resolve_path(data["urdf"])
     pkg_root = _resolve_path(data["pkg_root"])
@@ -333,6 +335,11 @@ def load_robot_config(name: str) -> RobotConfig:
                 if weights.get("max_reach") is None
                 else float(weights["max_reach"])
             ),
+        ),
+        replay_max_joint_delta=(
+            None
+            if replay.get("max_joint_delta") is None
+            else float(replay["max_joint_delta"])
         ),
         real=RobotRealConfig(
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),

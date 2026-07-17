@@ -761,8 +761,13 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             )
 
     cfg = runtime.config.ik_weights
+    if runtime.config.replay_max_joint_delta is not None:
+        cfg = replace(
+            cfg,
+            max_joint_delta=runtime.config.replay_max_joint_delta,
+        )
     q = runtime.config.home_q.astype(np.float32).copy()
-    solver = runtime.solver_cls()
+    solver = runtime.solver_cls(config=cfg)
     qs: list[np.ndarray] = []
     raw_left_gt: list[np.ndarray] = []
     raw_right_gt: list[np.ndarray] = []
@@ -987,7 +992,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     )
     print(
         f"[replay] retarget={retarget_mode} "
-        f"compose={args.compose_source} translation_scale={args.translation_scale:g}"
+        f"compose={args.compose_source} translation_scale={args.translation_scale:g} "
+        f"max_joint_delta={cfg.max_joint_delta}"
     )
     if requested_retarget_mode == "auto":
         print(

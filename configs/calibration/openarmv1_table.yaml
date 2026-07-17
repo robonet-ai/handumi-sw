@@ -1,0 +1,18 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: openarmv1
+source: simulation_initial_pose_alignment
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # HandUMI table: +X right, +Y away from the operator, +Z up.
+  # OpenArm world: +X forward, +Y left, +Z up. This simulation transform
+  # aligns the first demonstrated bimanual midpoint with the forward_open TCP
+  # midpoint while preserving the complete table-frame trajectory rigidly.
+  # This moves the table frame, not the robot: the OpenArm pedestal remains
+  # fixed to world Z=0 and its shoulder mounts remain at Z=0.698 m.
+  # Measure the physical table pose and set verified: true before relying on
+  # this file for a real deployment.
+  robot_from_table:
+    position: [0.17214, -0.01286, 0.28755]
+    quaternion: [0.0, 0.0, -0.70710678, 0.70710678]
