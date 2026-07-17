@@ -182,6 +182,7 @@ def test_yam_bimanual_layout_and_forward_home():
     assert runtime.arm_joint_indices("right") == list(range(8, 14))
     assert runtime.config.default_home_pose == "forward_open"
     assert runtime.config.replay_max_joint_delta == 0.35
+    assert runtime.config.replay_gripper_mode == "physical-width"
 
     left, right = runtime.solver_cls().fk_pose7(runtime.home_q())
     np.testing.assert_allclose(left[0], -0.30, atol=1e-5)
@@ -194,16 +195,16 @@ def test_yam_linear_4310_gripper_mapping_and_visual_meshes():
     runtime = load_embodiment("yam")
     finger_indices = [6, 7, 14, 15]
 
-    np.testing.assert_allclose(runtime.home_q()[finger_indices], 0.0)
+    np.testing.assert_allclose(runtime.home_q()[finger_indices], -0.04695)
     q = runtime.home_q()
     runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
-    np.testing.assert_allclose(q[finger_indices], [-0.04695, -0.04695, 0.0, 0.0])
-    runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
     np.testing.assert_allclose(q[finger_indices], [0.0, 0.0, -0.04695, -0.04695])
+    runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
+    np.testing.assert_allclose(q[finger_indices], [-0.04695, -0.04695, 0.0, 0.0])
 
     urdf = runtime.load_urdf(load_meshes=True)
     assert urdf.scene is not None
-    assert len(urdf.scene.geometry) == 19
+    assert len(urdf.scene.geometry) == 25
 
 
 def test_legacy_ee_links_are_derived_from_arms():

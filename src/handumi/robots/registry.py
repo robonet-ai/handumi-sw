@@ -98,6 +98,7 @@ class RobotConfig:
     default_home_pose: str
     ik_weights: KinematicsConfig
     replay_max_joint_delta: float | None
+    replay_gripper_mode: str
     gripper_max_width_m: float
     controller_tcp_calibrations: dict[str, Path]
     handumi_gripper: str | None
@@ -272,6 +273,11 @@ def load_robot_config(name: str) -> RobotConfig:
 
     weights = data.get("ik_weights") or {}
     replay = data.get("replay") or {}
+    replay_gripper_mode = str(replay.get("gripper_retarget", "normalized"))
+    if replay_gripper_mode not in {"normalized", "physical-width"}:
+        raise ValueError(
+            "replay.gripper_retarget must be 'normalized' or 'physical-width'."
+        )
     real = data.get("real") or {}
     urdf = _resolve_path(data["urdf"])
     pkg_root = _resolve_path(data["pkg_root"])
@@ -346,6 +352,7 @@ def load_robot_config(name: str) -> RobotConfig:
             if replay.get("max_joint_delta") is None
             else float(replay["max_joint_delta"])
         ),
+        replay_gripper_mode=replay_gripper_mode,
         real=RobotRealConfig(
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),
             max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),

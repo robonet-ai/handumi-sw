@@ -296,9 +296,12 @@ def _resolve_gripper_openings(
     recorded_normalized: np.ndarray | None,
     *,
     max_width_m: float,
+    mode: str = "normalized",
 ) -> tuple[np.ndarray | None, str]:
     """Return per-frame 0-1 gripper openings and their source description."""
-    if recorded_normalized is not None:
+    if mode not in {"normalized", "physical-width"}:
+        raise ValueError(f"Unsupported gripper retarget mode {mode!r}.")
+    if mode == "normalized" and recorded_normalized is not None:
         return np.clip(recorded_normalized, 0.0, 1.0), "recorded Feetech normalized"
     if states.ndim != 2 or states.shape[1] != HANDUMI_RAW_STATE_SIZE:
         raise ValueError(
@@ -668,6 +671,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             if args.gripper_max_width_m is None
             else args.gripper_max_width_m
         ),
+        mode=runtime.config.replay_gripper_mode,
     )
     if args.raw_controller_debug:
         states_for_retarget = states

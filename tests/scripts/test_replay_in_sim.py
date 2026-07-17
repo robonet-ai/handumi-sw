@@ -42,6 +42,22 @@ def test_grippers_fall_back_to_widths_in_meters():
     assert source == "state widths in meters"
 
 
+def test_physical_width_gripper_retarget_overrides_recorded_percentage():
+    states = np.zeros((2, 16), dtype=np.float32)
+    states[:, 14:16] = [[0.024, 0.048], [0.096, 0.12]]
+    recorded = np.array([[0.2, 0.7], [0.3, 0.8]], dtype=np.float32)
+
+    openings, source = _resolve_gripper_openings(
+        states,
+        recorded,
+        max_width_m=0.096,
+        mode="physical-width",
+    )
+
+    np.testing.assert_allclose(openings, [[0.25, 0.5], [1.0, 1.0]], atol=1e-6)
+    assert source == "state widths in meters"
+
+
 def test_controller_device_is_read_from_dataset_metadata():
     args = Namespace(controller_device=None)
     info = {"handumi": {"recording_device": "meta"}}

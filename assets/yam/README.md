@@ -14,6 +14,9 @@ come from the current YAM and `linear_4310` asset directories in that commit.
 - the upstream zero-range root joint is represented as a fixed joint;
 - both bases are placed 0.60 m apart in a +X-right, +Y-forward, +Z-up world;
 - the stale upstream mesh paths are replaced with the current I2RT assets;
+- `link2` and `link3` are split into arm/casing visual meshes without changing
+  their triangles, so YAM's white links and black motor housings can use
+  separate URDF materials;
 - fixed TCP links use I2RT's `grasp_site` offset of 0.1347 m;
 - the two finger slides per arm expose the full 0.096 m nominal stroke.
 

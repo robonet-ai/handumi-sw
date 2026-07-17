@@ -14,11 +14,11 @@ arms:
       - left_joint6
     gripper_joints:
       - name: left_gripper_left
-        closed: -0.04695
-        open: 0.0
+        closed: 0.0
+        open: -0.04695
       - name: left_gripper_right
-        closed: -0.04695
-        open: 0.0
+        closed: 0.0
+        open: -0.04695
   right:
     ee_link: right_tcp
     joint_names:
@@ -30,18 +30,18 @@ arms:
       - right_joint6
     gripper_joints:
       - name: right_gripper_left
-        closed: -0.04695
-        open: 0.0
+        closed: 0.0
+        open: -0.04695
       - name: right_gripper_right
-        closed: -0.04695
-        open: 0.0
+        closed: 0.0
+        open: -0.04695
 
 # Conservative, symmetric simulation pose: both arms reach into the shared
 # workspace with their linear_4310 grippers fully open. Validate a separate
 # physical home before adding a real-hardware backend.
 default_home_pose: forward_open
 home_poses:
-  forward_open: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
+  forward_open: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695]
 gripper_max_width_m: 0.096
 
 handumi_tool:
@@ -58,3 +58,7 @@ ik_weights:
   max_reach: 0.62
 replay:
   max_joint_delta: 0.35
+  # Preserve the demonstrated jaw aperture in meters. YAM opens to 96 mm,
+  # whereas the source HandUMI/Piper gripper opens to 66 mm; replaying the
+  # normalized percentage would make YAM about 45% wider than demonstrated.
+  gripper_retarget: physical-width

@@ -17,7 +17,7 @@
   <material name="yam_link2_blue"><color rgba="0.810 0.825 0.840 1"/></material>
   <material name="yam_link3_olive"><color rgba="0.865 0.875 0.885 1"/></material>
   <material name="yam_link4_gray"><color rgba="0.070 0.075 0.080 1"/></material>
-  <material name="yam_link5_pink"><color rgba="0.835 0.845 0.855 1"/></material>
+  <material name="yam_link5_pink"><color rgba="0.055 0.060 0.065 1"/></material>
   <material name="yam_gripper_green"><color rgba="0.045 0.050 0.055 1"/></material>
   <material name="yam_tip_blue"><color rgba="0.100 0.110 0.120 1"/></material>
   <material name="yam_mount"><color rgba="0.16 0.17 0.20 1"/></material>
@@ -69,8 +69,18 @@
   <link name="left_link2">
     <visual>
       <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
-      <geometry><mesh filename="meshes/arm/link2.stl"/></geometry>
+      <geometry><mesh filename="meshes/arm/link2_motor.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_arm.stl"/></geometry>
       <material name="yam_link2_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
     </visual>
   </link>
   <joint name="left_joint2" type="revolute">
@@ -82,8 +92,13 @@
   <link name="left_link3">
     <visual>
       <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
-      <geometry><mesh filename="meshes/arm/link3.stl"/></geometry>
+      <geometry><mesh filename="meshes/arm/link3_arm.stl"/></geometry>
       <material name="yam_link3_olive"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
     </visual>
   </link>
   <joint name="left_joint3" type="revolute">
@@ -198,8 +213,18 @@
   <link name="right_link2">
     <visual>
       <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
-      <geometry><mesh filename="meshes/arm/link2.stl"/></geometry>
+      <geometry><mesh filename="meshes/arm/link2_motor.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_arm.stl"/></geometry>
       <material name="yam_link2_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
     </visual>
   </link>
   <joint name="right_joint2" type="revolute">
@@ -211,8 +236,13 @@
   <link name="right_link3">
     <visual>
       <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
-      <geometry><mesh filename="meshes/arm/link3.stl"/></geometry>
+      <geometry><mesh filename="meshes/arm/link3_arm.stl"/></geometry>
       <material name="yam_link3_olive"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
     </visual>
   </link>
   <joint name="right_joint3" type="revolute">
