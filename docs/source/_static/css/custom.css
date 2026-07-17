@@ -80,6 +80,11 @@ html[data-theme="dark"] {
   --pst-color-border: var(--handumi-surface-raised);
 }
 
+/* The theme's default control also exposes a system-preference mode. */
+.theme-switch-button .theme-switch[data-mode="auto"] {
+  display: none !important;
+}
+
 .handumi-cover {
   display: block;
   width: 100%;

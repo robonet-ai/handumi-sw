@@ -36,6 +36,7 @@ html_logo = "_static/robonet-logo.svg"
 html_favicon = "_static/favicon.svg"
 html_static_path = ["_static"]
 html_css_files = ["css/custom.css"]
+html_js_files = ["js/theme-switcher.js"]
 html_show_sphinx = False
 html_last_updated_fmt = "%b %d, %Y"
 
@@ -62,8 +63,8 @@ html_theme_options = {
             "type": "fontawesome",
         },
         {
-            "name": "HandUMI Software",
-            "url": "https://github.com/robonet-ai/handumi-sw",
+            "name": "RoboNet AI on GitHub",
+            "url": "https://github.com/robonet-ai",
             "icon": "fa-brands fa-square-github",
             "type": "fontawesome",
         },
