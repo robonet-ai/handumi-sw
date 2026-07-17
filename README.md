@@ -33,10 +33,10 @@ flowchart LR
     A[HandUMI data collection] --> B[Synchronized robot-agnostic dataset]
     B --> C[Validate]
     C --> D[Retarget]
-    D --> E[Piper]
-    D --> F[OpenArm v1]
+    D --> E[AgileX PiPER]
+    D --> F[OpenArm]
     D --> G[TRLC-DK1]
-    D --> H[YAM]
+    D --> H[I2RT YAM]
     D --> I[Other bimanual arms with parallel grippers]
 ```
 
@@ -53,22 +53,22 @@ embodiments can be added without changing the capture format.
 
 | Bimanual | Repository | Preview |
 |---|---|---|
-| Piper | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual Piper](docs/images/bipiper.png) |
-| OpenArm v1 | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm v1](docs/images/openarm.jpg) |
+| AgileX PiPER | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual AgileX PiPER](docs/images/bipiper.png) |
+| OpenArm | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm](docs/images/openarm.jpg) |
 | TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC.png) |
-| YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](docs/images/biyam.png) |
+| I2RT YAM | [Repository](https://github.com/i2rt-robotics/i2rt) | ![Bimanual I2RT YAM](assets/yam/biYAM.png) |
 
-Axol (`axol`) is also available for bimanual kinematic replay in simulation.
-Its catalog preview will be added when an official project image is available.
-See [Add a new robot embodiment](https://robonet-ai.github.io/handumi-sw/development/new_embodiment.html) to
-extend this list.
+**More embodiments coming soon.** See
+[Add a new robot embodiment](https://robonet-ai.github.io/handumi-sw/development/new_embodiment.html)
+to contribute an integration. If you want support for a specific bimanual arm,
+[open an embodiment request](https://github.com/robonet-ai/handumi-sw/issues/new).
 
 ## Supported Scope
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
-- Robot models and simulation: Piper, OpenArm v1, TRLC-DK1, Axol, and YAM.
-- Real-robot teleoperation: AgileX Piper and OpenArm v1 through optional backends.
+- Robot models and simulation: AgileX PiPER, OpenArm, TRLC-DK1, Axol, and I2RT YAM.
+- Real-robot teleoperation: AgileX PiPER and OpenArm through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 
 ## Safety

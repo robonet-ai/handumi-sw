@@ -1,4 +1,4 @@
-# HandUMI - Software
+# HandUMI
 
 Collect robot-free bimanual demonstrations once with HandUMI, then validate,
 retarget, and reuse them across different bimanual arms with parallel grippers.

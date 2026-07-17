@@ -10,22 +10,24 @@
   --handumi-red-hover: #8f0000;
 }
 
-/* Keep a real document title for navigation without duplicating the cover. */
-section#handumi > h1:first-child {
-  display: none;
-}
-
 a {
   text-underline-offset: 0.15em;
 }
 
 .navbar-brand.logo {
-  flex-direction: row;
-  gap: 0.8rem;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-areas:
+    "symbol brand"
+    "documentation documentation";
+  grid-template-columns: auto auto;
+  column-gap: 0.8rem;
+  row-gap: 0.75rem;
+  justify-content: center;
+  width: 100%;
 }
 
 .navbar-brand.logo .logo__image {
+  grid-area: symbol;
   width: 4rem;
   height: 4rem;
   margin: 0;
@@ -33,6 +35,7 @@ a {
 }
 
 .navbar-brand.logo .logo__title {
+  grid-area: brand;
   margin: 0;
   font-size: 1.8rem;
   font-weight: 700;
@@ -40,13 +43,14 @@ a {
   white-space: nowrap;
 }
 
-.navbar-brand.logo .logo__title::after {
-  content: "HandUMI Documentation";
-  display: block;
-  margin-top: 0.35rem;
-  font-size: 0.85rem;
-  font-weight: 500;
+.navbar-brand.logo::after {
+  content: "HandUMI\A Documentation";
+  grid-area: documentation;
+  font-size: 1.35rem;
+  font-weight: 400;
   line-height: 1.2;
+  text-align: center;
+  white-space: pre-line;
   color: var(--pst-color-text-muted);
 }
 
