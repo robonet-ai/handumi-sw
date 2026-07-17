@@ -1,7 +1,5 @@
 # Teleoperation
 
-Ultima modificacion: 2026-07-16
-
 HandUMI produces robot-agnostic live tool poses and gripper commands. A selected
 robot embodiment maps those commands to its kinematics; an optional hardware
 backend sends them to physical arms. Start in simulation and connect hardware

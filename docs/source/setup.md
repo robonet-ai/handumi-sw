@@ -1,7 +1,5 @@
 # HandUMI Setup and Calibration
 
-Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
-
 Complete this page before recording. No robot arm is required: these steps
 configure HandUMI, its tracking device, cameras, grippers, and workspace.
 Some calibrations are permanent for one physical assembly; the table/session
@@ -102,7 +100,7 @@ A healthy stream reports steady FPS and both controllers tracked.
 ### PICO
 
 Install the [XRoboToolkit PC Service](https://github.com/XR-Robotics/XRoboToolkit-PC-Service/releases)
-and follow the current [XR Robotics headset instructions](https://github.com/XR-Robotics#-get-started).
+and follow the current [XR Robotics headset instructions](https://github.com/XR-Robotics).
 Start the PC service, then launch streaming:
 
 ```bash

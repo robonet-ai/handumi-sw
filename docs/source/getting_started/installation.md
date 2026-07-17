@@ -1,7 +1,5 @@
 # Installation
 
-Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
-
 Requires [uv](https://docs.astral.sh/uv/) and Python >= 3.12.
 
 ```bash

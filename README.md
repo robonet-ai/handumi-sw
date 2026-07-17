@@ -1,6 +1,4 @@
-# HandUMI
-
-Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
+# HandUMI - Software
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
@@ -10,17 +8,9 @@ Ultima modificacion: 2026-07-15 11:26:49 -05 -0500
 
 [HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
 
-## Documentation
-
-**[Read the HandUMI documentation](https://robonet-ai.github.io/handumi-sw/)**
-
-- [Installation](docs/source/getting_started/installation.md)
-- [Setup and calibration](docs/source/setup.md)
-- [Teleoperation](docs/source/teleoperation.md)
-- [Record demonstrations](docs/source/record.md)
-- [Quality assurance](docs/source/workflows/datasets.md)
-- [Troubleshooting](docs/source/troubleshooting.md)
-- [Add a new robot embodiment](docs/source/development/new_embodiment.md)
+> **Collect once, retarget to many robots.** Record demonstrations with HandUMI
+> once, then retarget and reuse the same data across different bimanual arms
+> with parallel grippers, without recollecting demonstrations for each robot.
 
 ## Quick Start
 
@@ -38,21 +28,44 @@ PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Met
 
 ## Core Workflow
 
-```text
-tracking + cameras + gripper widths
-                ↓
-     synchronized raw dataset
-                ↓
-       validate → convert/replay
+```mermaid
+flowchart LR
+    A[HandUMI data collection] --> B[Synchronized robot-agnostic dataset]
+    B --> C[Validate]
+    C --> D[Retarget]
+    D --> E[Piper]
+    D --> F[OpenArm v1]
+    D --> G[TRLC-DK1]
+    D --> H[Other bimanual arms with parallel grippers]
 ```
 
-Raw captures remain robot-agnostic. Robot configuration and physical controller-to-TCP calibration are fingerprinted in dataset metadata so later conversion remains reproducible.
+Raw captures remain robot-agnostic. After collecting data with HandUMI, the same
+demonstrations can be retargeted to different bimanual arms with parallel
+grippers. Robot configuration and physical controller-to-TCP calibration are
+fingerprinted in dataset metadata so later conversion remains reproducible.
+
+## Supported Bimanual Embodiments
+
+HandUMI is optimized for fixed-base bimanual manipulators equipped with
+parallel-jaw grippers. Demonstrations remain robot-agnostic, so support for new
+embodiments can be added without changing the capture format.
+
+| Bimanual | Repository | Preview |
+|---|---|---|
+| Piper | [Repository](https://github.com/agilexrobotics/piper_ros) | ![Bimanual Piper](docs/images/bipiper.png) |
+| OpenArm v1 | [Repository](https://github.com/enactic/openarm) | ![Bimanual OpenArm v1](docs/images/openarm.jpg) |
+| TRLC-DK1 | [Repository](https://github.com/robot-learning-co/trlc-dk1) | ![Bimanual TRLC-DK1](docs/images/biTRLC.png) |
+
+Axol (`axol`) is also available for bimanual kinematic replay in simulation.
+Its catalog preview will be added when an official project image is available.
+See [Add a new robot embodiment](https://robonet-ai.github.io/handumi-sw/development/new_embodiment.html) to
+extend this list.
 
 ## Supported Scope
 
 - Tracking: PICO through XRoboToolkit and Meta Quest through
   [HandUMI Quest App](https://github.com/robonet-ai/handumi-quest-app).
-- Robot models and simulation: Piper, OpenArm v1, and Axol.
+- Robot models and simulation: Piper, OpenArm v1, TRLC-DK1, and Axol.
 - Real-robot teleoperation: AgileX Piper and OpenArm v1 through optional backends.
 - Dataset format: LeRobot-compatible synchronized captures.
 

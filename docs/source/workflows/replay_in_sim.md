@@ -12,7 +12,7 @@ need `--repo-id` and does not download data:
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root /home/autobrik/NONHUMAN/handumi-sw/outputs/20260714_224135 \
+  --dataset-root outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0
 ```
@@ -34,7 +34,7 @@ new embodiment:
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root /home/autobrik/NONHUMAN/handumi-sw/outputs/20260714_224135 \
+  --dataset-root outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0 \
   --retarget-mode absolute-table \
@@ -86,7 +86,7 @@ not yet provide a HandUMI real-hardware backend.
 
 ```bash
 JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root /home/autobrik/NONHUMAN/handumi-sw/outputs/20260714_224135 \
+  --dataset-root outputs/20260714_224135 \
   --robot trlc_dk1 \
   --episode 0 \
   --retarget-mode absolute-table \

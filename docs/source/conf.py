@@ -21,6 +21,7 @@ source_suffix = {
 root_doc = "index"
 language = "en"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+linkcheck_ignore = [r"http://localhost:\d+/?"]
 
 myst_enable_extensions = [
     "colon_fence",
@@ -30,7 +31,7 @@ myst_enable_extensions = [
 myst_heading_anchors = 3
 
 html_theme = "sphinx_book_theme"
-html_title = "HandUMI"
+html_title = "HandUMI - Software"
 html_logo = "_static/robonet-logo.svg"
 html_favicon = "_static/favicon.svg"
 html_static_path = ["_static"]
