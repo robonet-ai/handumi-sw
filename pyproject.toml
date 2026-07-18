@@ -52,6 +52,7 @@ cuda = [
 
 [project.scripts]
 handumi-record = "handumi.scripts.record:main"
+handumi-record-teleop = "handumi.scripts.record_teleop:main"
 handumi-teleop-sim = "handumi.scripts.teleop_sim:main"
 handumi-teleop-real = "handumi.scripts.teleop_real:main"
 handumi-pico-camera = "handumi.scripts.pico_camera:main"
