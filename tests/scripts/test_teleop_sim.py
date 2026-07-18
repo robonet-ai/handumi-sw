@@ -11,8 +11,6 @@ from handumi.robots.kinematics import limit_joint_delta
 from handumi.robots.registry import load_robot_config
 from handumi.scripts.teleop_sim import (
     AutoStartCountdown,
-    _clear_enabled_anchors,
-    _has_enabled_anchors,
     _load_calibration,
     parse_args,
     _sample_state,
@@ -237,16 +235,6 @@ class TeleopSimStartTest(unittest.TestCase):
 
         self.assertEqual(_start_sides(anchors, ("left", "right")), ("right",))
         self.assertEqual(_start_sides(anchors, ("left",)), ())
-
-    def test_double_clap_reset_helpers_clear_enabled_anchors(self):
-        anchors = {"left": {"source": np.zeros(7)}, "right": None}
-
-        self.assertTrue(_has_enabled_anchors(anchors, ("left", "right")))
-        _clear_enabled_anchors(anchors, ("left", "right"))
-
-        self.assertFalse(_has_enabled_anchors(anchors, ("left", "right")))
-        self.assertIsNone(anchors["left"])
-        self.assertIsNone(anchors["right"])
 
 
 if __name__ == "__main__":

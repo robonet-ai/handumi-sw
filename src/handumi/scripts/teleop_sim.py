@@ -349,21 +349,6 @@ def _start_sides(
     return tuple(side for side in enabled_sides if anchors[side] is None)
 
 
-def _has_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    return any(anchors[side] is not None for side in enabled_sides)
-
-
-def _clear_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> None:
-    for side in enabled_sides:
-        anchors[side] = None
-
-
 def _load_calibration(args: argparse.Namespace):
     from handumi.calibration.control_tcp import ControllerTcpCalibration
 
@@ -386,11 +371,6 @@ def _load_calibration(args: argparse.Namespace):
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-
-
-def _side_joint_indices(runtime) -> dict[str, list[int]]:
-    """Actuated-joint indices per configured logical side."""
-    return {side: runtime.arm_joint_indices(side) for side in ("left", "right")}
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:

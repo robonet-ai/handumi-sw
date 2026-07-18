@@ -225,46 +225,11 @@ def _latest_widths(grippers):
     )
 
 
-def _ik_home_target(pose7: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    return pose7[:3], pose7[3:7]
-
-
 def _enabled_tracking_ok(
     side_tracked: dict[str, bool],
     enabled_sides: tuple[str, ...],
 ) -> bool:
     return all(side_tracked[side] for side in enabled_sides)
-
-
-def _clear_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> None:
-    for side in enabled_sides:
-        anchors[side] = None
-
-
-def _has_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    return any(anchors[side] is not None for side in enabled_sides)
-
-
-def _apply_inactive_side_policy(
-    q: np.ndarray,
-    previous_q: np.ndarray,
-    home_q: np.ndarray,
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    side_indices: dict[str, list[int]],
-    tracking_hold_sides: set[str],
-) -> None:
-    """Keep recovery-held arms still; park other inactive arms at home."""
-    for side in ("left", "right"):
-        if anchors[side] is not None:
-            continue
-        source = previous_q if side in tracking_hold_sides else home_q
-        q[side_indices[side]] = source[side_indices[side]]
 
 
 def main() -> None:
