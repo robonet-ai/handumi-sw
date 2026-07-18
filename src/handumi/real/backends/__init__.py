@@ -9,6 +9,8 @@ import numpy as np
 
 from handumi.robots.registry import RobotRuntime
 
+REGISTERED_BACKENDS: tuple[str, ...] = ("openarm_can", "piper_can")
+
 
 class RobotBackend(Protocol):
     """Manufacturer-neutral contract consumed by real teleoperation."""
@@ -43,11 +45,14 @@ def make_real_backend(
     active_sides: tuple[str, ...] = ("left", "right"),
 ) -> RobotBackend:
     """Create a backend without importing SDKs for unused robots."""
-    if robot == "piper":
+    backend = runtime.config.real.backend
+    if backend is None:
+        raise ValueError(f"Robot {robot!r} does not declare real.backend.")
+    if backend == "piper_can":
         from handumi.real.backends.piper import PiperBackend
 
         return PiperBackend.from_config(runtime=runtime, rig_config=rig_config)
-    if robot == "openarmv1":
+    if backend == "openarm_can":
         from handumi.real.openarm_gripper_calibration import (
             user_openarm_gripper_calibration_path,
         )
@@ -73,9 +78,16 @@ def make_real_backend(
                 )
             },
         )
-    raise ValueError(f"No real hardware backend registered for {robot!r}.")
+    raise ValueError(
+        f"No real hardware backend {backend!r} registered for robot {robot!r}."
+    )
 
 
 REAL_BACKEND_NAMES: tuple[str, ...] = ("openarmv1", "piper")
 
-__all__ = ["REAL_BACKEND_NAMES", "RobotBackend", "make_real_backend"]
+__all__ = [
+    "REAL_BACKEND_NAMES",
+    "REGISTERED_BACKENDS",
+    "RobotBackend",
+    "make_real_backend",
+]
