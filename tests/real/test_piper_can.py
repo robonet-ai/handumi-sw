@@ -91,6 +91,7 @@ class PiperCanConfigTest(unittest.TestCase):
     def test_piper_yaml_real_defaults(self):
         config = load_robot_config("piper")
 
+        self.assertEqual(config.real.backend, "piper_can")
         self.assertEqual(config.real.command_rate_hz, 100.0)
         self.assertEqual(config.real.max_joint_speed_deg_s, 180.0)
         self.assertEqual(config.real.home_max_joint_speed_deg_s, 20.0)

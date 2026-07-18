@@ -145,21 +145,43 @@ Keep the board fixed. Move the complete HandUMI through varied roll, pitch, and
 yaw poses, pausing briefly for each automatic capture. Keep the controller
 tracking ring visible to the headset.
 
+Choose the tracking device explicitly. Global options such as `--device`,
+`--pico-wifi`, and `--quest-ip` come before the subcommand.
+
+Meta Quest:
+
 ```bash
-handumi-calibrate-spatial mount --side left
-handumi-calibrate-spatial mount --side right
+handumi-calibrate-spatial --device meta mount --side left
+handumi-calibrate-spatial --device meta mount --side right
 ```
+
+PICO:
+
+```bash
+handumi-calibrate-spatial --device pico --pico-mode mandos mount --side left
+handumi-calibrate-spatial --device pico --pico-mode mandos mount --side right
+```
+
+PICO calibration relies on live XRoboToolkit snapshots, so hold the HandUMI
+steady while each view is accepted. Use `--pico-wifi` for a wireless PICO setup.
 
 Repeat only if a controller or wrist-camera mount moves.
 
 ### Session/Table Frame
 
 With the board still at its marked position and the headset fixed as it will be
-during recording:
+during recording, solve the table frame for the same tracking device.
 
 ```bash
-handumi-calibrate-spatial session --side left
-handumi-calibrate-spatial visualize
+handumi-calibrate-spatial --device meta session --side left
+handumi-calibrate-spatial --device meta visualize
+```
+
+For PICO:
+
+```bash
+handumi-calibrate-spatial --device pico --pico-mode mandos session --side left
+handumi-calibrate-spatial --device pico --pico-mode mandos visualize
 ```
 
 Inspect all cameras and both TCP trails in Rerun. The table surface must align
@@ -170,7 +192,9 @@ handumi-calibrate-spatial workspace
 ```
 
 Remove the board without moving the table, cameras, or headset. Repeat the
-session calibration after relocalization or a tracking reset.
+session calibration after relocalization or a tracking reset. The saved
+`outputs/calibration/session.yaml` records `tracking_device` and
+`table_from_device`; use it only with the same `--device`.
 
 ## 5. Calibrate the HandUMI Tool Tip
 
@@ -184,16 +208,22 @@ result to that robot's identity-bound calibration path; the wizard never
 silently assumes two physical tool assemblies are identical.
 
 :::{dropdown} Capture and fit both sides
+Select the tracking device:
+
+```bash
+TRACKING_DEVICE=meta   # or pico
+```
+
 Capture the left side:
 
 ```bash
 LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
-handumi-record --device meta --skip-feetech --only-left-camera \
+handumi-record --device "$TRACKING_DEVICE" --skip-feetech --only-left-camera \
   --repo-id local/tcp_pivot_left --output-dir "$LEFT_RUN" \
   --task "tcp pivot left" --num-episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
-handumi-calibrate-tcp-offset pivot --device meta --side left \
+handumi-calibrate-tcp-offset pivot --device "$TRACKING_DEVICE" --side left \
   --parquet "$LEFT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
@@ -202,12 +232,12 @@ Repeat for the right side:
 
 ```bash
 RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
-handumi-record --device meta --skip-feetech --only-right-camera \
+handumi-record --device "$TRACKING_DEVICE" --skip-feetech --only-right-camera \
   --repo-id local/tcp_pivot_right --output-dir "$RIGHT_RUN" \
   --task "tcp pivot right" --num-episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
-handumi-calibrate-tcp-offset pivot --device meta --side right \
+handumi-calibrate-tcp-offset pivot --device "$TRACKING_DEVICE" --side right \
   --parquet "$RIGHT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
@@ -242,8 +272,9 @@ left.position  = [x,  y, z]
 right.position = [x, -y, z]
 ```
 
-Update only `position` in `configs/calibration/meta_controller_tcp.yaml`, then
-run:
+Update only `position` in `configs/calibration/${TRACKING_DEVICE}_controller_tcp.yaml`
+or the robot-specific calibration file declared in `configs/robots/<robot>.yaml`,
+then run:
 
 ```bash
 uv run pytest -q tests/tracking/test_transforms.py \

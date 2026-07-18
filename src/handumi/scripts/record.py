@@ -38,7 +38,7 @@ from handumi.calibration.control_tcp import (
 )
 from handumi.calibration.spatial import (
     session_calibration_metadata,
-    session_table_from_quest,
+    session_table_from_device,
 )
 from handumi.cameras import (
     build_camera_specs,
@@ -667,7 +667,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Quest-to-table session calibration from handumi-calibrate-spatial. "
+            "Tracking-device-to-table session calibration from handumi-calibrate-spatial. "
             "Locks all episodes to the same table frame."
         ),
     )
@@ -709,8 +709,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def _validate_args(args: argparse.Namespace) -> None:
     if args.manual_control and args.device != "pico":
         raise SystemExit("--manual-control currently requires --device pico.")
     if args.manual_control and args.start_button == "enter":
@@ -720,8 +719,6 @@ def main() -> None:
         raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
-    if args.session_calibration is not None and args.device != "meta":
-        raise SystemExit("--session-calibration currently requires --device meta.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     for name in (
@@ -734,6 +731,11 @@ def main() -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
+
+
+def main() -> None:
+    args = parse_args()
+    _validate_args(args)
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
@@ -758,10 +760,16 @@ def main() -> None:
     )
     tracker = build_tracker(args, calibration)
     if args.session_calibration is not None:
+        session_device = str(spatial_session_metadata.get("tracking_device") or "")
+        if session_device and session_device != args.device:
+            raise SystemExit(
+                f"Session calibration is for {session_device}, "
+                f"but --device {args.device} was selected."
+            )
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
         if set_workspace is None:
             raise SystemExit("Selected tracking backend cannot apply a table calibration.")
-        set_workspace(session_table_from_quest(args.session_calibration), locked=True)
+        set_workspace(session_table_from_device(args.session_calibration), locked=True)
     tracker.start()
 
     log.info("--- Camera setup ---")

@@ -58,7 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_TCP_CALIBRATION,
         help="Canonical PICO controller-to-TCP YAML.",
     )
-    parser.add_argument("--home-pose", default="down")
+    parser.add_argument(
+        "--home-pose",
+        default=None,
+        help="Optional legacy named home pose. Omit to use the robot home_q.",
+    )
     parser.add_argument("--port", type=int, default=8003)
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument("--stride", type=int, default=1)

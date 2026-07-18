@@ -22,6 +22,7 @@ from handumi.scripts.record import (
     _recording_tcp_calibration_metadata,
     _robot_metadata,
     _selected_camera_names,
+    _validate_args,
     _validate_finalized_lerobot_dataset,
     _validate_unique_camera_ids,
     _wait_for_clap,
@@ -206,6 +207,39 @@ class CameraSelectionTest(unittest.TestCase):
                 "right_wrist": {"enabled": False},
             },
         )
+
+
+class RecordArgumentValidationTest(unittest.TestCase):
+    @staticmethod
+    def _args(**overrides):
+        values = {
+            "manual_control": False,
+            "device": "pico",
+            "start_button": "enter",
+            "clap_control": False,
+            "skip_feetech": False,
+            "session_calibration": None,
+            "tracking_loss_timeout_s": 1.0,
+            "sync_lag_s": 0.04,
+            "max_sync_skew_s": 0.06,
+            "camera_stale_timeout_s": 0.25,
+            "gripper_stale_timeout_s": 0.10,
+            "sensor_loss_timeout_s": 1.0,
+            "feetech_sample_hz": 100.0,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_pico_session_calibration_is_allowed(self):
+        args = self._args(session_calibration=Path("outputs/calibration/session.yaml"))
+
+        _validate_args(args)
+
+    def test_session_calibration_does_not_relax_device_specific_controls(self):
+        args = self._args(device="meta", manual_control=True)
+
+        with self.assertRaisesRegex(SystemExit, "--manual-control"):
+            _validate_args(args)
 
 
 class RobotMetadataTest(unittest.TestCase):

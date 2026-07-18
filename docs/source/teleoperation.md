@@ -22,11 +22,11 @@ handumi-teleop-sim --device meta --robot "$TARGET_ROBOT" \
   --workspace-camera --space-start
 ```
 
-OpenArm v1 uses the same command and defaults to its official arms-down pose:
+OpenArm v1 uses the same command and starts from its configured `home_q`:
 
 ```bash
 handumi-teleop-sim --device meta --robot openarmv1 \
-  --home-pose down --space-start
+  --space-start
 ```
 
 This opens Viser with the live robot model and Rerun with tracking, TCP trails,

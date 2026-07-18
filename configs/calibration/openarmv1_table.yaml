@@ -7,7 +7,7 @@ calibration:
   frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
   # HandUMI table: +X right, +Y away from the operator, +Z up.
   # OpenArm world: +X forward, +Y left, +Z up. This simulation transform
-  # aligns the first demonstrated bimanual midpoint with the forward_open TCP
+  # aligns the first demonstrated bimanual midpoint with the home_q TCP
   # midpoint while preserving the complete table-frame trajectory rigidly.
   # This moves the table frame, not the robot: the OpenArm pedestal remains
   # fixed to world Z=0 and its shoulder mounts remain at Z=0.698 m.

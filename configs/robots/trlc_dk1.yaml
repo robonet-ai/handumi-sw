@@ -13,10 +13,10 @@ arms:
       - left_joint6
     gripper_joints:
       - name: left_gripper_left
-        closed: -0.045
+        closed: -0.040
         open: 0.001
       - name: left_gripper_right
-        closed: -0.045
+        closed: -0.040
         open: 0.001
   right:
     ee_link: right_tool0
@@ -29,16 +29,16 @@ arms:
       - right_joint6
     gripper_joints:
       - name: right_gripper_left
-        closed: -0.045
+        closed: -0.040
         open: 0.001
       - name: right_gripper_right
-        closed: -0.045
+        closed: -0.040
         open: 0.001
 
 # DK1 elbow-up rest pose from vr-teleop-kit. The generated URDF orders each
 # arm as six revolute joints followed by its two prismatic finger joints.
 home_q: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, 0.001, 0.001, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, 0.001, 0.001]
-gripper_max_width_m: 0.092
+gripper_max_width_m: 0.082
 handumi_tool:
   gripper: trlc_dk1_parallel_v1
   controller_mount: handumi_v1
