@@ -397,13 +397,16 @@ def mean_transform(transforms: Sequence[np.ndarray]) -> np.ndarray:
 
 
 def solve_controller_camera(
-    quest_controller_poses: Sequence[np.ndarray],
+    device_controller_poses: Sequence[np.ndarray],
     camera_board_poses: Sequence[np.ndarray],
 ) -> tuple[np.ndarray, dict[str, float]]:
     """Solve ``T_controller_camera`` from synchronized fixed-board views."""
-    if len(quest_controller_poses) != len(camera_board_poses) or len(quest_controller_poses) < 8:
+    if (
+        len(device_controller_poses) != len(camera_board_poses)
+        or len(device_controller_poses) < 8
+    ):
         raise ValueError("At least 8 paired controller/board views are required.")
-    gripper = [pose7_to_mat(p).astype(np.float64) for p in quest_controller_poses]
+    gripper = [pose7_to_mat(p).astype(np.float64) for p in device_controller_poses]
     target = [pose7_to_mat(p).astype(np.float64) for p in camera_board_poses]
     candidates: list[tuple[float, np.ndarray, np.ndarray]] = []
     methods = (
@@ -481,30 +484,50 @@ def board_from_table_pose(board_spec: CharucoBoardSpec) -> np.ndarray:
     return mat_to_pose7(transform)
 
 
+def solve_table_device(
+    device_controller_poses: Sequence[np.ndarray],
+    controller_camera_pose: np.ndarray,
+    camera_board_poses: Sequence[np.ndarray],
+    board_spec: CharucoBoardSpec,
+) -> tuple[np.ndarray, dict[str, float]]:
+    if (
+        len(device_controller_poses) != len(camera_board_poses)
+        or len(device_controller_poses) < 4
+    ):
+        raise ValueError("At least 4 paired session views are required.")
+    controller_camera = pose7_to_mat(controller_camera_pose).astype(np.float64)
+    device_board = [
+        pose7_to_mat(g).astype(np.float64)
+        @ controller_camera
+        @ pose7_to_mat(c).astype(np.float64)
+        for g, c in zip(device_controller_poses, camera_board_poses, strict=True)
+    ]
+    rms_mm, max_mm, rms_deg, max_deg = transform_errors(device_board)
+    device_table = mean_transform(device_board) @ pose7_to_mat(
+        board_from_table_pose(board_spec)
+    )
+    return mat_to_pose7(np.linalg.inv(device_table)), {
+        "views": float(len(device_board)),
+        "translation_rms_mm": rms_mm,
+        "translation_max_mm": max_mm,
+        "rotation_rms_deg": rms_deg,
+        "rotation_max_deg": max_deg,
+    }
+
+
 def solve_table_quest(
     quest_controller_poses: Sequence[np.ndarray],
     controller_camera_pose: np.ndarray,
     camera_board_poses: Sequence[np.ndarray],
     board_spec: CharucoBoardSpec,
 ) -> tuple[np.ndarray, dict[str, float]]:
-    if len(quest_controller_poses) != len(camera_board_poses) or len(quest_controller_poses) < 4:
-        raise ValueError("At least 4 paired session views are required.")
-    controller_camera = pose7_to_mat(controller_camera_pose).astype(np.float64)
-    quest_board = [
-        pose7_to_mat(g).astype(np.float64)
-        @ controller_camera
-        @ pose7_to_mat(c).astype(np.float64)
-        for g, c in zip(quest_controller_poses, camera_board_poses, strict=True)
-    ]
-    rms_mm, max_mm, rms_deg, max_deg = transform_errors(quest_board)
-    quest_table = mean_transform(quest_board) @ pose7_to_mat(board_from_table_pose(board_spec))
-    return mat_to_pose7(np.linalg.inv(quest_table)), {
-        "views": float(len(quest_board)),
-        "translation_rms_mm": rms_mm,
-        "translation_max_mm": max_mm,
-        "rotation_rms_deg": rms_deg,
-        "rotation_max_deg": max_deg,
-    }
+    """Backward-compatible alias for the device-agnostic table solver."""
+    return solve_table_device(
+        quest_controller_poses,
+        controller_camera_pose,
+        camera_board_poses,
+        board_spec,
+    )
 
 
 def solve_table_camera(
@@ -567,6 +590,10 @@ def session_calibration_metadata(path: Path | None) -> dict[str, Any] | None:
     spatial_sha256 = calibration_hash(spatial)
     if spatial_sha256 != data.get("spatial_calibration_sha256"):
         raise ValueError("Session calibration does not match its spatial calibration file.")
+    table_from_device = data.get("table_from_device") or data.get("table_from_quest")
+    if not isinstance(table_from_device, dict):
+        raise ValueError("Session calibration is missing table_from_device.")
+    tracking_device = str(data.get("tracking_device") or "meta")
     return {
         "path": str(path),
         "sha256": calibration_hash(data),
@@ -577,16 +604,26 @@ def session_calibration_metadata(path: Path | None) -> dict[str, Any] | None:
         "created_at": data.get("created_at"),
         "board_id": (data.get("board") or {}).get("id"),
         "workspace_frame": "table",
-        "table_from_quest": data["table_from_quest"],
+        "tracking_device": tracking_device,
+        "table_from_device": table_from_device,
+        "table_from_quest": data.get("table_from_quest"),
         "metrics": data.get("metrics", {}),
     }
 
 
-def session_table_from_quest(path: Path) -> np.ndarray:
+def session_table_from_device(path: Path) -> np.ndarray:
     data = load_yaml(path)
     if data.get("kind") != "handumi_session_calibration":
         raise ValueError(f"Not a HandUMI session calibration: {path}")
-    return pose7_from_dict(data["table_from_quest"])
+    table_from_device = data.get("table_from_device") or data.get("table_from_quest")
+    if not isinstance(table_from_device, dict):
+        raise ValueError("Session calibration is missing table_from_device.")
+    return pose7_from_dict(table_from_device)
+
+
+def session_table_from_quest(path: Path) -> np.ndarray:
+    """Backward-compatible alias for legacy Quest session calibrations."""
+    return session_table_from_device(path)
 
 
 __all__ = [
@@ -605,9 +642,11 @@ __all__ = [
     "pose7_from_dict",
     "pose7_to_dict",
     "session_calibration_metadata",
+    "session_table_from_device",
     "session_table_from_quest",
     "solve_controller_camera",
     "solve_table_camera",
+    "solve_table_device",
     "solve_table_quest",
     "transform_errors",
     "write_yaml",

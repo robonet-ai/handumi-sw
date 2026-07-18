@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive ChArUco calibration for HandUMI cameras and Quest tracking."""
+"""Interactive ChArUco calibration for HandUMI cameras and VR tracking."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.calibration.spatial import (
     CameraIntrinsics,
     CharucoBoardSpec,
@@ -31,14 +32,15 @@ from handumi.calibration.spatial import (
     pose7_to_dict,
     solve_controller_camera,
     solve_table_camera,
-    solve_table_quest,
+    solve_table_device,
     write_yaml,
 )
 from handumi.cameras.opencv import OpenCVCameraDevice
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
-from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
-from handumi.tracking.transforms import unity_pose_to_handumi
-from handumi.robots.utils import pose7_to_mat
+from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
+from handumi.tracking.base import TrackingProvider
+from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
+from handumi.tracking.pico import PicoTrackingProvider
 from handumi.utils.trajectory import TrajectoryTrail
 from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
 
@@ -48,6 +50,7 @@ DEFAULT_SPATIAL = Path("outputs/calibration/spatial.yaml")
 DEFAULT_SESSION = Path("outputs/calibration/session.yaml")
 MIN_CORNERS = 12
 MAX_SYNC_ERROR_MS = 20.0
+PICO_MAX_SYNC_ERROR_MS = 80.0
 AUTO_CAPTURE_INTERVAL_S = 2.0
 MIN_POSE_ROTATION_DEG = 8.0
 STABLE_HOLD_S = 0.25
@@ -116,7 +119,8 @@ def _load_session(path: Path) -> dict:
     if not path.exists():
         raise SystemExit(
             f"Missing session calibration: {path}. Run "
-            "'handumi-calibrate-spatial session --side <calibrated-side>' first."
+            "'handumi-calibrate-spatial --device <meta|pico> session "
+            "--side <calibrated-side>' first."
         )
     data = load_yaml(path)
     if data.get("kind") != "handumi_session_calibration":
@@ -208,6 +212,8 @@ def _capture(
     detection_gate: Callable[[CharucoDetection], bool] | None = None,
     instructions: tuple[str, ...] = (),
     view_prompts: tuple[str, ...] = (),
+    sync_label: str = "tracking",
+    max_sync_ms: float = MAX_SYNC_ERROR_MS,
 ) -> tuple[list[CharucoDetection], list[np.ndarray]]:
     detections: list[CharucoDetection] = []
     poses: list[np.ndarray] = []
@@ -266,7 +272,11 @@ def _capture(
                 lines.append("Sosten el HandUMI quieto")
             if pair_at is not None:
                 sync_text = "n/a" if sync_ms is None else f"{sync_ms:.1f} ms"
-                lines.insert(1, f"Quest-camera sync {sync_text} (max {MAX_SYNC_ERROR_MS:.0f} ms)")
+                lines.insert(
+                    1,
+                    f"{sync_label}-camera sync {sync_text} "
+                    f"(max {max_sync_ms:.0f} ms)",
+                )
             cv2.imshow(title, _overlay(preview, lines, valid and stable and distinct))
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):
@@ -331,45 +341,83 @@ def _board_poses_with_gate(
     return accepted_controllers, accepted_boards
 
 
-def _quest_pairer(
-    receiver: MetaQuestReceiver,
+def _identity_tcp_calibration() -> ControllerTcpCalibration:
+    pose = IDENTITY_POSE7.astype(np.float32)
+    return ControllerTcpCalibration(left=pose.copy(), right=pose.copy(), source=None)
+
+
+def _sync_limit_ms(args: argparse.Namespace) -> float:
+    if args.max_sync_ms is not None:
+        return float(args.max_sync_ms)
+    return PICO_MAX_SYNC_ERROR_MS if args.device == "pico" else MAX_SYNC_ERROR_MS
+
+
+def _tracking_pairer(
+    tracker: TrackingProvider,
     side: str,
+    *,
+    max_sync_ms: float,
 ) -> Callable[[int], tuple[np.ndarray, float] | None]:
     def pair_at(capture_time_ns: int) -> tuple[np.ndarray, float] | None:
-        aligned = receiver.aligned_at(capture_time_ns)
-        if aligned is None:
+        sample_at = getattr(tracker, "sample_at", None)
+        sample = (
+            sample_at(capture_time_ns)
+            if sample_at is not None
+            else tracker.latest()
+        )
+        tracked = bool(
+            getattr(sample, f"{side}_device_tracked")
+            and getattr(sample, f"{side}_pose_valid")
+            and sample.streaming
+        )
+        if not tracked:
             return None
-        controller = getattr(aligned.frame, side)
-        if not controller.tracked or not controller.valid:
+        aligned_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
+        if aligned_time_ns <= 0:
             return None
-        sync_ms = abs(aligned.aligned_time_ns - capture_time_ns) / 1e6
-        if sync_ms > MAX_SYNC_ERROR_MS:
+        sync_ms = abs(aligned_time_ns - capture_time_ns) / 1e6
+        if sync_ms > max_sync_ms:
             return None
-        pose = unity_pose_to_handumi(controller.position, controller.quaternion)
-        return np.concatenate([pose.position, pose.quaternion]).astype(np.float32), sync_ms
+        pose = getattr(sample, f"{side}_device_controller_pose")
+        return np.asarray(pose, dtype=np.float32).copy(), sync_ms
 
     return pair_at
 
 
-def _connect_quest(args: argparse.Namespace) -> MetaQuestReceiver:
-    base = MetaQuestConfig.from_yaml(args.rig_config)
-    config = MetaQuestConfig(
-        quest_ip=args.quest_ip or base.quest_ip,
-        tcp_port=args.tcp_port or base.tcp_port,
-        sync_port=args.sync_port or base.sync_port,
-        connect_retry_s=base.connect_retry_s,
-        frame_stale_timeout_s=base.frame_stale_timeout_s,
-    )
-    receiver = MetaQuestReceiver(config)
-    receiver.start()
-    log.info("Connecting to Quest at %s:%d ...", config.quest_ip, config.tcp_port)
+def _connect_tracker(args: argparse.Namespace) -> TrackingProvider:
+    calibration = _identity_tcp_calibration()
+    if args.device == "pico":
+        transport = "wifi" if args.pico_wifi else "adb"
+        tracker = PicoTrackingProvider(
+            calibration=calibration,
+            mode=args.pico_mode,
+            transport=transport,
+            skip_adb_check=args.skip_adb_check,
+        )
+        log.info("Connecting to PICO through XRoboToolkit (%s) ...", transport)
+    else:
+        base = MetaQuestConfig.from_yaml(args.rig_config)
+        config = MetaQuestConfig(
+            quest_ip=args.quest_ip or base.quest_ip,
+            tcp_port=args.tcp_port or base.tcp_port,
+            sync_port=args.sync_port or base.sync_port,
+            connect_retry_s=base.connect_retry_s,
+            frame_stale_timeout_s=base.frame_stale_timeout_s,
+        )
+        tracker = MetaQuestTrackingProvider(
+            config=config,
+            calibration=calibration,
+            reset_workspace_on_x=False,
+        )
+        log.info("Connecting to Quest at %s:%d ...", config.quest_ip, config.tcp_port)
+    tracker.start()
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
-        if receiver.metrics()["streaming"]:
-            return receiver
+        if tracker.latest().streaming:
+            return tracker
         time.sleep(0.1)
-    receiver.stop()
-    raise SystemExit("Quest did not start streaming within 15 seconds.")
+    tracker.stop()
+    raise SystemExit(f"{args.device} tracking did not start streaming within 15 seconds.")
 
 
 def cmd_inspect(args: argparse.Namespace) -> None:
@@ -451,7 +499,8 @@ def cmd_mount(args: argparse.Namespace) -> None:
     camera_name = f"{args.side}_wrist"
     intrinsics = _intrinsics(spatial, camera_name)
     camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
-    receiver = _connect_quest(args)
+    tracker = _connect_tracker(args)
+    max_sync_ms = _sync_limit_ms(args)
     camera.connect()
     try:
         detections, controller_poses = _capture(
@@ -459,17 +508,23 @@ def cmd_mount(args: argparse.Namespace) -> None:
             board=board,
             title=f"HandUMI {args.side} controller-camera mount",
             requested_views=args.views,
-            pair_at=_quest_pairer(receiver, args.side),
+            pair_at=_tracking_pairer(
+                tracker,
+                args.side,
+                max_sync_ms=max_sync_ms,
+            ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
                 f"Tablero fijo: toma el HandUMI {args.side}",
                 "Muevelo en roll, pitch y yaw entre capturas",
             ),
             view_prompts=MOUNT_VIEW_PROMPTS,
+            sync_label=args.device,
+            max_sync_ms=max_sync_ms,
         )
     finally:
         camera.disconnect()
-        receiver.stop()
+        tracker.stop()
     if len(detections) < args.views:
         raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
     controller_poses, board_poses = _board_poses_with_gate(
@@ -538,7 +593,7 @@ def _calibrate_workspace(
     if metrics["translation_rms_mm"] > max_rms_mm:
         raise SystemExit(
             f"Workspace-camera residual {metrics['translation_rms_mm']:.2f} mm "
-            f"exceeds {max_rms_mm:.2f} mm; Quest session remains saved."
+            f"exceeds {max_rms_mm:.2f} mm; tracking session remains saved."
         )
     return {"pose": pose7_to_dict(pose), "metrics": metrics}
 
@@ -553,7 +608,8 @@ def cmd_session(args: argparse.Namespace) -> None:
         raise SystemExit(f"Missing {args.side} controller-camera mount in {args.spatial}.")
     controller_camera = pose7_from_dict(mount["controller_from_camera"])
     camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
-    receiver = _connect_quest(args)
+    tracker = _connect_tracker(args)
+    max_sync_ms = _sync_limit_ms(args)
     camera.connect()
     try:
         detections, controller_poses = _capture(
@@ -561,17 +617,23 @@ def cmd_session(args: argparse.Namespace) -> None:
             board=board,
             title=f"HandUMI table session: {args.side}",
             requested_views=args.views,
-            pair_at=_quest_pairer(receiver, args.side),
+            pair_at=_tracking_pairer(
+                tracker,
+                args.side,
+                max_sync_ms=max_sync_ms,
+            ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
-                "Quest fijo al pecho; ponte frente al borde inferior",
+                f"{args.device} fijo; ponte frente al borde inferior",
                 f"Toma el HandUMI {args.side} y varia su orientacion",
             ),
             view_prompts=MOUNT_VIEW_PROMPTS,
+            sync_label=args.device,
+            max_sync_ms=max_sync_ms,
         )
     finally:
         camera.disconnect()
-        receiver.stop()
+        tracker.stop()
     if len(detections) < args.views:
         raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
     controller_poses, board_poses = _board_poses_with_gate(
@@ -579,7 +641,7 @@ def cmd_session(args: argparse.Namespace) -> None:
     )
     if len(board_poses) < max(4, args.views - 1):
         raise SystemExit("Too many views failed the reprojection gate.")
-    table_from_quest, metrics = solve_table_quest(
+    table_from_device, metrics = solve_table_device(
         controller_poses, controller_camera, board_poses, board
     )
     if metrics["translation_rms_mm"] > args.max_rms_mm:
@@ -588,19 +650,27 @@ def cmd_session(args: argparse.Namespace) -> None:
             f"{args.max_rms_mm:.2f} mm; calibration not saved."
         )
     session = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "handumi_session_calibration",
         "created_at": _now_iso(),
         "spatial_calibration_path": str(args.spatial),
         "spatial_calibration_sha256": calibration_hash(spatial),
         "board": board.to_dict(),
+        "tracking_device": args.device,
         "source_side": args.side,
-        "table_from_quest": pose7_to_dict(table_from_quest),
+        "table_from_device": pose7_to_dict(table_from_device),
         "table_from_camera": {},
         "metrics": metrics,
     }
+    if args.device == "meta":
+        session["table_from_quest"] = pose7_to_dict(table_from_device)
     write_yaml(args.output, session)
-    log.info("Saved Quest table session to %s (RMS %.2f mm).", args.output, metrics["translation_rms_mm"])
+    log.info(
+        "Saved %s table session to %s (RMS %.2f mm).",
+        args.device,
+        args.output,
+        metrics["translation_rms_mm"],
+    )
     if not args.skip_workspace:
         session["table_from_camera"]["workspace"] = _calibrate_workspace(
             args,
@@ -655,10 +725,19 @@ def cmd_verify(args: argparse.Namespace) -> None:
     controller_camera = pose7_to_mat(
         pose7_from_dict(mount["controller_from_camera"])
     ).astype(np.float64)
-    table_quest = pose7_to_mat(pose7_from_dict(session["table_from_quest"])).astype(np.float64)
+    table_from_device = session.get("table_from_device") or session.get("table_from_quest")
+    if not isinstance(table_from_device, dict):
+        raise SystemExit("Session calibration is missing table_from_device.")
+    if session.get("tracking_device") not in (None, args.device):
+        raise SystemExit(
+            f"Session calibration is for {session.get('tracking_device')}, "
+            f"but --device {args.device} was selected."
+        )
+    table_device = pose7_to_mat(pose7_from_dict(table_from_device)).astype(np.float64)
     board_table = pose7_to_mat(board_from_table_pose(board)).astype(np.float64)
     camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
-    receiver = _connect_quest(args)
+    tracker = _connect_tracker(args)
+    max_sync_ms = _sync_limit_ms(args)
     camera.connect()
     try:
         detections, controller_poses = _capture(
@@ -666,16 +745,22 @@ def cmd_verify(args: argparse.Namespace) -> None:
             board=board,
             title=f"HandUMI session verification: {args.side}",
             requested_views=args.views,
-            pair_at=_quest_pairer(receiver, args.side),
+            pair_at=_tracking_pairer(
+                tracker,
+                args.side,
+                max_sync_ms=max_sync_ms,
+            ),
             detection_gate=_reprojection_gate(intrinsics),
             instructions=(
                 f"Verificacion: toma el HandUMI {args.side}",
                 "Tablero fijo; varia la orientacion entre capturas",
             ),
+            sync_label=args.device,
+            max_sync_ms=max_sync_ms,
         )
     finally:
         camera.disconnect()
-        receiver.stop()
+        tracker.stop()
     if len(detections) < 3:
         raise SystemExit("Need at least 3 verification views.")
     errors_mm: list[float] = []
@@ -683,7 +768,7 @@ def cmd_verify(args: argparse.Namespace) -> None:
     for controller_pose, detection in zip(controller_poses, detections, strict=True):
         camera_board = pose7_to_mat(estimate_board_pose(detection, intrinsics)[0])
         table_table = (
-            table_quest
+            table_device
             @ pose7_to_mat(controller_pose)
             @ controller_camera
             @ camera_board
@@ -852,9 +937,15 @@ def cmd_visualize(args: argparse.Namespace) -> None:
         raise SystemExit("Session calibration references a different spatial calibration hash.")
 
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
-    table_quest = pose7_to_mat(pose7_from_dict(session["table_from_quest"])).astype(
-        np.float64
-    )
+    table_from_device = session.get("table_from_device") or session.get("table_from_quest")
+    if not isinstance(table_from_device, dict):
+        raise SystemExit("Session calibration is missing table_from_device.")
+    if session.get("tracking_device") not in (None, args.device):
+        raise SystemExit(
+            f"Session calibration is for {session.get('tracking_device')}, "
+            f"but --device {args.device} was selected."
+        )
+    table_device = pose7_to_mat(pose7_from_dict(table_from_device)).astype(np.float64)
     camera_names = [
         name
         for name in ("left_wrist", "right_wrist", "workspace")
@@ -871,7 +962,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
 
     intrinsics = {name: _intrinsics(spatial, name) for name in camera_names}
     cameras: dict[str, OpenCVCameraDevice] = {}
-    receiver = _connect_quest(args)
+    tracker = _connect_tracker(args)
     try:
         for name in camera_names:
             camera_intrinsics = intrinsics[name]
@@ -944,19 +1035,20 @@ def cmd_visualize(args: argparse.Namespace) -> None:
                     rr.Image(image).compress(jpeg_quality=80),
                 )
 
-            aligned = receiver.aligned_at()
-            if aligned is not None:
+            sample = tracker.latest()
+            if sample.streaming:
                 for side, color in (("left", LEFT_COLOR), ("right", RIGHT_COLOR)):
                     if side not in controller_camera:
                         continue
-                    state = getattr(aligned.frame, side)
-                    if not state.tracked or not state.valid:
+                    if not (
+                        getattr(sample, f"{side}_device_tracked")
+                        and getattr(sample, f"{side}_pose_valid")
+                    ):
                         continue
-                    controller = unity_pose_to_handumi(state.position, state.quaternion)
-                    quest_controller = np.eye(4, dtype=np.float64)
-                    quest_controller[:3, :3] = controller.as_matrix()[:3, :3]
-                    quest_controller[:3, 3] = controller.position
-                    table_controller = table_quest @ quest_controller
+                    device_controller = pose7_to_mat(
+                        getattr(sample, f"{side}_device_controller_pose")
+                    )
+                    table_controller = table_device @ device_controller
                     table_camera = table_controller @ controller_camera[side]
                     _log_camera_pose(rr, f"{side}_wrist", table_camera)
                     trails[side].append(table_controller[:3, 3])
@@ -983,16 +1075,36 @@ def cmd_visualize(args: argparse.Namespace) -> None:
     finally:
         for camera in cameras.values():
             camera.disconnect()
-        receiver.stop()
+        tracker.stop()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--device", choices=("meta", "pico"), default="meta")
     parser.add_argument("--quest-ip")
     parser.add_argument("--tcp-port", type=int)
     parser.add_argument("--sync-port", type=int)
+    parser.add_argument(
+        "--pico-mode",
+        choices=("mandos", "object", "whole-body"),
+        default="mandos",
+    )
+    pico_transport = parser.add_mutually_exclusive_group()
+    pico_transport.add_argument("--pico-adb", action="store_true")
+    pico_transport.add_argument("--pico-wifi", action="store_true")
+    parser.add_argument("--skip-adb-check", action="store_true")
+    parser.add_argument(
+        "--max-sync-ms",
+        type=float,
+        default=None,
+        help=(
+            "Override camera/tracking timestamp tolerance. Defaults to "
+            f"{MAX_SYNC_ERROR_MS:.0f} ms for Meta and "
+            f"{PICO_MAX_SYNC_ERROR_MS:.0f} ms for PICO."
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     inspect = sub.add_parser("inspect-board", help="Check board detection and orientation.")
@@ -1017,7 +1129,7 @@ def parse_args() -> argparse.Namespace:
     mount.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     mount.set_defaults(func=cmd_mount)
 
-    session = sub.add_parser("session", help="Set the table frame for this Quest session.")
+    session = sub.add_parser("session", help="Set the table frame for this tracking session.")
     session.add_argument("--side", choices=("left", "right"), required=True)
     session.add_argument("--views", type=int, default=5)
     session.add_argument("--workspace-views", type=int, default=3)

@@ -11,6 +11,7 @@ import time
 import numpy as np
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
+from handumi.robots.utils import IDENTITY_POSE7, pose_mul
 from handumi.tracking.base import (
     ControllerPairSample,
     apply_tcp_calibration_pose7,
@@ -530,6 +531,9 @@ class PicoTrackingProvider:
         self.transport = transport
         self.skip_adb_check = skip_adb_check
         self.xrt = None
+        self.workspace_from_device_pose = IDENTITY_POSE7.astype(np.float32).copy()
+        self.workspace_set = False
+        self.workspace_locked = False
 
     def start(self) -> None:
         if self.transport == "adb":
@@ -585,16 +589,35 @@ class PicoTrackingProvider:
                 pass
             self.xrt = None
 
+    def set_workspace_from_device_pose(
+        self, pose7: np.ndarray, *, locked: bool = True
+    ) -> None:
+        """Set ``T_workspace_pico`` explicitly from a table/session calibration."""
+        self.workspace_from_device_pose = as_pose7(pose7)
+        self.workspace_set = True
+        self.workspace_locked = bool(locked)
+        log.info(
+            "PICO workspace set from calibration (%s).",
+            "locked" if locked else "unlocked",
+        )
+
     def latest(self) -> ControllerPairSample:
         if self.xrt is None:
             return ControllerPairSample.empty(self.device)
         frame = read_pico_frame(self.xrt, mode=self.mode)
-        left = as_pose7(frame["observation.pico.left_controller_pose"])
-        right = as_pose7(frame["observation.pico.right_controller_pose"])
+        left_device = as_pose7(frame["observation.pico.left_controller_pose"])
+        right_device = as_pose7(frame["observation.pico.right_controller_pose"])
+        hmd_device = as_pose7(frame["observation.pico.headset_pose"])
+        left = pose_mul(self.workspace_from_device_pose, left_device).astype(np.float32)
+        right = pose_mul(self.workspace_from_device_pose, right_device).astype(
+            np.float32
+        )
+        hmd = pose_mul(self.workspace_from_device_pose, hmd_device).astype(np.float32)
         left_tcp, right_tcp = apply_tcp_calibration_pose7(left, right, self.calibration)
-        device_time_ns = int(np.asarray(frame["observation.pico.timestamp_ns"]).reshape(-1)[0])
-        tracked = bool(np.any(left[:3]) or np.any(right[:3]))
-        hmd = as_pose7(frame["observation.pico.headset_pose"])
+        device_time_ns = int(
+            np.asarray(frame["observation.pico.timestamp_ns"]).reshape(-1)[0]
+        )
+        tracked = bool(np.any(left_device[:3]) or np.any(right_device[:3]))
         pc_time_ns = time.monotonic_ns()
         return ControllerPairSample(
             device=self.device,
@@ -609,10 +632,11 @@ class PicoTrackingProvider:
             left_pose_valid=tracked,
             right_pose_valid=tracked,
             hmd_pose=hmd,
-            left_device_controller_pose=left.copy(),
-            right_device_controller_pose=right.copy(),
-            device_hmd_pose=hmd.copy(),
-            hmd_tracked=bool(np.any(hmd[:3])),
+            left_device_controller_pose=left_device.copy(),
+            right_device_controller_pose=right_device.copy(),
+            device_hmd_pose=hmd_device.copy(),
+            hmd_tracked=bool(np.any(hmd_device[:3])),
+            workspace_from_device_pose=self.workspace_from_device_pose.copy(),
             device_time_ns=device_time_ns,
             pc_monotonic_ns=pc_time_ns,
             aligned_time_ns=pc_time_ns,

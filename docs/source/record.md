@@ -11,7 +11,8 @@ Confirm that:
 - Both gripper widths respond correctly from closed to fully open.
 - Both controllers report valid tracking.
 - Camera intrinsics and controller-camera mounts still match the hardware.
-- The current session/table calibration has been visualized in Rerun.
+- The current session/table calibration was created for the same `--device`
+  and has been visualized in Rerun.
 - The Controller-to-TCP calibration matches the installed HandUMI tool.
 
 See [Setup and Calibration](setup.md) if any check fails.
@@ -31,7 +32,8 @@ handumi-record \
   --episode-time-s 30
 ```
 
-Use `--device pico` for PICO. Add `--push-to-hub` only after confirming the pilot locally.
+Use `--device pico` and a PICO-created `--session-calibration` for PICO. Add
+`--push-to-hub` only after confirming the pilot locally.
 
 Do not connect or configure a robot arm for this step. A target embodiment can
 be selected later during conversion or replay without modifying the raw
