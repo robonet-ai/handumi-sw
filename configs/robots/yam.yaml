@@ -39,9 +39,7 @@ arms:
 # Conservative, symmetric simulation pose: both arms reach into the shared
 # workspace with their linear_4310 grippers fully open. Validate a separate
 # physical home before adding a real-hardware backend.
-default_home_pose: forward_open
-home_poses:
-  forward_open: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695]
+home_q: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695]
 gripper_max_width_m: 0.096
 
 handumi_tool:

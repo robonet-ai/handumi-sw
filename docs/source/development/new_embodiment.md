@@ -71,10 +71,8 @@ arms:
     gripper_joints:
       - {name: right_finger_joint, closed: 0.0, open: 0.035}
 
-default_home_pose: replay_ready
-home_poses:
-  # One value for every actuated URDF joint, including fingers.
-  replay_ready: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# One value for every actuated URDF joint, including fingers.
+home_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.07
 
 ik_weights:
@@ -175,9 +173,11 @@ means a bad TCP, placement, home pose, joint order, or IK limit.
 Replay support does not provide robot control. A hardware PR must implement
 the `RobotBackend` contract in `src/handumi/real/backends/__init__.py`:
 prepare, connect, home, command, hold, health check, and close. Register it
-lazily in `make_real_backend`, keep vendor units and SDK code inside that
-backend, and add backend tests. Real control uses radians, meters, normalized
-openings, and XYZW pose quaternions.
+lazily in `make_real_backend`, declare it in the robot YAML as
+`real.backend`, keep vendor units and SDK code inside that backend, and add
+backend tests. `configs/rig.yaml` should only hold local transport details
+such as CAN ports. Real control uses radians, meters, normalized openings, and
+XYZW pose quaternions.
 
 ## 7. Open the pull request
 

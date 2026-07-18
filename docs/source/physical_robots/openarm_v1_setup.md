@@ -202,16 +202,11 @@ Start with a single side if the rig has not been validated before. The real
 backend reads the current joints, moves slowly to the selected home, and only
 then allows tracking to be anchored.
 
-OpenArm provides three named startup poses:
-
-- `down`: all arm joints at zero, intended for setup diagnostics.
-- `arms_90`: both J4 joints at 90 degrees, also intended for diagnostics.
-- `forward_open`: the default real-teleoperation pose. J2 spreads both elbows,
-  J3 brings the hands toward the working area, and J4 points the arms forward.
-
-When moving to `forward_open`, the backend first moves J1-J3 slowly while
-holding the measured J4-J7 posture. It bends J4 to 90 degrees only after both
-arms have lateral clearance from the center structure.
+OpenArm declares one startup pose through `home_q`. This pose spreads both
+elbows away from the center column, brings the hands toward the working area,
+and points the arms forward. During homing, the backend first moves J1-J3
+slowly while holding the measured J4-J7 posture. It bends J4 to 90 degrees
+only after both arms have lateral clearance from the center structure.
 
 For both arms, PICO, the collision-safe default pose, and no Feetech sensors:
 
@@ -220,7 +215,6 @@ uv run handumi-teleop-real \
   --device pico \
   --robot openarmv1 \
   --side both \
-  --home-pose forward_open \
   --space-start \
   --skip-feetech \
   --controller-tcp-calibration /absolute/path/to/pico_controller_tcp.yaml

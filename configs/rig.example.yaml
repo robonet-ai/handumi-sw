@@ -27,8 +27,6 @@ robots:
       left_port: can0
       right_port: can1
   openarmv1:
-    backend: openarm_can
-    home_pose: forward_open
     can:
       fd: true
       bitrate: 1000000

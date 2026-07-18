@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+        help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
@@ -349,21 +349,6 @@ def _start_sides(
     return tuple(side for side in enabled_sides if anchors[side] is None)
 
 
-def _has_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    return any(anchors[side] is not None for side in enabled_sides)
-
-
-def _clear_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> None:
-    for side in enabled_sides:
-        anchors[side] = None
-
-
 def _resolve_camera_usage(args: argparse.Namespace) -> None:
     """Cameras only ever appear in Rerun, so tie their lifecycle to it.
 
@@ -406,11 +391,6 @@ def _load_calibration(args: argparse.Namespace):
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-
-
-def _side_joint_indices(runtime) -> dict[str, list[int]]:
-    """Actuated-joint indices per configured logical side."""
-    return {side: runtime.arm_joint_indices(side) for side in ("left", "right")}
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:

@@ -30,14 +30,9 @@ arms:
     gripper_joints:
       - name: openarm_right_finger_joint1
         open: 0.044
-default_home_pose: forward_open
-home_poses:
-  down: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-  arms_90: [0.0, 0.0, 0.0, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
-  # J2 spreads the elbows away from the center column; J3 brings the hands
-  # back toward a useful forward-facing stance. The real backend establishes
-  # this shoulder clearance before bending J4 to 90 degrees.
-  forward_open: [0.0, -0.34906585, 0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.34906585, -0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
+# Teleoperation home. J2 spreads the elbows away from the center column, J3
+# brings the hands toward the working area, and J4 points the arms forward.
+home_q: [0.0, -0.34906585, 0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.34906585, -0.17453293, 1.57079633, 0.0, 0.0, 0.0, 0.0, 0.0]
 gripper_max_width_m: 0.088
 handumi_tool:
   gripper: openarm_parallel_v1

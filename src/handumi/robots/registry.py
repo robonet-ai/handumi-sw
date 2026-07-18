@@ -74,6 +74,7 @@ class RobotRealConfig:
     be commanded once the local rig has supplied the transport.
     """
 
+    backend: str | None = None
     command_rate_hz: float = 100.0
     max_joint_speed_deg_s: float = 180.0
     home_max_joint_speed_deg_s: float = 20.0
@@ -283,7 +284,7 @@ def load_robot_config(name: str) -> RobotConfig:
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
-    default_home_pose = str(data.get("default_home_pose") or "default")
+    default_home_pose = str(data.get("default_home_pose") or "home_q")
     raw_home_poses = data.get("home_poses") or {}
     home_poses = {
         str(pose_name): np.asarray(values, dtype=np.float32)
@@ -354,6 +355,7 @@ def load_robot_config(name: str) -> RobotConfig:
         ),
         replay_gripper_mode=replay_gripper_mode,
         real=RobotRealConfig(
+            backend=(None if real.get("backend") is None else str(real["backend"])),
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),
             max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),
             home_max_joint_speed_deg_s=float(
