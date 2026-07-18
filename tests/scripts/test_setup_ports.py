@@ -85,44 +85,5 @@ class SerialPortDiagnosticsTest(unittest.TestCase):
         )
 
 
-class UdevMonitorTest(unittest.TestCase):
-    def test_start_udev_monitor_returns_none_without_udevadm(self):
-        with mock.patch.object(setup_ports.shutil, "which", return_value=None):
-            self.assertIsNone(setup_ports._start_udev_monitor())
-
-    def test_start_udev_monitor_watches_usb_tty_and_video(self):
-        fake_monitor = object()
-        with (
-            mock.patch.object(
-                setup_ports.shutil, "which", return_value="/usr/bin/udevadm"
-            ),
-            mock.patch.object(
-                setup_ports.subprocess, "Popen", return_value=fake_monitor
-            ) as popen,
-        ):
-            monitor = setup_ports._start_udev_monitor()
-
-        self.assertIs(monitor, fake_monitor)
-        command = popen.call_args.args[0]
-        self.assertIn("--subsystem-match=usb", command)
-        self.assertIn("--subsystem-match=tty", command)
-        self.assertIn("--subsystem-match=video4linux", command)
-
-    def test_wait_for_udev_event_matches_usb_changes(self):
-        monitor = SimpleNamespace(
-            stdout=io.StringIO("monitor header\nUDEV [1] add /devices/pci/usb/1-3\n"),
-            poll=lambda: None,
-        )
-
-        self.assertTrue(setup_ports._wait_for_udev_event(monitor))
-
-    def test_wait_for_udev_event_returns_false_when_monitor_exits(self):
-        monitor = SimpleNamespace(
-            stdout=io.StringIO("monitor header\n"), poll=lambda: 0
-        )
-
-        self.assertFalse(setup_ports._wait_for_udev_event(monitor))
-
-
 if __name__ == "__main__":
     unittest.main()

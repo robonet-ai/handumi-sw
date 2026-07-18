@@ -1,8 +1,9 @@
 """Identify Feetech serial ports and USB cameras while plugging hardware.
 
-Watches udev for serial/camera changes, scans ``/dev/ttyACM*`` /
-``/dev/ttyUSB*`` for Feetech servo IDs, and lists USB cameras via
-``v4l2-ctl``. Use this to fill in ``configs/rig.yaml``.
+Polls the system every ``--interval-s`` seconds, scanning
+``/dev/ttyACM*`` / ``/dev/ttyUSB*`` for Feetech servo IDs and listing USB
+cameras via ``v4l2-ctl``. Read-only: it never touches ``configs/rig.yaml``,
+it just prints what it finds so you can fill that file in by hand.
 
 Usage
 -----
@@ -15,9 +16,12 @@ Usage
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import grp
+import io
 import os
+import sys
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,94 +49,61 @@ def main() -> None:
         "--interval-s",
         type=float,
         default=2.0,
-        help="Polling interval used only when udevadm is unavailable or --poll is set.",
+        help="Seconds between screen refreshes.",
     )
     parser.add_argument("--once", action="store_true")
-    parser.add_argument(
-        "--poll",
-        action="store_true",
-        help="Poll at --interval-s instead of waiting for udev change events.",
-    )
     parser.add_argument("--start-id", type=int, default=0)
     parser.add_argument("--end-id", type=int, default=20)
     args = parser.parse_args()
 
-    monitor = None if args.once or args.poll else _start_udev_monitor()
-    if not args.once and not args.poll and monitor is None:
-        print("udevadm monitor unavailable; falling back to polling.")
-        time.sleep(1.0)
-
     scan_ids = range(args.start_id, args.end_id + 1)
+    previous_lines: list[str] | None = None
     try:
         while True:
-            _render_status(scan_ids)
+            lines = _capture_frame(scan_ids)
+            _draw_frame(lines, previous_lines)
+            previous_lines = lines
             if args.once:
                 break
-            if monitor is None:
-                time.sleep(args.interval_s)
-                continue
-            if not _wait_for_udev_event(monitor):
-                monitor = None
-                time.sleep(args.interval_s)
+            time.sleep(args.interval_s)
     except KeyboardInterrupt:
         print("\nStopped.")
-    finally:
-        _stop_udev_monitor(monitor)
 
 
-def _render_status(scan_ids: range) -> None:
-    _clear()
-    print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
-    _print_serial_ports(scan_ids)
-    _print_camera_ports()
-    print(f"\nEdit camera and Feetech assignments in: {DEFAULT_RIG_CONFIG}")
+def _capture_frame(scan_ids: range) -> list[str]:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        print(f"=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+        _print_serial_ports(scan_ids)
+        _print_camera_ports()
+        print(f"\nEdit camera and Feetech assignments in: {DEFAULT_RIG_CONFIG}")
+    return buf.getvalue().splitlines()
 
 
-def _start_udev_monitor() -> subprocess.Popen[str] | None:
-    if shutil.which("udevadm") is None:
-        return None
-    try:
-        return subprocess.Popen(
-            [
-                "udevadm",
-                "monitor",
-                "--udev",
-                "--subsystem-match=usb",
-                "--subsystem-match=tty",
-                "--subsystem-match=video4linux",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except OSError:
-        return None
+def _draw_frame(lines: list[str], previous: list[str] | None) -> None:
+    """Redraw only the lines that changed instead of clearing the screen.
 
-
-def _wait_for_udev_event(monitor: subprocess.Popen[str]) -> bool:
-    if monitor.stdout is None:
-        return False
-    while True:
-        line = monitor.stdout.readline()
-        if line == "":
-            return monitor.poll() is None
-        if "/usb/" in line or "/tty/" in line or "/video4linux/" in line:
-            return True
-
-
-def _stop_udev_monitor(monitor: subprocess.Popen[str] | None) -> None:
-    if monitor is None or monitor.poll() is not None:
-        return
-    monitor.terminate()
-    try:
-        monitor.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        monitor.kill()
-        monitor.wait(timeout=1)
-
-
-def _clear() -> None:
-    print("\033c", end="")
+    Keeps the display steady between refreshes (like ``top``): unchanged
+    lines are left untouched and only the ones that differ (e.g. the
+    timestamp, or a port that appeared/disappeared) get rewritten.
+    """
+    out = io.StringIO()
+    if previous is None:
+        out.write("\033[H\033[2J")
+        for line in lines:
+            out.write(line + "\n")
+    else:
+        out.write("\033[H")
+        for index, line in enumerate(lines):
+            old_line = previous[index] if index < len(previous) else None
+            if line != old_line:
+                out.write("\033[K" + line + "\n")
+            else:
+                out.write("\n")
+        if len(previous) > len(lines):
+            out.write("\033[J")
+    sys.stdout.write(out.getvalue())
+    sys.stdout.flush()
 
 
 def _print_serial_ports(scan_ids: range) -> None:
