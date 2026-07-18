@@ -77,7 +77,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+        help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
     parser.add_argument("--fps", type=int, default=30)

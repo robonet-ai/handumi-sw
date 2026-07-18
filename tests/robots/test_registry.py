@@ -27,18 +27,11 @@ def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
     }
 
 
-def test_openarm_arms_90_pose_bends_both_elbows_to_pi_over_two():
-    runtime = load_embodiment("openarmv1")
-    q = runtime.home_q("arms_90")
-
-    np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
-    assert runtime.config.default_home_pose == "forward_open"
-
-
 def test_openarm_default_pose_spreads_elbows_and_points_tcp_forward():
     runtime = load_embodiment("openarmv1")
     q = runtime.home_q()
 
+    assert runtime.config.real.backend == "openarm_can"
     np.testing.assert_allclose(q[[1, 8]], [-np.pi / 9, np.pi / 9], atol=1e-7)
     np.testing.assert_allclose(q[[2, 9]], [np.pi / 18, -np.pi / 18], atol=1e-7)
     np.testing.assert_allclose(q[[3, 10]], np.pi / 2, atol=1e-7)
@@ -181,7 +174,6 @@ def test_yam_bimanual_layout_and_forward_home():
     ]
     assert runtime.arm_joint_indices("left") == list(range(6))
     assert runtime.arm_joint_indices("right") == list(range(8, 14))
-    assert runtime.config.default_home_pose == "forward_open"
     assert runtime.config.replay_max_joint_delta == 0.35
     assert runtime.config.replay_gripper_mode == "physical-width"
 

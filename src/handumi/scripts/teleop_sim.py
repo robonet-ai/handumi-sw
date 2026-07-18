@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+        help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
