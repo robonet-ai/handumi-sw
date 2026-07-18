@@ -18,6 +18,20 @@ handumi-view-trajectory \
 See [Body and Trajectory Visualization](visualization.md) for headless export,
 decimation, and controller-only compatibility.
 
+For robot-specific simulation of a local recording, pass only the local root;
+`--repo-id` is unnecessary and no dataset is downloaded:
+
+```bash
+JAX_PLATFORMS=cpu handumi-replay-in-sim \
+  --dataset-root outputs/20260714_224135 \
+  --robot openarmv1 \
+  --episode 0
+```
+
+See [Replay a Local Recording in Simulation](replay_in_sim.md) for the current
+OpenArm v1 and TRLC-DK1 commands, calibration semantics, measured IK results,
+and Viser mesh troubleshooting.
+
 Choose the target robot explicitly. Piper is a currently available example:
 
 ```bash
@@ -30,6 +44,8 @@ handumi-replay-in-sim \
 In Viser, check the bimanual geometry, table alignment, motion continuity, and
 unreachable poses. Use `--headless` for automated checks and `--strict-ik` to
 fail when IK error exceeds the configured limits.
+Add `--hide-trajectories` to show only the robot and scene without the target
+and achieved TCP paths.
 
 Table-calibrated datasets preserve recorded bimanual geometry automatically.
 
@@ -101,14 +117,26 @@ capture can be checked against another supported robot.
 
 ## 4. Convert and Check Target Motion
 
-Conversion creates a target-specific dataset while preserving the raw source:
+Conversion creates a target-specific dataset while preserving the raw source.
+For Piper, use the validated `--piper` profile. It runs the same
+`absolute-table` solver as replay, validates `configs/calibration/piper_table.yaml`
+for the selected robot, and converts the replay result to physical Piper commands:
 
 ```bash
-TARGET_ROBOT=piper
-handumi-convert \
+JAX_PLATFORMS=cpu handumi-convert \
   --repo-id your-name/handumi-demo \
-  --embodiment "$TARGET_ROBOT"
+  --root outputs/datasets/handumi-demo \
+  --piper \
+  --output-repo-id your-name/handumi-demo-piper
 ```
+
+The Piper state has 14 physical commands: six replay arm joints in radians
+plus one gripper opening in meters per side. Its pairs are
+`observation.state[t] = command[t]` and `action[t] = command[t+1]`. The two
+mirrored URDF finger joints are reconstructed from the single opening only when
+rendering simulation. Other embodiments continue to use `--embodiment <name>`;
+absolute-table support requires their corresponding
+`configs/calibration/<name>_table.yaml` file.
 
 Replay and validate the converted motion before using it with a robot-specific
 integration. See [Add a New Robot Embodiment](../development/new_embodiment.md)

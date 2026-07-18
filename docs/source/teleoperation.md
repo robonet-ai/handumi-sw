@@ -22,6 +22,13 @@ handumi-teleop-sim --device meta --robot "$TARGET_ROBOT" \
   --workspace-camera --space-start
 ```
 
+OpenArm v1 uses the same command and defaults to its official arms-down pose:
+
+```bash
+handumi-teleop-sim --device meta --robot openarmv1 \
+  --home-pose down --space-start
+```
+
 This opens Viser with the live robot model and Rerun with tracking, TCP trails,
 gripper widths, and the left wrist, workspace, and right wrist cameras. Nothing
 is recorded. Use `--device pico` for PICO.
@@ -61,6 +68,8 @@ handumi-teleop-real --robot <robot_id> --device meta
 | Robot | Live simulation | Real teleoperation |
 | --- | --- | --- |
 | Piper | Supported | Supported |
+| OpenArm v1 | Supported (kinematic) | Supported through optional `openarm` backend |
+| TRLC-DK1 | Supported (kinematic) | Not yet supported |
 | Axol | Supported | Not yet supported |
 | Other robots | Add an embodiment | Add a hardware backend |
 
@@ -68,34 +77,27 @@ See [Add a New Robot Embodiment](development/new_embodiment.md) for the common
 interface used to add future manufacturers and models without changing the
 HandUMI capture workflow.
 
-:::{dropdown} Example: physical Piper arms
+Complete the hardware-specific preparation before commanding a physical robot:
 
-First complete the robot-independent
-[HandUMI Setup and Calibration](setup.md), then install the Piper backend and
-map its CAN adapters:
+- [Piper Hardware Setup](physical_robots/piper_setup.md)
+- [OpenArm v1 Hardware Setup](physical_robots/openarm_v1_setup.md)
 
-```bash
-uv sync --extra piper
-handumi-setup-hardware --robot piper --device meta \
-  --skip-feetech-map --skip-feetech-calibration
-handumi-teleop-real --device meta --robot piper
-```
+Both guides start with single-arm validation before enabling both arms.
 
-The CAN wizard maps the right Piper adapter first and the left adapter second,
-then stores that machine-local mapping under `robots.piper.can` in
-`configs/rig.yaml`. Use `--skip-can-map` only after verifying an existing
-mapping.
-
-Start with one arm:
-
-```bash
-handumi-teleop-real --device meta --robot piper --side right
-```
-:::
+To stream the context and wrist cameras into a PICO headset independently of
+the selected robot, see [PICO Remote Vision](workflows/pico_remote_vision.md).
 
 ### Safety
 
 Keep the workspace clear and an emergency stop accessible. Enforce joint, velocity, acceleration, workspace, and collision limits. Run `handumi-teleop-real --help` for backend-specific options.
 
 To inspect an existing recording rather than live motion, continue with
-[Quality Assurance](workflows/datasets.md).
+[Replay a Local Recording in Simulation](workflows/replay_in_sim.md), then run
+the checks in [Quality Assurance](workflows/datasets.md).
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+workflows/pico_remote_vision
+```

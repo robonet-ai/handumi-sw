@@ -31,6 +31,8 @@ Usage
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,11 +183,20 @@ def build_parser() -> argparse.ArgumentParser:
     # Embodiment selection
     # ------------------------------------------------------------------
     emb = parser.add_argument_group("Embodiment")
-    emb.add_argument(
+    embodiment_selection = emb.add_mutually_exclusive_group()
+    embodiment_selection.add_argument(
         "--embodiment",
         choices=EMBODIMENT_NAMES,
-        default="axol",
-        help="Target robot embodiment.",
+        default=None,
+        help="Target robot embodiment (default: axol).",
+    )
+    embodiment_selection.add_argument(
+        "--piper",
+        action="store_true",
+        help=(
+            "Validated BiPiper profile: use the piper embodiment and the exact "
+            "absolute-table IK pipeline used by handumi-replay-in-sim."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -214,10 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument(
         "--gripper-max-width-m",
         type=float,
-        default=0.08,
+        default=None,
         help="HandUMI full opening (m) that maps to the robot gripper fully "
-        "open; recorded widths are normalized by this before scaling to the "
-        "finger joint range.",
+        "open; defaults to the selected robot configuration. Recorded normalized "
+        "Feetech values take precedence in replay-parity conversion.",
     )
     ik.add_argument("--pos-weight", type=float, default=None)
     ik.add_argument("--ori-weight", type=float, default=None)
@@ -225,9 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
     ik.add_argument("--max-reach", type=float, default=None)
     ik.add_argument(
         "--retarget-mode",
-        choices=("local-relative", "anchored"),
-        default="local-relative",
-        help="Retargeting mode shared with replay_in_sim.py.",
+        choices=("local-relative", "anchored", "absolute-table"),
+        default=None,
+        help=(
+            "Retargeting mode shared with replay_in_sim.py. Defaults to "
+            "absolute-table for --piper and local-relative otherwise."
+        ),
     )
     ik.add_argument(
         "--compose-source",
@@ -261,6 +275,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use raw controller poses directly, without controller->TCP calibration.",
     )
+    ik.add_argument(
+        "--deployment-calibration",
+        type=Path,
+        default=None,
+        help=(
+            "YAML containing robot_from_table for absolute-table conversion. "
+            "Defaults to configs/calibration/<robot>_table.yaml."
+        ),
+    )
+    ik.add_argument(
+        "--absolute-orientation",
+        choices=("relative-start", "table-absolute"),
+        default="relative-start",
+        help="Absolute-table tool orientation policy used by replay.",
+    )
+    ik.add_argument("--initial-solve-iterations", type=int, default=12)
+    ik.add_argument("--initial-position-tolerance-m", type=float, default=0.01)
+    ik.add_argument("--max-ik-position-error-m", type=float, default=0.03)
+    ik.add_argument("--max-ik-rotation-error-deg", type=float, default=45.0)
+    ik.add_argument("--table-clearance-warning-m", type=float, default=0.10)
+    ik.add_argument(
+        "--strict-ik",
+        action="store_true",
+        help="Reject an episode when replay IK fidelity thresholds are exceeded.",
+    )
 
     return parser
 
@@ -277,6 +316,56 @@ def _default_output_repo_id(source_repo_id: str, embodiment: str) -> str:
         namespace, name = repo_id.rsplit("/", 1)
         return f"{namespace}/{name}-{embodiment}"
     return f"{repo_id}-{embodiment}"
+
+
+def _resolve_cli_profile(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> None:
+    """Resolve robot-specific conversion defaults before loading any data."""
+    if args.piper:
+        args.embodiment = "piper"
+        if args.retarget_mode not in (None, "absolute-table"):
+            parser.error("--piper requires --retarget-mode absolute-table.")
+        args.retarget_mode = "absolute-table"
+    else:
+        args.embodiment = args.embodiment or "axol"
+        args.retarget_mode = args.retarget_mode or "local-relative"
+
+    if args.retarget_mode == "absolute-table":
+        path = args.deployment_calibration or (
+            Path("configs/calibration") / f"{args.embodiment}_table.yaml"
+        )
+        from handumi.scripts.replay.replay_in_sim import load_robot_from_table
+
+        try:
+            load_robot_from_table(path, expected_robot=args.embodiment)
+        except SystemExit as exc:
+            parser.error(str(exc))
+        args.deployment_calibration = path
+
+    if args.initial_solve_iterations < 1:
+        parser.error("--initial-solve-iterations must be >= 1.")
+    if args.initial_position_tolerance_m <= 0.0:
+        parser.error("--initial-position-tolerance-m must be > 0.")
+    if args.max_ik_position_error_m <= 0.0:
+        parser.error("--max-ik-position-error-m must be > 0.")
+    if args.max_ik_rotation_error_deg <= 0.0:
+        parser.error("--max-ik-rotation-error-deg must be > 0.")
+    if args.table_clearance_warning_m <= 0.0:
+        parser.error("--table-clearance-warning-m must be > 0.")
+
+
+def _deployment_calibration_metadata(args: argparse.Namespace) -> dict[str, Any] | None:
+    path = args.deployment_calibration
+    if path is None:
+        return None
+    raw = Path(path).read_bytes()
+    return {
+        "robot": args.embodiment,
+        "path": str(path),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
 
 
 def _parse_episode_list(value: str | None, max_episodes: int) -> list[int]:
@@ -644,19 +733,111 @@ def _write_gripper_joints(
     widths_m = np.asarray(states, dtype=np.float32)[
         :, [LEFT_GRIPPER_INDEX, RIGHT_GRIPPER_INDEX]
     ]
-    max_w = max(float(args.gripper_max_width_m), 1e-6)
+    configured_max_width = (
+        runtime.config.gripper_max_width_m
+        if args.gripper_max_width_m is None
+        else args.gripper_max_width_m
+    )
+    max_w = max(float(configured_max_width), 1e-6)
     normalized = np.clip(widths_m / max_w, 0.0, 1.0)
     if not np.any(widths_m > 0):
         normalized[:] = float(np.clip(args.gripper, 0.0, 1.0))
         print(f"    no recorded widths — constant gripper opening {args.gripper:.2f}")
     for column, side in enumerate(("left", "right")):
-        for joint_index, open_value in runtime.finger_joints.get(side, ()):
-            joints[:, joint_index] = normalized[:, column] * open_value
+        for finger in runtime.finger_joints.get(side, ()):
+            if hasattr(finger, "closed_value") and hasattr(finger, "open_value"):
+                joints[:, finger.index] = finger.closed_value + (
+                    normalized[:, column] * (finger.open_value - finger.closed_value)
+                )
+            else:
+                # Compatibility with lightweight test/runtime doubles.
+                joint_index, open_value = finger
+                joints[:, joint_index] = normalized[:, column] * open_value
 
 
 # ---------------------------------------------------------------------------
 # Per-episode IK processing
 # ---------------------------------------------------------------------------
+
+
+def _solve_with_replay_pipeline(
+    *,
+    args: argparse.Namespace,
+    source_episode_index: int,
+) -> dict[str, np.ndarray]:
+    """Run the replay solver so absolute-table conversion has exact qpos parity."""
+    from handumi.scripts.replay.replay_in_sim import (
+        build_parser as build_replay_parser,
+        solve_episode as solve_replay_episode,
+    )
+
+    replay_args = build_replay_parser().parse_args([])
+    replay_args.repo_id = args.repo_id
+    replay_args.dataset_root = args.root
+    replay_args.revision = args.revision
+    replay_args.episode = source_episode_index
+    replay_args.robot = args.embodiment
+    replay_args.source = args.source
+    replay_args.retarget_mode = "absolute-table"
+    replay_args.compose_source = args.compose_source
+    replay_args.translation_scale = args.translation_scale
+    replay_args.controller_device = args.controller_device
+    replay_args.controller_tcp_calibration = args.controller_tcp_calibration
+    replay_args.raw_controller_debug = args.raw_controller_debug
+    replay_args.deployment_calibration = args.deployment_calibration
+    replay_args.absolute_orientation = args.absolute_orientation
+    replay_args.initial_solve_iterations = args.initial_solve_iterations
+    replay_args.initial_position_tolerance_m = args.initial_position_tolerance_m
+    replay_args.gripper_max_width_m = args.gripper_max_width_m
+    replay_args.max_ik_position_error_m = args.max_ik_position_error_m
+    replay_args.max_ik_rotation_error_deg = args.max_ik_rotation_error_deg
+    replay_args.table_clearance_warning_m = args.table_clearance_warning_m
+    replay_args.strict_ik = args.strict_ik
+    return solve_replay_episode(replay_args)
+
+
+def _piper_command_states_from_rollout(
+    rollout: dict[str, np.ndarray],
+    *,
+    actuated_names: list[str] | tuple[str, ...],
+    gripper_max_width_m: float,
+) -> np.ndarray:
+    """Return two Piper 6-DoF arms plus one physical opening per gripper."""
+    qpos = np.asarray(rollout["qpos"], dtype=np.float32)
+    openings = np.asarray(rollout["gripper_normalized"], dtype=np.float32)
+    if openings.shape != (len(qpos), 2):
+        raise ValueError(
+            "Piper conversion requires replay gripper_normalized with shape "
+            f"({len(qpos)}, 2), got {openings.shape}."
+        )
+    names = list(actuated_names)
+    arm_indices = {
+        side: [names.index(f"{side}_joint{joint}") for joint in range(1, 7)]
+        for side in ("left", "right")
+    }
+    width_m = np.clip(openings, 0.0, 1.0) * np.float32(gripper_max_width_m)
+    return np.column_stack(
+        [
+            qpos[:, arm_indices["left"]],
+            width_m[:, 0],
+            qpos[:, arm_indices["right"]],
+            width_m[:, 1],
+        ]
+    ).astype(np.float32)
+
+
+def _output_joint_names(
+    args: argparse.Namespace,
+    runtime,
+) -> list[str]:
+    if args.piper:
+        return [
+            *(f"left_joint{joint}.pos" for joint in range(1, 7)),
+            "left_gripper.width_m",
+            *(f"right_joint{joint}.pos" for joint in range(1, 7)),
+            "right_gripper.width_m",
+        ]
+    return [f"{name}.pos" for name in runtime.robot.joints.actuated_names]
 
 
 def process_episode(
@@ -698,7 +879,61 @@ def process_episode(
             "cannot construct (state, action) pairs."
         )
 
-    joint_array, _ = solve_joint_trajectory_from_raw_states(args=args, states=states)
+    if args.retarget_mode == "absolute-table":
+        try:
+            rollout = _solve_with_replay_pipeline(
+                args=args,
+                source_episode_index=source_episode_index,
+            )
+        except SystemExit as exc:
+            raise RuntimeError(str(exc)) from exc
+        qpos = np.asarray(rollout["qpos"], dtype=np.float32)
+        if len(qpos) != len(states):
+            raise RuntimeError(
+                "Replay-parity solver returned "
+                f"{len(qpos)} frames for {len(states)} source frames."
+            )
+        if getattr(args, "piper", False):
+            runtime = load_embodiment("piper")
+            joint_array = _piper_command_states_from_rollout(
+                rollout,
+                actuated_names=runtime.robot.joints.actuated_names,
+                gripper_max_width_m=runtime.config.gripper_max_width_m,
+            )
+        else:
+            joint_array = qpos
+        args.ik_reports.append(
+            {
+                "source_episode_index": source_episode_index,
+                "qpos_sha256": hashlib.sha256(qpos.tobytes()).hexdigest(),
+                "output_state_sha256": hashlib.sha256(
+                    joint_array.tobytes()
+                ).hexdigest(),
+                "frames": len(qpos),
+                "retarget_mode": str(rollout["retarget_mode"][0]),
+                "max_position_error_m": float(
+                    max(
+                        np.max(rollout["left_pos_error_m"]),
+                        np.max(rollout["right_pos_error_m"]),
+                    )
+                ),
+                "max_rotation_error_deg": float(
+                    max(
+                        np.max(rollout["left_rot_error_deg"]),
+                        np.max(rollout["right_rot_error_deg"]),
+                    )
+                ),
+                "initial_solve_iterations": int(
+                    rollout["initial_solve_iterations"][0]
+                ),
+                "gripper_source": str(rollout["gripper_source"][0]),
+            }
+        )
+    else:
+        joint_array, _ = solve_joint_trajectory_from_raw_states(
+            args=args,
+            states=states,
+        )
     states = joint_array[:-1]               # t = 0 … T-2
     actions = joint_array[1:]               # t = 1 … T-1
 
@@ -745,6 +980,41 @@ def push_to_hub(
     print(f"Pushed dataset to https://huggingface.co/datasets/{repo_id}")
 
 
+def _write_converted_dataset_readme(
+    output_root: Path,
+    *,
+    repo_id: str,
+    source_repo_id: str,
+    embodiment: str,
+) -> None:
+    """Write a Hub card that identifies the joint-level derivation."""
+    from lerobot.datasets.utils import create_lerobot_dataset_card
+
+    info = json.loads((output_root / "meta" / "info.json").read_text())
+    handumi_info = info.get("handumi", {})
+    layout = str(handumi_info.get("state_layout", "full_sim_qpos"))
+    if layout == "bipiper_6dof_plus_gripper_width_m_per_side":
+        representation = (
+            "Each side stores six replay arm joints in radians and one physical "
+            "gripper opening in meters."
+        )
+    else:
+        representation = "The state uses the selected embodiment joint layout."
+    card = create_lerobot_dataset_card(
+        tags=["HandUMI", embodiment, "joint-level"],
+        dataset_info=info,
+        license="other",
+        repo_id=repo_id,
+        dataset_description=(
+            f"Joint-level bimanual {embodiment} dataset derived from "
+            f"{source_repo_id}. {representation} observation.state[t] contains "
+            "the command at t and action[t] contains the command at t+1."
+        ),
+        url="https://github.com/robonet-ai/handumi-sw",
+    )
+    card.save(output_root / "README.md")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -753,6 +1023,8 @@ def push_to_hub(
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    _resolve_cli_profile(parser, args)
+    args.ik_reports = []
 
     if args.left_only and args.right_only:
         parser.error("Use only one of --left-only or --right-only.")
@@ -910,7 +1182,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     runtime = load_embodiment(args.embodiment)
     robot_type = runtime.config.kind
-    joint_names = [f"{name}.pos" for name in runtime.robot.joints.actuated_names]
+    joint_names = _output_joint_names(args, runtime)
 
     # ------------------------------------------------------------------
     # Write output dataset
@@ -930,6 +1202,32 @@ def main() -> None:
             "retarget_mode": args.retarget_mode,
             "compose_source": args.compose_source,
             "translation_scale": float(args.translation_scale),
+            "replay_qpos_parity": (
+                args.retarget_mode == "absolute-table" and not args.piper
+            ),
+            "replay_arm_qpos_parity": args.retarget_mode == "absolute-table",
+            "state_layout": (
+                "bipiper_6dof_plus_gripper_width_m_per_side"
+                if args.piper
+                else "full_sim_qpos"
+            ),
+            "gripper_representation": (
+                {
+                    "type": "opening_width",
+                    "unit": "m",
+                    "max_width_m": float(runtime.config.gripper_max_width_m),
+                    "source": "recorded Feetech normalized",
+                }
+                if args.piper
+                else None
+            ),
+            "deployment_calibration": _deployment_calibration_metadata(args),
+            "absolute_orientation": args.absolute_orientation,
+            "initial_solve_iterations": int(args.initial_solve_iterations),
+            "initial_position_tolerance_m": float(
+                args.initial_position_tolerance_m
+            ),
+            "ik_fidelity": args.ik_reports,
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
             "controller_tcp_calibration": (
@@ -948,6 +1246,12 @@ def main() -> None:
             "body_observations_preserved": bool(args.preserve_body),
         },
         preserve_tracking_sidecars=bool(args.preserve_body),
+    )
+    _write_converted_dataset_readme(
+        output_root,
+        repo_id=output_repo_id,
+        source_repo_id=source_repo_id,
+        embodiment=args.embodiment,
     )
 
     if quality_config is not None:

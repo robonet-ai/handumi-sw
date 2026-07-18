@@ -1,4 +1,4 @@
-"""Print live left/right controller orientation to find the mounting-offset rotation.
+"""Print live left/right controller pose for mounting-offset checks.
 
 Two-stance method for the controller-to-TCP calibration quaternion:
 
@@ -13,15 +13,16 @@ naturally-held one. Using the *difference* between the stances cancels the
 tracking frame's arbitrary yaw and the OVR frame's built-in tilt, so
 neither stance needs to be aligned with the tracking origin.
 
-No mounting offset or workspace reset is applied here — this is the raw
-Unity->handumi-converted controller pose, on purpose.
+No mounting offset or workspace reset is applied here. This prints the
+device-frame controller pose normalized into HandUMI pose7 convention.
 
 Usage
 -----
 ::
 
-    handumi-print-controller-pose
-    handumi-print-controller-pose --quest-ip 192.168.1.42
+    handumi-print-controller-pose --device meta
+    handumi-print-controller-pose --device meta --quest-ip 192.168.1.42
+    handumi-print-controller-pose --device pico --pico-mode mandos
 """
 
 from __future__ import annotations
@@ -31,9 +32,17 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
+from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.config import DEFAULT_RIG_CONFIG
-from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestReceiver
-from handumi.tracking.transforms import unity_pose_to_handumi
+from handumi.robots.utils import IDENTITY_POSE7
+from handumi.scripts.record import build_tracker
+
+
+def _identity_tcp_calibration() -> ControllerTcpCalibration:
+    pose = IDENTITY_POSE7.astype(np.float32)
+    return ControllerTcpCalibration(left=pose.copy(), right=pose.copy(), source=None)
 
 
 def main() -> None:
@@ -44,43 +53,50 @@ def main() -> None:
         type=Path,
         default=DEFAULT_RIG_CONFIG,
     )
+    parser.add_argument("--device", choices=("meta", "pico"), default="meta")
     parser.add_argument("--quest-ip", type=str, default=None)
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
+    parser.add_argument(
+        "--pico-mode",
+        choices=("mandos", "object", "whole-body"),
+        default="mandos",
+    )
+    pico_transport = parser.add_mutually_exclusive_group()
+    pico_transport.add_argument("--pico-adb", action="store_true")
+    pico_transport.add_argument("--pico-wifi", action="store_true")
+    parser.add_argument("--skip-adb-check", action="store_true")
     parser.add_argument("--rate-hz", type=float, default=2.0)
     args = parser.parse_args()
 
-    config = MetaQuestConfig.from_yaml(args.rig_config)
-    config = MetaQuestConfig(
-        quest_ip=args.quest_ip if args.quest_ip is not None else config.quest_ip,
-        tcp_port=args.tcp_port if args.tcp_port is not None else config.tcp_port,
-        sync_port=args.sync_port if args.sync_port is not None else config.sync_port,
-        connect_retry_s=config.connect_retry_s,
-        frame_stale_timeout_s=config.frame_stale_timeout_s,
+    tracker = build_tracker(
+        args,
+        _identity_tcp_calibration(),
+        reset_workspace_on_x=False,
     )
-
-    receiver = MetaQuestReceiver(config)
-    receiver.start()
-    print(f"Connecting to Quest at {config.quest_ip}:{config.tcp_port}. Ctrl+C to stop.\n")
+    tracker.start()
+    print(f"Connecting to {args.device} tracking. Ctrl+C to stop.\n")
     print("Hold the stance you want to measure, then read the printed quaternion.\n")
 
     try:
         while True:
-            frame = receiver.latest()
-            if frame is None:
-                sys.stdout.write("\r(waiting for Quest frames)                                    ")
+            sample = tracker.latest()
+            if not sample.streaming:
+                sys.stdout.write(
+                    f"\r(waiting for {args.device} frames)                                    "
+                )
                 sys.stdout.flush()
                 time.sleep(1.0 / args.rate_hz)
                 continue
 
-            for side, ctrl in (("left", frame.left), ("right", frame.right)):
-                if not ctrl.tracked:
+            for side in ("left", "right"):
+                if not getattr(sample, f"{side}_device_tracked"):
                     continue
-                pose = unity_pose_to_handumi(ctrl.position, ctrl.quaternion)
-                qx, qy, qz, qw = pose.quaternion
+                pose = getattr(sample, f"{side}_device_controller_pose")
+                qx, qy, qz, qw = pose[3:7]
                 sys.stdout.write(
                     f"\r{side:5s} tracked=1 quaternion=[{qx:+.4f}, {qy:+.4f}, {qz:+.4f}, {qw:+.4f}]"
-                    f"  position=[{pose.position[0]:+.3f}, {pose.position[1]:+.3f}, {pose.position[2]:+.3f}]"
+                    f"  position=[{pose[0]:+.3f}, {pose[1]:+.3f}, {pose[2]:+.3f}]"
                     "          \n"
                 )
             sys.stdout.flush()
@@ -88,7 +104,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        receiver.stop()
+        tracker.stop()
 
 
 if __name__ == "__main__":

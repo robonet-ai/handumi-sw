@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Live HandUMI teleop for real Piper arms.
+"""Live HandUMI teleop for registered real-robot backends.
 
 This is the real-hardware sibling of ``handumi-teleop-sim``. The tracking and
 retargeting semantics are intentionally the same: the current HandUMI TCP pose
 is anchored to the robot home TCP, then relative controller motion drives the
-IK target. The one IK solution ``q`` is the source of truth; for real Piper it
-is converted to SDK milli-degrees and streamed over CAN.
+IK target. The one IK solution ``q`` is the source of truth; the selected lazy
+backend converts it to vendor commands and streams them over CAN.
 
 Safety defaults:
 
-* only ``--robot piper`` is accepted in this first real backend;
 * controller->TCP calibration is required;
-* both arms home slowly to the XHUMAN Piper start pose before teleop;
+* both arms home slowly to the selected named pose before teleop;
 * arms stay at home until double-clap or explicit ``--space-start``;
 * a double-clap while teleop is active clears anchors and returns home.
 
@@ -39,32 +38,24 @@ from handumi.calibration.control_tcp import (
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.feetech import zero_gripper_widths
-from handumi.feetech.calibration import assert_calibrated, load_config, user_calibration_path
+from handumi.feetech.calibration import (
+    assert_calibrated,
+    load_config,
+    user_calibration_path,
+)
 from handumi.feetech.setup import list_feetech_serial_ports
-from handumi.real.can_setup import ensure_can_interfaces_ready
-from handumi.real.piper_can import (
-    PiperCanEnvironment,
-    format_mdeg,
-    load_piper_can_settings,
-    piper_mdeg_to_q,
-    q_to_piper_mdeg,
-)
-from handumi.retargeting.handumi_to_robot import (
-    local_frame_adapter,
-    local_relative_robot_target_pose7,
-    raw_state_pose7_pair,
-)
-from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
+from handumi.real.backends import REAL_BACKEND_NAMES, make_real_backend
+from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
+from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.scripts.record import build_tracker, connect_feetech
 from handumi.scripts.teleop_sim import (
     KeyboardSpaceListener,
     _enabled_sides,
     _sample_state,
-    _side_joint_indices,
-    _start_sides,
     _tracking_world_map,
 )
 from handumi.tracking.gestures import DoubleClapDetector
+from handumi.teleop.core import TeleopController
 from handumi.utils.speech import log_say
 
 logging.basicConfig(
@@ -82,10 +73,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--device", choices=("pico", "meta"), required=True)
-    parser.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
+    parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
+    parser.add_argument(
+        "--home-pose",
+        default=None,
+        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+    )
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C.")
+    parser.add_argument(
+        "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
+    )
     parser.add_argument(
         "--translation-scale",
         type=float,
@@ -97,7 +95,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow keyboard Space to start any unanchored enabled arms.",
     )
-    parser.add_argument("--no-sounds", action="store_true", help="Disable spoken feedback.")
+    parser.add_argument(
+        "--no-sounds", action="store_true", help="Disable spoken feedback."
+    )
     parser.add_argument(
         "--controller-tcp-calibration",
         type=Path,
@@ -108,7 +108,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--rig-config",
         type=Path,
         default=DEFAULT_RIG_CONFIG,
-        help="Machine-local Feetech, tracking, and Piper CAN configuration.",
+        help="Machine-local Feetech, tracking, and robot CAN configuration.",
     )
 
     # Feetech flags, same names as handumi-record and handumi-teleop-sim.
@@ -119,7 +119,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quest-ip", type=str, default=None)
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
-    parser.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
+    parser.add_argument(
+        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+    )
     pico_transport = parser.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")
     pico_transport.add_argument("--pico-wifi", action="store_true")
@@ -127,14 +129,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-can-repair",
         action="store_true",
-        help="Do not auto-repair CAN with sudo before connecting Piper.",
+        help="Validate but do not auto-repair CAN with sudo before connecting.",
     )
     return parser.parse_args(argv)
 
 
 def _validate_args(args: argparse.Namespace) -> None:
-    if args.robot != "piper":
-        raise SystemExit("Real teleop currently supports only --robot piper.")
     if args.fps <= 0:
         raise SystemExit("--fps must be > 0.")
     if args.duration_s < 0.0:
@@ -158,15 +158,19 @@ def _validate_feetech_ready(args: argparse.Namespace) -> None:
             right=feetech_config.right,
         )
     assert_calibrated(feetech_config, source=user_calibration_path())
-    _validate_feetech_ports_exist(feetech_config)
+    _validate_feetech_ports_exist(feetech_config, robot=args.robot)
 
 
-def _validate_feetech_ports_exist(feetech_config) -> None:
+def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> None:
     ports = {
         side: getattr(feetech_config, side).port or feetech_config.port
         for side in ("left", "right")
     }
-    missing = {side: port for side, port in ports.items() if not port or not Path(port).exists()}
+    missing = {
+        side: port
+        for side, port in ports.items()
+        if not port or not Path(port).exists()
+    }
     if missing:
         current = sorted(list_feetech_serial_ports())
         missing_text = ", ".join(
@@ -178,18 +182,22 @@ def _validate_feetech_ports_exist(feetech_config) -> None:
             f"{missing_text}.\n"
             f"Puertos Feetech actuales: {current_text}\n"
             "Remapea Feetech sin tocar CAN/PICO:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico "
+            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-pico "
             "--force-feetech-calibration"
         )
 
-    denied = {side: port for side, port in ports.items() if port and not os.access(port, os.R_OK | os.W_OK)}
+    denied = {
+        side: port
+        for side, port in ports.items()
+        if port and not os.access(port, os.R_OK | os.W_OK)
+    }
     if denied:
         denied_text = ", ".join(f"{side}={port}" for side, port in denied.items())
         raise SystemExit(
             f"No tengo permisos para abrir Feetech: {denied_text}.\n"
             "Corre primero:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico "
+            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
         )
 
@@ -212,7 +220,9 @@ def _load_required_calibration(args: argparse.Namespace):
 
 
 def _latest_widths(grippers):
-    return zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+    return (
+        zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+    )
 
 
 def _ik_home_target(pose7: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -263,60 +273,46 @@ def main() -> None:
 
     log.info("Loading %s IK solver.", args.robot)
     runtime = load_embodiment(args.robot)
-    solver = runtime.solver_cls()
-    q = runtime.config.home_q.astype(np.float32).copy()
-    home_q = q.copy()
-    home_left_pose7, home_right_pose7 = solver.fk_pose7(q)
-    max_reach = runtime.config.ik_weights.max_reach
-    side_indices = _side_joint_indices(runtime)
+    try:
+        home_pose_name, home_q = resolve_home_q(
+            runtime, rig_config=args.rig_config, explicit_name=args.home_pose
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    controller = TeleopController(
+        runtime,
+        home_q=home_q,
+        enabled_sides=_enabled_sides(args.side),
+        source_world_to_robot_world=_tracking_world_map(args.device),
+        translation_scale=args.translation_scale,
+    )
+    q = home_q.copy()
+    log.info("Selected home pose: %s", home_pose_name)
     actuated_names = list(runtime.robot.joints.actuated_names)
-    home_targets_mdeg = q_to_piper_mdeg(home_q, actuated_names)
 
     log.info("Warming IK solver before touching hardware.")
-    solver.ik(
-        q,
-        left_pose=_ik_home_target(home_left_pose7),
-        right_pose=_ik_home_target(home_right_pose7),
-    )
-
-    settings = load_piper_can_settings(args.rig_config, runtime.config.real)
-    log.info(
-        "Piper CAN rig: left=%s right=%s bitrate=%d command_rate=%.1fHz",
-        settings.left_port,
-        settings.right_port,
-        settings.bitrate,
-        settings.command_rate_hz,
-    )
-    log.info(
-        "Piper home mdeg: left=%s right=%s",
-        format_mdeg(home_targets_mdeg["left"]),
-        format_mdeg(home_targets_mdeg["right"]),
-    )
-    if not args.skip_can_repair:
-        ensure_can_interfaces_ready(
-            [settings.left_port, settings.right_port],
-            bitrate=settings.bitrate,
-            restart_ms=settings.restart_ms,
-        )
+    controller.warmup()
     _validate_feetech_ready(args)
 
     calibration = _load_required_calibration(args)
     tracker = build_tracker(args, calibration, reset_workspace_on_x=False)
     grippers = None
-    real_env = PiperCanEnvironment(settings)
+    enabled_sides = _enabled_sides(args.side)
+    real_env = make_real_backend(
+        args.robot,
+        runtime=runtime,
+        rig_config=args.rig_config,
+        active_sides=enabled_sides,
+    )
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     tracker_started = False
 
-    anchor_ref = {"left": home_left_pose7.copy(), "right": home_right_pose7.copy()}
-    anchors: dict[str, dict[str, np.ndarray] | None] = {"left": None, "right": None}
-    enabled_sides = _enabled_sides(args.side)
     clap = DoubleClapDetector()
     play_sounds = not args.no_sounds
     interval = 1.0 / args.fps
     episode_start: float | None = None
     frame = 0
     tracking_lost_since: float | None = None
-    tracking_hold_sides: set[str] = set()
     last_recovery_attempt = 0.0
 
     try:
@@ -325,19 +321,21 @@ def main() -> None:
         tracker_started = True
         grippers = connect_feetech(args)
 
+        real_env.prepare(repair=not args.skip_can_repair)
         real_env.connect()
-        real_env.home(home_targets_mdeg)
-        real_env.set_q(home_q, actuated_names)
+        real_env.home(home_q, actuated_names)
 
         space_listener.start()
         if args.space_start:
             log.info(
-                "Real Piper is at home. Start idle arms with Space, or double clap "
-                "to start enabled arms."
+                "Real %s is at home. Start idle arms with Space, or double clap "
+                "to start enabled arms.",
+                args.robot,
             )
         else:
             log.info(
-                "Real Piper is at home. Double clap a gripper to start enabled arms."
+                "Real %s is at home. Double clap a gripper to start enabled arms.",
+                args.robot,
             )
 
         while True:
@@ -352,17 +350,11 @@ def main() -> None:
             if not tracking_ok:
                 if tracking_lost_since is None:
                     tracking_lost_since = loop_start
-                    _clear_enabled_anchors(anchors, enabled_sides)
-                    held = real_env.hold_current_commands_mdeg()
-                    q = piper_mdeg_to_q(
-                        left_mdeg=held["left"],
-                        right_mdeg=held["right"],
-                        actuated_names=actuated_names,
-                        base_q=q,
-                    )
-                    tracking_hold_sides.update(enabled_sides)
+                    held = real_env.hold(q, actuated_names)
+                    controller.tracking_lost(held)
+                    q = held
                     log.warning(
-                        "Tracking lost; pending motion cancelled at the current Piper "
+                        "Tracking lost; pending motion cancelled at the current robot "
                         "command. Re-anchor after recovery."
                     )
                     log_say("tracking lost", play_sounds=play_sounds)
@@ -370,7 +362,9 @@ def main() -> None:
                 if callable(recover) and loop_start - last_recovery_attempt >= 3.0:
                     last_recovery_attempt = loop_start
                     if recover():
-                        log.info("Tracking recovered; double clap or Space to re-anchor.")
+                        log.info(
+                            "Tracking recovered; double clap or Space to re-anchor."
+                        )
                         log_say("tracking recovered", play_sounds=play_sounds)
                 dt = time.perf_counter() - loop_start
                 if (sleep := interval - dt) > 0:
@@ -381,54 +375,35 @@ def main() -> None:
                 log.info("Tracking stream is valid again; waiting for a fresh anchor.")
 
             widths = _latest_widths(grippers)
-            if grippers is not None:
-                real_env.set_gripper_widths_mm(
-                    {"left": widths.left_mm, "right": widths.right_mm}
-                )
             state = _sample_state(sample, widths)
-            source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
+            source_poses: dict[str, np.ndarray] = dict(
+                zip(("left", "right"), raw_state_pose7_pair(state), strict=True)
+            )
 
             start_sides: tuple[str, ...] = ()
             if args.space_start and space_listener.consume_space():
-                start_sides = _start_sides(anchors, enabled_sides)
+                start_sides = controller.idle_sides()
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
-                if _has_enabled_anchors(anchors, enabled_sides):
-                    _clear_enabled_anchors(anchors, enabled_sides)
-                    tracking_hold_sides.difference_update(enabled_sides)
-                    q = home_q.copy()
+                if controller.active:
+                    q = controller.reset()
                     episode_start = None
                     frame = 0
                     log.info(
-                        "Double clap detected; teleop reset, Piper returning home slowly."
+                        "Double clap detected; teleop reset, robot returning home slowly."
                     )
                     log_say("returning home", play_sounds=play_sounds)
-                    real_env.move_home(home_targets_mdeg)
+                    real_env.move_home(home_q, actuated_names)
                     log_say("teleop reset", play_sounds=play_sounds)
                     continue
                 start_sides = enabled_sides
                 log.info("Double clap detected; starting %s.", "/".join(start_sides))
 
-            anchored_this_frame = False
-            for side in ("left", "right"):
-                if side not in enabled_sides or side not in start_sides:
-                    continue
-                if not side_tracked[side]:
-                    log.warning("%s anchor ignored; that controller is not tracked.", side)
-                    continue
-                source_pose = source_poses[side]
-                anchors[side] = {
-                    "source": source_pose.copy(),
-                    "adapter": local_frame_adapter(
-                        source_pose,
-                        anchor_ref[side],
-                        source_world_to_robot_world=_tracking_world_map(args.device),
-                    ),
-                }
-                tracking_hold_sides.discard(side)
-                anchored_this_frame = True
-                log.info("%s arm anchored; real Piper follows from home.", side)
+            anchored_sides = controller.anchor(source_poses, side_tracked, start_sides)
+            anchored_this_frame = bool(anchored_sides)
+            for side in anchored_sides:
+                log.info("%s arm anchored; real robot follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
 
             if episode_start is None and anchored_this_frame:
@@ -436,40 +411,13 @@ def main() -> None:
                 frame = 0
                 log.info("Teleop timer started.")
 
-            ik_targets: dict[str, tuple[np.ndarray, np.ndarray] | None] = {
-                "left": None,
-                "right": None,
+            openings = {
+                "left": widths.left_normalized,
+                "right": widths.right_normalized,
             }
-            for side in ("left", "right"):
-                anchor = anchors[side]
-                if anchor is None or not side_tracked[side]:
-                    continue
-                pose7 = local_relative_robot_target_pose7(
-                    previous_source_pose7=anchor["source"],
-                    current_source_pose7=source_poses[side],
-                    base_robot_pose7=anchor_ref[side],
-                    adapter_rot=anchor["adapter"],
-                    home_robot_pose7=anchor_ref[side],
-                    translation_scale=args.translation_scale,
-                    max_reach=max_reach,
-                )
-                ik_targets[side] = (pose7[:3], pose7[3:7])
-
-            previous_q = q.copy()
-            q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
-            _apply_inactive_side_policy(
-                q,
-                previous_q,
-                home_q,
-                anchors,
-                side_indices,
-                tracking_hold_sides,
-            )
-            runtime.set_finger_positions(
-                q, {"left": widths.left_normalized, "right": widths.right_normalized}
-            )
-            real_env.set_q(q, actuated_names)
-            real_env.raise_if_failed()
+            q = controller.step(source_poses, side_tracked, openings).q
+            real_env.command(q, actuated_names, openings)
+            real_env.check_health()
 
             dt = time.perf_counter() - loop_start
             if (sleep := interval - dt) > 0:
@@ -480,11 +428,13 @@ def main() -> None:
         log.info("Stopping.")
     finally:
         space_listener.close()
-        real_env.close()
-        if grippers is not None:
-            grippers.close()
-        if tracker_started:
-            tracker.stop()
+        try:
+            real_env.close()
+        finally:
+            if grippers is not None:
+                grippers.close()
+            if tracker_started:
+                tracker.stop()
 
 
 if __name__ == "__main__":

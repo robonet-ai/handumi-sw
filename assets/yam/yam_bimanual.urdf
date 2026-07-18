@@ -1,0 +1,324 @@
+<?xml version="1.0"?>
+<!--
+  Bimanual YAM + linear_4310 model derived from i2rt-robotics/i2rt
+  commit ac096928d6899ddf852a71c5e8fbaa6055cd9745 (MIT).
+
+  The upstream YAM URDF is monomanual and still points at legacy mesh paths.
+  This model preserves its kinematic origins and joint limits, resolves them
+  against the current I2RT meshes, fixes the zero-range root joint, and mounts
+  two namespaced copies 0.60 m apart. The world convention is +X right,
+  +Y forward/away from the operator, and +Z up.
+-->
+<robot name="yam_bimanual">
+  <!-- The I2RT CAD export assigns a different engineering color per part.
+       Use YAM's physical white-link/black-joint finish in HandUMI instead. -->
+  <material name="yam_base_purple"><color rgba="0.055 0.060 0.065 1"/></material>
+  <material name="yam_link1_brown"><color rgba="0.075 0.080 0.085 1"/></material>
+  <material name="yam_link2_blue"><color rgba="0.810 0.825 0.840 1"/></material>
+  <material name="yam_link3_olive"><color rgba="0.865 0.875 0.885 1"/></material>
+  <material name="yam_link4_gray"><color rgba="0.070 0.075 0.080 1"/></material>
+  <material name="yam_link5_pink"><color rgba="0.055 0.060 0.065 1"/></material>
+  <material name="yam_gripper_green"><color rgba="0.045 0.050 0.055 1"/></material>
+  <material name="yam_tip_blue"><color rgba="0.100 0.110 0.120 1"/></material>
+  <material name="yam_mount"><color rgba="0.16 0.17 0.20 1"/></material>
+
+  <link name="yam_bimanual_base">
+    <visual>
+      <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.12 0.06"/></geometry>
+      <material name="yam_mount"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.03" rpy="0 0 0"/>
+      <geometry><box size="0.80 0.12 0.06"/></geometry>
+    </collision>
+  </link>
+
+  <!-- Left arm. The intermediate root preserves the upstream frame exactly. -->
+  <link name="left_root"/>
+  <joint name="left_mount" type="fixed">
+    <origin xyz="-0.30 0 0" rpy="0 0 3.14159265"/>
+    <parent link="yam_bimanual_base"/>
+    <child link="left_root"/>
+  </joint>
+  <link name="left_base">
+    <visual>
+      <origin xyz="-0.187501 -0.0464005 -0.0374966" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/base.stl"/></geometry>
+      <material name="yam_base_purple"/>
+    </visual>
+  </link>
+  <joint name="left_root_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 1.5708 1.5708"/>
+    <parent link="left_root"/>
+    <child link="left_base"/>
+  </joint>
+  <link name="left_link1">
+    <visual>
+      <origin xyz="-0.119501 -0.0464 -0.0374968" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link1.stl"/></geometry>
+      <material name="yam_link1_brown"/>
+    </visual>
+  </link>
+  <joint name="left_joint1" type="revolute">
+    <origin xyz="-0.068 0 0" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <parent link="left_base"/><child link="left_link1"/>
+    <limit effort="10" velocity="1" lower="-2.61799" upper="3.05433"/>
+  </joint>
+  <link name="left_link2">
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_motor.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_arm.stl"/></geometry>
+      <material name="yam_link2_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="left_joint2" type="revolute">
+    <origin xyz="-0.0455 -0.0339 -0.02" rpy="0 0 -3.14159"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link1"/><child link="left_link2"/>
+    <limit effort="10" velocity="1" lower="0" upper="3.14159"/>
+  </joint>
+  <link name="left_link3">
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_arm.stl"/></geometry>
+      <material name="yam_link3_olive"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="left_joint3" type="revolute">
+    <origin xyz="0 -0.0688 0.264" rpy="0 0 -3.14159"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link2"/><child link="left_link3"/>
+    <limit effort="10" velocity="1" lower="0" upper="3.14159"/>
+  </joint>
+  <link name="left_link4">
+    <visual>
+      <origin xyz="-0.0140003 -0.0125 -0.0364989" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link4.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="left_joint4" type="revolute">
+    <origin xyz="-0.0600003 -0.0688 -0.244999" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_link3"/><child link="left_link4"/>
+    <limit effort="10" velocity="1" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <link name="left_link5">
+    <visual>
+      <origin xyz="0.0265 -0.0463995 0.0375" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link5.stl"/></geometry>
+      <material name="yam_link5_pink"/>
+    </visual>
+  </link>
+  <joint name="left_joint5" type="revolute">
+    <origin xyz="-0.0405003 0.0338995 -0.0739989" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <parent link="left_link4"/><child link="left_link5"/>
+    <limit effort="10" velocity="1" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <link name="left_gripper">
+    <visual>
+      <origin xyz="-0.014 -0.0463995 0.0731" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/gripper.stl"/></geometry>
+      <material name="yam_gripper_green"/>
+    </visual>
+  </link>
+  <joint name="left_joint6" type="revolute">
+    <origin xyz="0.0404996 0 -0.0356" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="left_link5"/><child link="left_gripper"/>
+    <limit effort="10" velocity="1" lower="-2.0944" upper="2.0944"/>
+  </joint>
+  <link name="left_tip_left">
+    <visual>
+      <origin xyz="0.00999321 -0.0914614 0.129783" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/tip_left.stl"/></geometry>
+      <material name="yam_tip_blue"/>
+    </visual>
+  </link>
+  <joint name="left_gripper_left" type="prismatic">
+    <origin xyz="-0.0239931 0.0445119 -0.0566829" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="left_gripper"/><child link="left_tip_left"/>
+    <limit effort="10" velocity="0.10" lower="-0.04695" upper="0"/>
+  </joint>
+  <link name="left_tip_right">
+    <visual>
+      <origin xyz="-0.0379932 -0.00133753 0.129783" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/tip_right.stl"/></geometry>
+      <material name="yam_tip_blue"/>
+    </visual>
+  </link>
+  <joint name="left_gripper_right" type="prismatic">
+    <origin xyz="0.0239931 -0.0445119 -0.0566829" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="left_gripper"/><child link="left_tip_right"/>
+    <limit effort="10" velocity="0.10" lower="-0.04695" upper="0"/>
+  </joint>
+  <link name="left_tcp"/>
+  <joint name="left_tcp_fixed" type="fixed">
+    <origin xyz="0 0 -0.1347" rpy="3.14159265 0 0"/>
+    <parent link="left_gripper"/><child link="left_tcp"/>
+  </joint>
+
+  <!-- Right arm. It uses the same follower-arm kinematics and mounting yaw. -->
+  <link name="right_root"/>
+  <joint name="right_mount" type="fixed">
+    <origin xyz="0.30 0 0" rpy="0 0 3.14159265"/>
+    <parent link="yam_bimanual_base"/>
+    <child link="right_root"/>
+  </joint>
+  <link name="right_base">
+    <visual>
+      <origin xyz="-0.187501 -0.0464005 -0.0374966" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/base.stl"/></geometry>
+      <material name="yam_base_purple"/>
+    </visual>
+  </link>
+  <joint name="right_root_fixed" type="fixed">
+    <origin xyz="0 0 0" rpy="0 1.5708 1.5708"/>
+    <parent link="right_root"/>
+    <child link="right_base"/>
+  </joint>
+  <link name="right_link1">
+    <visual>
+      <origin xyz="-0.119501 -0.0464 -0.0374968" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link1.stl"/></geometry>
+      <material name="yam_link1_brown"/>
+    </visual>
+  </link>
+  <joint name="right_joint1" type="revolute">
+    <origin xyz="-0.068 0 0" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <parent link="right_base"/><child link="right_link1"/>
+    <limit effort="10" velocity="1" lower="-2.61799" upper="3.05433"/>
+  </joint>
+  <link name="right_link2">
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_motor.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_arm.stl"/></geometry>
+      <material name="yam_link2_blue"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740001 -0.08025 -0.0174977" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link2_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="right_joint2" type="revolute">
+    <origin xyz="-0.0455 -0.0339 -0.02" rpy="0 0 -3.14159"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link1"/><child link="right_link2"/>
+    <limit effort="10" velocity="1" lower="0" upper="3.14159"/>
+  </joint>
+  <link name="right_link3">
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_arm.stl"/></geometry>
+      <material name="yam_link3_olive"/>
+    </visual>
+    <visual>
+      <origin xyz="-0.0740003 -0.0813 -0.281499" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link3_elbow.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="right_joint3" type="revolute">
+    <origin xyz="0 -0.0688 0.264" rpy="0 0 -3.14159"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link2"/><child link="right_link3"/>
+    <limit effort="10" velocity="1" lower="0" upper="3.14159"/>
+  </joint>
+  <link name="right_link4">
+    <visual>
+      <origin xyz="-0.0140003 -0.0125 -0.0364989" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link4.stl"/></geometry>
+      <material name="yam_link4_gray"/>
+    </visual>
+  </link>
+  <joint name="right_joint4" type="revolute">
+    <origin xyz="-0.0600003 -0.0688 -0.244999" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_link3"/><child link="right_link4"/>
+    <limit effort="10" velocity="1" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <link name="right_link5">
+    <visual>
+      <origin xyz="0.0265 -0.0463995 0.0375" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/arm/link5.stl"/></geometry>
+      <material name="yam_link5_pink"/>
+    </visual>
+  </link>
+  <joint name="right_joint5" type="revolute">
+    <origin xyz="-0.0405003 0.0338995 -0.0739989" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>
+    <parent link="right_link4"/><child link="right_link5"/>
+    <limit effort="10" velocity="1" lower="-1.5708" upper="1.5708"/>
+  </joint>
+  <link name="right_gripper">
+    <visual>
+      <origin xyz="-0.014 -0.0463995 0.0731" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/gripper.stl"/></geometry>
+      <material name="yam_gripper_green"/>
+    </visual>
+  </link>
+  <joint name="right_joint6" type="revolute">
+    <origin xyz="0.0404996 0 -0.0356" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <parent link="right_link5"/><child link="right_gripper"/>
+    <limit effort="10" velocity="1" lower="-2.0944" upper="2.0944"/>
+  </joint>
+  <link name="right_tip_left">
+    <visual>
+      <origin xyz="0.00999321 -0.0914614 0.129783" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/tip_left.stl"/></geometry>
+      <material name="yam_tip_blue"/>
+    </visual>
+  </link>
+  <joint name="right_gripper_left" type="prismatic">
+    <origin xyz="-0.0239931 0.0445119 -0.0566829" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <parent link="right_gripper"/><child link="right_tip_left"/>
+    <limit effort="10" velocity="0.10" lower="-0.04695" upper="0"/>
+  </joint>
+  <link name="right_tip_right">
+    <visual>
+      <origin xyz="-0.0379932 -0.00133753 0.129783" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper/tip_right.stl"/></geometry>
+      <material name="yam_tip_blue"/>
+    </visual>
+  </link>
+  <joint name="right_gripper_right" type="prismatic">
+    <origin xyz="0.0239931 -0.0445119 -0.0566829" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <parent link="right_gripper"/><child link="right_tip_right"/>
+    <limit effort="10" velocity="0.10" lower="-0.04695" upper="0"/>
+  </joint>
+  <link name="right_tcp"/>
+  <joint name="right_tcp_fixed" type="fixed">
+    <origin xyz="0 0 -0.1347" rpy="3.14159265 0 0"/>
+    <parent link="right_gripper"/><child link="right_tcp"/>
+  </joint>
+</robot>

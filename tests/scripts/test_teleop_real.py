@@ -44,11 +44,11 @@ class TeleopRealArgsTest(unittest.TestCase):
             [0.12068467, 0.02142489, -0.21669616],
         )
 
-    def test_rejects_non_piper_robot(self):
-        args = parse_args(["--device", "pico", "--robot", "axol", "--space-start"])
+    def test_accepts_registered_openarm_backend(self):
+        args = parse_args(["--device", "pico", "--robot", "openarmv1", "--space-start"])
 
-        with self.assertRaises(SystemExit):
-            _validate_args(args)
+        _validate_args(args)
+        self.assertEqual(args.robot, "openarmv1")
 
     def test_skip_feetech_requires_space_start(self):
         args = parse_args(["--device", "pico", "--skip-feetech"])
@@ -88,7 +88,9 @@ class TeleopRealArgsTest(unittest.TestCase):
     def test_tracking_loss_policy_clears_enabled_anchors(self):
         anchors = {"left": {"source": object()}, "right": {"source": object()}}
 
-        self.assertFalse(_enabled_tracking_ok({"left": True, "right": False}, ("left", "right")))
+        self.assertFalse(
+            _enabled_tracking_ok({"left": True, "right": False}, ("left", "right"))
+        )
         _clear_enabled_anchors(anchors, ("left", "right"))
 
         self.assertIsNone(anchors["left"])
@@ -115,7 +117,9 @@ class TeleopRealArgsTest(unittest.TestCase):
 
     def test_single_side_mode_only_requires_that_side_tracked(self):
         self.assertTrue(_enabled_tracking_ok({"left": True, "right": False}, ("left",)))
-        self.assertFalse(_enabled_tracking_ok({"left": True, "right": False}, ("right",)))
+        self.assertFalse(
+            _enabled_tracking_ok({"left": True, "right": False}, ("right",))
+        )
 
     def test_feetech_port_validation_reports_missing_rig_ports(self):
         config = FeetechConfig(

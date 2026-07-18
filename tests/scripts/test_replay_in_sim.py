@@ -2,6 +2,7 @@ from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from handumi.scripts.replay.replay_in_sim import (
     _metadata_tcp_calibration,
@@ -38,6 +39,22 @@ def test_grippers_fall_back_to_widths_in_meters():
     )
 
     np.testing.assert_allclose(openings, [[0.0, 0.5], [1.0, 1.0]], atol=1e-6)
+    assert source == "state widths in meters"
+
+
+def test_physical_width_gripper_retarget_overrides_recorded_percentage():
+    states = np.zeros((2, 16), dtype=np.float32)
+    states[:, 14:16] = [[0.024, 0.048], [0.096, 0.12]]
+    recorded = np.array([[0.2, 0.7], [0.3, 0.8]], dtype=np.float32)
+
+    openings, source = _resolve_gripper_openings(
+        states,
+        recorded,
+        max_width_m=0.096,
+        mode="physical-width",
+    )
+
+    np.testing.assert_allclose(openings, [[0.25, 0.5], [1.0, 1.0]], atol=1e-6)
     assert source == "state widths in meters"
 
 
@@ -305,12 +322,30 @@ calibration:
     np.testing.assert_allclose(pose, [0.3, 0.0, 0.1, 0.0, 0.0, 0.0, 1.0])
 
 
+def test_load_robot_from_table_rejects_wrong_robot(tmp_path: Path):
+    path = tmp_path / "deployment.yaml"
+    path.write_text(
+        """\
+robot: axol
+calibration:
+  robot_from_table:
+    position: [0.3, 0.0, 0.1]
+    quaternion: [0.0, 0.0, 0.0, 1.0]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit, match="declares robot 'axol'; expected 'piper'"):
+        load_robot_from_table(path, expected_robot="piper")
+
+
 def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
     from handumi.scripts.replay.replay_in_sim import build_parser
 
     args = build_parser().parse_args([])
 
     assert args.retarget_mode == "auto"
+    assert args.hide_trajectories is False
     assert args.use_dataset_tcp_calibration is False
     assert args.absolute_orientation == "relative-start"
     assert args.initial_solve_iterations == 12
@@ -318,6 +353,14 @@ def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
     assert args.max_ik_position_error_m == 0.03
     assert args.max_ik_rotation_error_deg == 45.0
     assert args.table_clearance_warning_m == 0.10
+
+
+def test_hide_trajectories_parser_flag():
+    from handumi.scripts.replay.replay_in_sim import build_parser
+
+    args = build_parser().parse_args(["--hide-trajectories"])
+
+    assert args.hide_trajectories is True
 
 
 def test_render_task_scene_maps_table_bodies_into_robot_world():

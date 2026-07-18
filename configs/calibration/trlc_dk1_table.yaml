@@ -1,0 +1,15 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: trlc_dk1
+source: simulation_initial_pose_alignment
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # HandUMI table: +X right, +Y away from the operator, +Z up.
+  # DK1 world: +X forward, +Y left, +Z up. This provisional simulation
+  # transform centers the complete TCP volume of outputs/20260714_224135 in
+  # the reachable workspace of a 0.60 m base-separation layout. Replace it
+  # with a measured transform before relying on absolute physical placement.
+  robot_from_table:
+    position: [0.25, -0.01286, 0.05]
+    quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

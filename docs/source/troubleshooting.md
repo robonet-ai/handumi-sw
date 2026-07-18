@@ -54,16 +54,51 @@ test the first `/dev/video*` node associated with that physical device.
 
 Inspect `meta/handumi_quality.json`. The common causes are tracking loss, stale cameras, synchronization errors, frozen poses, large motion jumps, or an episode that is too short.
 
+## Replay Prints a CUPTI Traceback
+
+If JAX reports `Unable to load cuPTI` but replay continues, force the supported
+CPU path for the command:
+
+```bash
+JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
+  --dataset-root outputs/20260714_224135 \
+  --robot openarmv1 \
+  --episode 0
+```
+
+This warning concerns optional CUDA profiling libraries, not the dataset or
+robot IK.
+
+## Viser Shows Trajectories but No Robot
+
+Messages such as `Can't find meshes/visual/base_link.glb` mean the URDF loaded
+but its visual asset paths did not resolve. Restart replay after updating the
+checkout. TRLC-DK1 meshes must exist under:
+
+```text
+assets/trlc-dk1/meshes/visual/
+assets/trlc-dk1/meshes/collision/
+```
+
+Run this check from the repository root:
+
+```bash
+JAX_PLATFORMS=cpu uv run python -c \
+  "from handumi.robots.registry import load_embodiment; u=load_embodiment('trlc_dk1').load_urdf(load_meshes=True); print(len(u.scene.geometry))"
+```
+
+The current GLB assets expand to hundreds of internal submeshes; a nonzero
+count without `Can't find` messages confirms that the visuals loaded.
+
 ## Piper CAN Is Down or BUS-OFF
 
 This applies only to physical Piper teleoperation. Check robot power and wiring,
-then rerun:
-
-```bash
-handumi-setup-hardware --robot piper --device meta \
-  --skip-feetech-map --skip-feetech-calibration
-```
+then follow the CAN checks in
+[Piper Hardware Setup](physical_robots/piper_setup.md#verify-can-and-troubleshoot-the-mapping).
 
 ## Piper Real Arms Do Not Start
 
-Test simulation first, verify both controllers are tracked, confirm CAN is up, and use `--side right` for the first hardware check.
+Test simulation first, verify both controllers are tracked, confirm CAN is up,
+and use `--side right` for the first hardware check. See
+[First real teleoperation](physical_robots/piper_setup.md#first-real-teleoperation)
+for the complete startup sequence.

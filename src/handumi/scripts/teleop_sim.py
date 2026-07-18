@@ -20,6 +20,8 @@ robot follows relative motion from there. The double-clap gesture (close/open
 one gripper twice) starts idle arms; once teleop is active, another double clap
 resets teleop by clearing anchors and parking enabled arms at home. Keyboard
 Space can also start idle arms when explicitly enabled with ``--space-start``.
+With ``--auto-start``, stable tracking starts a five-second countdown and then
+anchors the enabled arms through the same start path.
 
   Space                 start both arms that are not anchored yet (--space-start)
   double clap           start teleop, or reset/pause active teleop
@@ -54,6 +56,7 @@ import time
 import tty
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -73,14 +76,13 @@ from handumi.dataset.raw import pose_to_state_vector
 from handumi.feetech import zero_gripper_widths
 from handumi.retargeting.handumi_to_robot import (
     VR_TO_ROBOT,
-    local_frame_adapter,
-    local_relative_robot_target_pose7,
     raw_state_pose7_pair,
 )
-from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment
+from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_home_q
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import build_tracker, connect_feetech
 from handumi.tracking.gestures import DoubleClapDetector
+from handumi.teleop.core import TeleopController
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
 from handumi.visualization import LEFT_COLOR, RIGHT_COLOR
@@ -102,10 +104,17 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
+    p.add_argument(
+        "--home-pose",
+        default=None,
+        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+    )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
     p.add_argument("--fps", type=int, default=30)
-    p.add_argument("--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C.")
+    p.add_argument(
+        "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
+    )
     p.add_argument(
         "--translation-scale",
         type=float,
@@ -119,18 +128,34 @@ def parse_args() -> argparse.Namespace:
         help="Disable the Viser server and 3D robot view entirely (Rerun remains enabled).",
     )
     p.add_argument("--no-rerun", action="store_true", help="Disable the Rerun view.")
-    p.add_argument("--no-sounds", action="store_true", help="Disable spoken anchor/home feedback.")
+    p.add_argument(
+        "--no-sounds", action="store_true", help="Disable spoken anchor/home feedback."
+    )
     p.add_argument(
         "--space-start",
         action="store_true",
         help="Allow keyboard Space to start any unanchored enabled arms.",
     )
     p.add_argument(
+        "--auto-start",
+        action="store_true",
+        help=(
+            "Start enabled arms automatically after controller tracking remains "
+            "valid for --auto-start-delay-s."
+        ),
+    )
+    p.add_argument(
+        "--auto-start-delay-s",
+        type=float,
+        default=5.0,
+        help="Seconds of continuous valid tracking required by --auto-start.",
+    )
+    p.add_argument(
         "--scene",
         type=str,
         default=None,
-        help="Render a task scene (assets/scenes/<name>/scene.xml) in Viser, "
-        "placed per configs/scene.yaml, e.g. cube_in_box. Static props only.",
+        help="Render a task scene (assets/scenes/<name>/scene.xml) in Viser at "
+        "DEFAULT_SCENE_POSITION, e.g. cube_in_box. Static props only.",
     )
     p.add_argument(
         "--anchor-z",
@@ -180,7 +205,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
-    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
+    p.add_argument(
+        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+    )
     pico_transport = p.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")
     pico_transport.add_argument("--pico-wifi", action="store_true")
@@ -234,6 +261,60 @@ class KeyboardSpaceListener:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+class AutoStartCountdown:
+    """One-shot start after continuous valid tracking for a safety delay."""
+
+    def __init__(self, *, enabled: bool, delay_s: float) -> None:
+        self.enabled = enabled
+        self.delay_s = delay_s
+        self.started_at: float | None = None
+        self.announced_seconds: int | None = None
+        self.completed = False
+
+    def update(
+        self,
+        *,
+        now: float,
+        tracking_ready: bool,
+        already_active: bool,
+        idle_sides: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if not self.enabled or self.completed:
+            return ()
+        if already_active:
+            self.completed = True
+            return ()
+        if not tracking_ready:
+            if self.started_at is not None:
+                log.info("Auto-start countdown cancelled: controller tracking lost.")
+            self.started_at = None
+            self.announced_seconds = None
+            return ()
+        if self.started_at is None:
+            self.started_at = now
+            self.announced_seconds = int(np.ceil(self.delay_s))
+            log.info(
+                "Controllers detected. Auto-start in %d s; hold them steady.",
+                self.announced_seconds,
+            )
+
+        remaining = self.delay_s - (now - self.started_at)
+        if remaining <= 0.0:
+            self.completed = True
+            if idle_sides:
+                log.info(
+                    "Auto-start countdown complete; starting %s.",
+                    "/".join(idle_sides),
+                )
+            return idle_sides
+
+        seconds = int(np.ceil(remaining))
+        if seconds < (self.announced_seconds or seconds):
+            self.announced_seconds = seconds
+            log.info("Auto-start in %d s ...", seconds)
+        return ()
+
+
 def _camera_arg(value: str) -> int | str:
     return int(value) if value.isdigit() else value
 
@@ -242,6 +323,20 @@ def _enabled_sides(side: str) -> tuple[str, ...]:
     if side == "both":
         return ("left", "right")
     return (side,)
+
+
+def _tracking_ready_for_sides(
+    source_poses: dict[str, np.ndarray],
+    side_tracked: dict[str, bool],
+    enabled_sides: tuple[str, ...],
+) -> bool:
+    """Require a real finite controller pose for every arm being auto-started."""
+    return all(
+        side_tracked[side]
+        and np.isfinite(source_poses[side]).all()
+        and float(np.linalg.norm(source_poses[side][:3])) > 1e-6
+        for side in enabled_sides
+    )
 
 
 def _start_sides(
@@ -292,17 +387,8 @@ def _load_calibration(args: argparse.Namespace):
 
 
 def _side_joint_indices(runtime) -> dict[str, list[int]]:
-    """Actuated-joint indices per side (``left_*`` / ``right_*`` prefixes)."""
-    names = list(runtime.robot.joints.actuated_names)
-    return {
-        side: [i for i, name in enumerate(names) if name.startswith(f"{side}_")]
-        for side in ("left", "right")
-    }
-
-
-def _mjcf_name(urdf_joint_name: str) -> str:
-    """URDF joint -> Piper MJCF actuator/joint name (left_/right_ -> izq_/der_)."""
-    return urdf_joint_name.replace("left_", "izq_", 1).replace("right_", "der_", 1)
+    """Actuated-joint indices per configured logical side."""
+    return {side: runtime.arm_joint_indices(side) for side in ("left", "right")}
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:
@@ -334,7 +420,9 @@ def _validate_unique_camera_ids(
     camera_names: list[str], camera_ids: list[int | str]
 ) -> None:
     """Reject camera mappings that would show one device in multiple grid cells."""
-    duplicates = {camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1}
+    duplicates = {
+        camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1
+    }
     if not duplicates:
         return
     mappings = ", ".join(
@@ -366,6 +454,8 @@ def _init_rerun(enabled: bool, cam_names: list[str], *, fps: int = 30):
 
 def main() -> None:
     args = parse_args()
+    if args.auto_start_delay_s <= 0.0:
+        raise SystemExit("--auto-start-delay-s must be greater than zero.")
 
     calibration = _load_calibration(args)
     # Keep controller buttons from changing the tracking workspace during sim
@@ -401,45 +491,52 @@ def main() -> None:
 
     log.info("Loading %s IK solver (JAX JIT warmup, ~30s on CPU) ...", args.robot)
     runtime = load_embodiment(args.robot)
-    solver = runtime.solver_cls()
-    q = runtime.config.home_q.astype(np.float32).copy()
-    home_left_pose7, home_right_pose7 = solver.fk_pose7(q)
-    max_reach = runtime.config.ik_weights.max_reach
+    try:
+        home_pose_name, home_q = resolve_home_q(
+            runtime, rig_config=args.rig_config, explicit_name=args.home_pose
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    enabled_sides = _enabled_sides(args.side)
+    controller = TeleopController(
+        runtime,
+        home_q=home_q,
+        enabled_sides=enabled_sides,
+        source_world_to_robot_world=_tracking_world_map(args.device),
+        translation_scale=args.translation_scale,
+        anchor_z=args.anchor_z,
+    )
+    q = home_q.copy()
+    log.info("Selected home pose: %s", home_pose_name)
+    controller.warmup()
 
     server = None
     robot_view = None
     if not args.no_viser:
         import viser
-        import yourdfpy
         from viser.extras import ViserUrdf
 
         server = viser.ViserServer(port=args.port)
         server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-        urdf = yourdfpy.URDF.load(
-            str(runtime.urdf_path), mesh_dir=str(runtime.urdf_path.parent), load_meshes=True
-        )
+        urdf = runtime.load_urdf(load_meshes=True)
         robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
         robot_view.update_cfg(q)
 
     physics = None
-    scene_frames: dict[str, object] = {}
+    scene_frames: dict[str, Any] = {}
     if args.scene is not None:
-        import yaml
+        from handumi.sim.scene import DEFAULT_SCENE_POSITION, load_scene
 
-        from handumi.sim.scene import load_scene
-
-        scene_position = (0.0, 0.0, 0.0)
-        scene_config = Path("configs/scene.yaml")
-        if scene_config.exists():
-            data = yaml.safe_load(scene_config.read_text()) or {}
-            scene_position = tuple((data.get("scene") or {}).get("position", scene_position))
+        scene_position = DEFAULT_SCENE_POSITION
         # Props render under per-body frames so physics can move them.
         if server is not None:
             for body in load_scene(args.scene, position=scene_position):
-                frame = server.scene.add_frame(
-                    f"/scene/{body.name}", position=tuple(body.rest_position), show_axes=False
+                scene_frame = server.scene.add_frame(
+                    f"/scene/{body.name}",
+                    position=tuple(body.rest_position),
+                    show_axes=False,
                 )
-                scene_frames[body.name] = frame
+                scene_frames[body.name] = scene_frame
                 for i, geom in enumerate(body.geoms):
                     sx, sy, sz = (2.0 * s for s in geom.size)
                     cr, cg, cb = (int(round(c * 255)) for c in geom.rgba[:3])
@@ -454,19 +551,32 @@ def main() -> None:
 
             physics = MujocoPhysics(
                 mjcf_path=runtime.config.mjcf,
-                actuator_names=[_mjcf_name(n) for n in runtime.robot.joints.actuated_names],
+                actuator_names=[
+                    runtime.mjcf_actuator_name(n)
+                    for n in runtime.robot.joints.actuated_names
+                ],
                 scene_name=args.scene,
                 scene_position=scene_position,
             )
             physics.start()
-            log.info("Scene %r with MuJoCo contact physics at %s.", args.scene, scene_position)
+            log.info(
+                "Scene %r with MuJoCo contact physics at %s.",
+                args.scene,
+                scene_position,
+            )
         else:
-            log.info("Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot)
+            log.info(
+                "Scene %r rendered statically (no MJCF for %s).", args.scene, args.robot
+            )
     target_markers = {}
     if server is not None:
         target_markers = {
-            "left": server.scene.add_icosphere("/target/left", radius=0.018, color=LEFT_COLOR),
-            "right": server.scene.add_icosphere("/target/right", radius=0.018, color=RIGHT_COLOR),
+            "left": server.scene.add_icosphere(
+                "/target/left", radius=0.018, color=LEFT_COLOR
+            ),
+            "right": server.scene.add_icosphere(
+                "/target/right", radius=0.018, color=RIGHT_COLOR
+            ),
         }
 
         @server.on_client_connect
@@ -486,42 +596,49 @@ def main() -> None:
     rr = _init_rerun(not args.no_rerun, cam_names, fps=args.fps)
 
     play_sounds = not args.no_sounds
-    side_indices = _side_joint_indices(runtime)
-    home_q = runtime.config.home_q.astype(np.float32)
     # Robot pose each side's anchor maps to. With --anchor-z the ritual is
     # "anchor with the tip resting on the table": same home x/y, but the
     # tip's height at anchor time corresponds to anchor-z in robot world,
     # pinning absolute heights (real table touch == sim table touch).
-    anchor_ref = {"left": home_left_pose7.copy(), "right": home_right_pose7.copy()}
     if args.anchor_z is not None:
-        for side in ("left", "right"):
-            anchor_ref[side][2] = args.anchor_z
-        log.info("Table-anchor mode: anchor with the tip ON the table "
-                 "(maps to z=%.3f in robot world).", args.anchor_z)
-    # Per-arm anchors: None = disengaged (arm holds home). Each active anchor
-    # stores the calibrated source TCP and its local-frame SE(3) adapter.
-    anchors: dict[str, dict[str, np.ndarray] | None] = {"left": None, "right": None}
-    enabled_sides = _enabled_sides(args.side)
+        log.info(
+            "Table-anchor mode: anchor with the tip ON the table "
+            "(maps to z=%.3f in robot world).",
+            args.anchor_z,
+        )
     clap = DoubleClapDetector()
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     space_listener.start()
+    auto_start = AutoStartCountdown(
+        enabled=args.auto_start,
+        delay_s=args.auto_start_delay_s,
+    )
     episode_start: float | None = None
     frame = 0
     interval = 1.0 / args.fps
-    if args.space_start:
+    if args.auto_start:
+        manual_hint = " Space remains available." if args.space_start else ""
+        log.info(
+            "Arms idle at home. Waiting for controller tracking; auto-start "
+            "after %.1f s.%s",
+            args.auto_start_delay_s,
+            manual_hint,
+        )
+    elif args.space_start:
         log.info(
             "Arms idle at home. Start with Space, or double clap a gripper "
             "to start enabled arms."
         )
     else:
-        log.info(
-            "Arms idle at home. Double clap a gripper to start enabled arms."
-        )
+        log.info("Arms idle at home. Double clap a gripper to start enabled arms.")
     try:
         while True:
             loop_start = time.perf_counter()
             if episode_start is not None:
-                if args.duration_s > 0.0 and loop_start - episode_start >= args.duration_s:
+                if (
+                    args.duration_s > 0.0
+                    and loop_start - episode_start >= args.duration_s
+                ):
                     break
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
@@ -534,7 +651,9 @@ def main() -> None:
                 )
 
             state = _sample_state(sample, widths)
-            source_poses = dict(zip(("left", "right"), raw_state_pose7_pair(state), strict=True))
+            source_poses: dict[str, np.ndarray] = dict(
+                zip(("left", "right"), raw_state_pose7_pair(state), strict=True)
+            )
 
             # Double clap toggles teleop: first clap starts idle arms, next clap
             # clears anchors so the robot parks at home and waits for a fresh
@@ -542,40 +661,38 @@ def main() -> None:
             start_sides: tuple[str, ...] = ()
             reset_this_frame = False
             if args.space_start and space_listener.consume_space():
-                start_sides = _start_sides(anchors, enabled_sides)
+                start_sides = controller.idle_sides()
                 if start_sides:
                     log.info("Space pressed; starting %s.", "/".join(start_sides))
+            auto_start_sides = auto_start.update(
+                now=loop_start,
+                tracking_ready=_tracking_ready_for_sides(
+                    source_poses, side_tracked, enabled_sides
+                ),
+                already_active=controller.active,
+                idle_sides=controller.idle_sides(),
+            )
+            if auto_start_sides:
+                start_sides = auto_start_sides
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
-                if _has_enabled_anchors(anchors, enabled_sides):
-                    _clear_enabled_anchors(anchors, enabled_sides)
+                if controller.active:
+                    q = controller.reset()
                     episode_start = None
                     frame = 0
                     reset_this_frame = True
-                    log.info("Double clap detected; teleop reset, arms parking at home.")
+                    log.info(
+                        "Double clap detected; teleop reset, arms parking at home."
+                    )
                     log_say("teleop reset", play_sounds=play_sounds)
                 else:
                     start_sides = enabled_sides
-                    log.info("Double clap detected; starting %s.", "/".join(start_sides))
+                    log.info(
+                        "Double clap detected; starting %s.", "/".join(start_sides)
+                    )
 
-            anchored_this_frame = False
-            for side in ("left", "right"):
-                if side not in enabled_sides:
-                    continue
-                if side not in start_sides:
-                    continue
-                if not side_tracked[side]:
-                    log.warning("%s anchor ignored — that controller is not tracked.", side)
-                    continue
-                source_pose = source_poses[side]
-                anchors[side] = {
-                    "source": source_pose.copy(),
-                    "adapter": local_frame_adapter(
-                        source_pose,
-                        anchor_ref[side],
-                        source_world_to_robot_world=_tracking_world_map(args.device),
-                    ),
-                }
-                anchored_this_frame = True
+            anchored_sides = controller.anchor(source_poses, side_tracked, start_sides)
+            anchored_this_frame = bool(anchored_sides)
+            for side in anchored_sides:
                 log.info("%s arm anchored — follows from home.", side)
                 log_say(f"{side} anchored", play_sounds=play_sounds)
 
@@ -594,32 +711,15 @@ def main() -> None:
             # target). Never-anchored sides are parked kinematically at
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
-            ik_targets: dict[str, tuple | None] = {"left": None, "right": None}
-            for side in ("left", "right"):
-                anchor = anchors[side]
-                if anchor is None or not side_tracked[side]:
-                    continue
-                pose7 = local_relative_robot_target_pose7(
-                    previous_source_pose7=anchor["source"],
-                    current_source_pose7=source_poses[side],
-                    base_robot_pose7=anchor_ref[side],
-                    adapter_rot=anchor["adapter"],
-                    home_robot_pose7=anchor_ref[side],
-                    translation_scale=args.translation_scale,
-                    max_reach=max_reach,
-                )
-                ik_targets[side] = (pose7[:3], pose7[3:7])
+            step = controller.step(
+                source_poses,
+                side_tracked,
+                {"left": widths.left_normalized, "right": widths.right_normalized},
+            )
+            q = step.q
+            for side, pose7 in step.target_pose7.items():
                 if target_markers:
                     target_markers[side].position = tuple(pose7[:3])
-            q = solver.ik(q, left_pose=ik_targets["left"], right_pose=ik_targets["right"])
-            for side in ("left", "right"):
-                if anchors[side] is None:
-                    q[side_indices[side]] = home_q[side_indices[side]]
-            # Gripper fingers always mirror the real HandUMI opening
-            # (normalized Feetech width scaled to each finger's URDF range).
-            runtime.set_finger_positions(
-                q, {"left": widths.left_normalized, "right": widths.right_normalized}
-            )
 
             if physics is not None:
                 # IK joints become actuator setpoints; MuJoCo steps contact
@@ -628,20 +728,23 @@ def main() -> None:
                 # the raw IK solution.
                 joint_names = list(runtime.robot.joints.actuated_names)
                 physics.set_ctrl(
-                    {_mjcf_name(name): float(q[i]) for i, name in enumerate(joint_names)}
+                    {
+                        runtime.mjcf_actuator_name(name): float(q[i])
+                        for i, name in enumerate(joint_names)
+                    }
                 )
                 settled = physics.joint_positions()
                 q_render = q.copy()
                 for i, name in enumerate(joint_names):
-                    q_render[i] = settled.get(_mjcf_name(name), q[i])
+                    q_render[i] = settled.get(runtime.mjcf_actuator_name(name), q[i])
                 if robot_view is not None:
                     robot_view.update_cfg(q_render)
-                for body_name, frame in scene_frames.items():
+                for body_name, scene_frame in scene_frames.items():
                     pose = physics.body_pose(body_name)
                     if pose is not None:
                         position, quat_wxyz = pose
-                        frame.position = tuple(position.tolist())
-                        frame.wxyz = tuple(quat_wxyz.tolist())
+                        scene_frame.position = tuple(position.tolist())
+                        scene_frame.wxyz = tuple(quat_wxyz.tolist())
             else:
                 if robot_view is not None:
                     robot_view.update_cfg(q)

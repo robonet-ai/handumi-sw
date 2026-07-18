@@ -1,0 +1,16 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: yam
+source: simulation_initial_pose_alignment
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # Both frames use +X right, +Y away from the operator, and +Z up, so no
+  # rotation is required. The YAM mounting rail and tabletop share world Z=0,
+  # so the table transform has no vertical offset. The forward translation
+  # centers the validated trajectory in the shared workspace without raising
+  # the visual table above the robot base.
+  # Measure the physical installation and set verified: true before hardware use.
+  robot_from_table:
+    position: [0.01286, 0.16, 0.0]
+    quaternion: [0.0, 0.0, 0.0, 1.0]

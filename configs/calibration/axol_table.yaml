@@ -1,0 +1,15 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: axol
+source: simulation_workspace_fit
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # HandUMI table: +X right, +Y away from the operator, +Z up.
+  # Axol world: +X left, +Y toward the operator, +Z up. The 180-degree
+  # rotation maps the demonstrated left/right sides into the corresponding
+  # Axol arms. Translation is a provisional simulation placement fitted to
+  # all three validation episodes, not a measurement of a physical deployment.
+  robot_from_table:
+    position: [0.05714, 0.12376, 0.25022]
+    quaternion: [0.0, 0.0, 1.0, 0.0]

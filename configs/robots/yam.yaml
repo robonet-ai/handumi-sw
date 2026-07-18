@@ -1,0 +1,64 @@
+kind: yam
+urdf: assets/yam/yam_bimanual.urdf
+pkg_root: assets/yam
+
+arms:
+  left:
+    ee_link: left_tcp
+    joint_names:
+      - left_joint1
+      - left_joint2
+      - left_joint3
+      - left_joint4
+      - left_joint5
+      - left_joint6
+    gripper_joints:
+      - name: left_gripper_left
+        closed: 0.0
+        open: -0.04695
+      - name: left_gripper_right
+        closed: 0.0
+        open: -0.04695
+  right:
+    ee_link: right_tcp
+    joint_names:
+      - right_joint1
+      - right_joint2
+      - right_joint3
+      - right_joint4
+      - right_joint5
+      - right_joint6
+    gripper_joints:
+      - name: right_gripper_left
+        closed: 0.0
+        open: -0.04695
+      - name: right_gripper_right
+        closed: 0.0
+        open: -0.04695
+
+# Conservative, symmetric simulation pose: both arms reach into the shared
+# workspace with their linear_4310 grippers fully open. Validate a separate
+# physical home before adding a real-hardware backend.
+default_home_pose: forward_open
+home_poses:
+  forward_open: [0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695, 0.0, 1.57079633, 1.57079633, 0.0, 0.0, 0.0, -0.04695, -0.04695]
+gripper_max_width_m: 0.096
+
+handumi_tool:
+  gripper: yam_linear_4310_v1
+  controller_mount: handumi_v1
+
+# Initial kinematic profile for the standard six-DoF YAM. Physical speed and
+# workspace limits remain the responsibility of a future I2RT backend.
+ik_weights:
+  pos: 100.0
+  ori: 4.5
+  rest: 4.0
+  max_joint_delta: 0.12
+  max_reach: 0.62
+replay:
+  max_joint_delta: 0.35
+  # Preserve the demonstrated jaw aperture in meters. YAM opens to 96 mm,
+  # whereas the source HandUMI/Piper gripper opens to 66 mm; replaying the
+  # normalized percentage would make YAM about 45% wider than demonstrated.
+  gripper_retarget: physical-width

@@ -195,6 +195,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
+        "--hide-trajectories",
+        action="store_true",
+        help=(
+            "Hide target and achieved TCP paths and markers in the Viser viewer, "
+            "showing only the robot and scene."
+        ),
+    )
+    parser.add_argument(
         "--scene",
         default=None,
         help=(
@@ -288,9 +296,12 @@ def _resolve_gripper_openings(
     recorded_normalized: np.ndarray | None,
     *,
     max_width_m: float,
+    mode: str = "normalized",
 ) -> tuple[np.ndarray | None, str]:
     """Return per-frame 0-1 gripper openings and their source description."""
-    if recorded_normalized is not None:
+    if mode not in {"normalized", "physical-width"}:
+        raise ValueError(f"Unsupported gripper retarget mode {mode!r}.")
+    if mode == "normalized" and recorded_normalized is not None:
         return np.clip(recorded_normalized, 0.0, 1.0), "recorded Feetech normalized"
     if states.ndim != 2 or states.shape[1] != HANDUMI_RAW_STATE_SIZE:
         raise ValueError(
@@ -511,7 +522,11 @@ def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
     return np.concatenate([position, quaternion]).astype(np.float32)
 
 
-def load_robot_from_table(path: Path) -> np.ndarray:
+def load_robot_from_table(
+    path: Path,
+    *,
+    expected_robot: str | None = None,
+) -> np.ndarray:
     """Load ``T_robot_world_table`` from a deployment calibration YAML."""
     if not path.exists():
         raise SystemExit(
@@ -521,6 +536,13 @@ def load_robot_from_table(path: Path) -> np.ndarray:
     import yaml
 
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if expected_robot is not None:
+        declared_robot = data.get("robot")
+        if declared_robot != expected_robot:
+            raise SystemExit(
+                f"Deployment calibration {path} declares robot "
+                f"{declared_robot!r}; expected {expected_robot!r}."
+            )
     if data.get("verified") is not True:
         print(
             f"[replay] warning: deployment calibration {path} is not marked "
@@ -649,6 +671,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             if args.gripper_max_width_m is None
             else args.gripper_max_width_m
         ),
+        mode=runtime.config.replay_gripper_mode,
     )
     if args.raw_controller_debug:
         states_for_retarget = states
@@ -742,8 +765,13 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             )
 
     cfg = runtime.config.ik_weights
+    if runtime.config.replay_max_joint_delta is not None:
+        cfg = replace(
+            cfg,
+            max_joint_delta=runtime.config.replay_max_joint_delta,
+        )
     q = runtime.config.home_q.astype(np.float32).copy()
-    solver = runtime.solver_cls()
+    solver = runtime.solver_cls(config=cfg)
     qs: list[np.ndarray] = []
     raw_left_gt: list[np.ndarray] = []
     raw_right_gt: list[np.ndarray] = []
@@ -796,7 +824,10 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         deployment_path = args.deployment_calibration or (
             DEFAULT_DEPLOYMENT_CALIBRATION_DIR / f"{args.robot}_table.yaml"
         )
-        robot_from_table = load_robot_from_table(deployment_path)
+        robot_from_table = load_robot_from_table(
+            deployment_path,
+            expected_robot=args.robot,
+        )
         print(
             "[replay] robot_from_table: "
             f"translation=[{robot_from_table[0]:.4f}, {robot_from_table[1]:.4f}, "
@@ -965,7 +996,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
     )
     print(
         f"[replay] retarget={retarget_mode} "
-        f"compose={args.compose_source} translation_scale={args.translation_scale:g}"
+        f"compose={args.compose_source} translation_scale={args.translation_scale:g} "
+        f"max_joint_delta={cfg.max_joint_delta}"
     )
     if requested_retarget_mode == "auto":
         print(
@@ -1129,7 +1161,7 @@ def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.n
     from handumi.sim.scene import load_scene
 
     robot_from_table = transforms[0]
-    for body in load_scene(args.scene):
+    for body in load_scene(args.scene, position=(0.0, 0.0, 0.0)):
         body_table = np.concatenate(
             [
                 body.rest_position,
@@ -1159,69 +1191,66 @@ def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.n
 
 def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
     import viser
-    import yourdfpy
     from viser.extras import ViserUrdf
 
     runtime = load_embodiment(args.robot)
     server = viser.ViserServer(port=args.port)
     server.scene.add_grid("/grid", width=3.0, height=3.0, cell_size=0.1)
-    urdf = yourdfpy.URDF.load(
-        str(runtime.urdf_path),
-        mesh_dir=str(runtime.urdf_path.parent),
-        load_meshes=True,
-    )
+    urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
-    server.scene.add_spline_catmull_rom(
-        "/traj/target_left",
-        positions=rollout["target_left_pose7_robot_world"][:, :3],
-        color=(255, 190, 50),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/target_right",
-        positions=rollout["target_right_pose7_robot_world"][:, :3],
-        color=(80, 220, 130),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/achieved_left",
-        positions=rollout["achieved_left_pose7_robot_world"][:, :3],
-        color=(80, 160, 255),
-        line_width=2.0,
-    )
-    server.scene.add_spline_catmull_rom(
-        "/traj/achieved_right",
-        positions=rollout["achieved_right_pose7_robot_world"][:, :3],
-        color=(255, 90, 90),
-        line_width=2.0,
-    )
-    target_left = server.scene.add_icosphere(
-        "/target/left", radius=0.018, color=(255, 190, 50)
-    )
-    target_right = server.scene.add_icosphere(
-        "/target/right", radius=0.018, color=(80, 220, 130)
-    )
-    achieved_left = server.scene.add_icosphere(
-        "/achieved/left", radius=0.014, color=(80, 160, 255)
-    )
-    achieved_right = server.scene.add_icosphere(
-        "/achieved/right", radius=0.014, color=(255, 90, 90)
-    )
+    if not args.hide_trajectories:
+        server.scene.add_spline_catmull_rom(
+            "/traj/target_left",
+            positions=rollout["target_left_pose7_robot_world"][:, :3],
+            color=(255, 190, 50),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/target_right",
+            positions=rollout["target_right_pose7_robot_world"][:, :3],
+            color=(80, 220, 130),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/achieved_left",
+            positions=rollout["achieved_left_pose7_robot_world"][:, :3],
+            color=(80, 160, 255),
+            line_width=2.0,
+        )
+        server.scene.add_spline_catmull_rom(
+            "/traj/achieved_right",
+            positions=rollout["achieved_right_pose7_robot_world"][:, :3],
+            color=(255, 90, 90),
+            line_width=2.0,
+        )
+        target_left = server.scene.add_icosphere(
+            "/target/left", radius=0.018, color=(255, 190, 50)
+        )
+        target_right = server.scene.add_icosphere(
+            "/target/right", radius=0.018, color=(80, 220, 130)
+        )
+        achieved_left = server.scene.add_icosphere(
+            "/achieved/left", radius=0.014, color=(80, 160, 255)
+        )
+        achieved_right = server.scene.add_icosphere(
+            "/achieved/right", radius=0.014, color=(255, 90, 90)
+        )
     play = server.gui.add_checkbox("Play", True)
     frame = server.gui.add_slider("Frame", 0, len(rollout["qpos"]) - 1, 1, 0)
     err_text = server.gui.add_text("EE error (cm/deg)", "-", disabled=True)
 
     def draw(i: int) -> None:
         robot_view.update_cfg(rollout["qpos"][i])
-        target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
-        target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
-        achieved_left.position = tuple(
-            rollout["achieved_left_pose7_robot_world"][i, :3]
-        )
-        achieved_right.position = tuple(
-            rollout["achieved_right_pose7_robot_world"][i, :3]
-        )
+        if not args.hide_trajectories:
+            target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
+            target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
+            achieved_left.position = tuple(
+                rollout["achieved_left_pose7_robot_world"][i, :3]
+            )
+            achieved_right.position = tuple(
+                rollout["achieved_right_pose7_robot_world"][i, :3]
+            )
         err_text.value = (
             f"L={rollout['left_pos_error_m'][i] * 100:.1f}cm/"
             f"{rollout['left_rot_error_deg'][i]:.1f}deg "

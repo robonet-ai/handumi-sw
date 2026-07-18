@@ -15,8 +15,10 @@ from handumi.calibration.spatial import (
     new_spatial_calibration,
     pose7_to_dict,
     session_calibration_metadata,
+    session_table_from_device,
     solve_controller_camera,
     solve_table_camera,
+    solve_table_device,
     solve_table_quest,
     write_yaml,
 )
@@ -114,12 +116,12 @@ def test_controller_camera_solver_recovers_mount():
     assert metrics["rotation_rms_deg"] < 0.001
 
 
-def test_session_solver_recovers_table_from_quest():
+def test_session_solver_recovers_table_from_device():
     controllers, boards, controller_camera, quest_board = _synthetic_views()
     board = CharucoBoardSpec()
     expected = np.linalg.inv(quest_board @ pose7_to_mat(board_from_table_pose(board)))
 
-    solved, metrics = solve_table_quest(
+    solved, metrics = solve_table_device(
         controllers,
         mat_to_pose7(controller_camera),
         boards,
@@ -128,6 +130,21 @@ def test_session_solver_recovers_table_from_quest():
 
     np.testing.assert_allclose(pose7_to_mat(solved), expected, atol=2e-6)
     assert metrics["translation_rms_mm"] < 0.001
+
+
+def test_legacy_quest_table_solver_alias_still_works():
+    controllers, boards, controller_camera, quest_board = _synthetic_views()
+    board = CharucoBoardSpec()
+    expected = np.linalg.inv(quest_board @ pose7_to_mat(board_from_table_pose(board)))
+
+    solved, _ = solve_table_quest(
+        controllers,
+        mat_to_pose7(controller_camera),
+        boards,
+        board,
+    )
+
+    np.testing.assert_allclose(pose7_to_mat(solved), expected, atol=2e-6)
 
 
 def test_fixed_workspace_camera_solver_recovers_table_pose():
@@ -159,7 +176,8 @@ def test_session_metadata_embeds_matching_spatial_calibration(tmp_path):
         "spatial_calibration_path": str(spatial_path),
         "spatial_calibration_sha256": calibration_hash(spatial),
         "board": CharucoBoardSpec().to_dict(),
-        "table_from_quest": pose7_to_dict(mat_to_pose7(np.eye(4))),
+        "tracking_device": "pico",
+        "table_from_device": pose7_to_dict(mat_to_pose7(np.eye(4))),
         "metrics": {},
     }
     write_yaml(session_path, session)
@@ -169,3 +187,35 @@ def test_session_metadata_embeds_matching_spatial_calibration(tmp_path):
     assert metadata is not None
     assert metadata["spatial_calibration"] == spatial
     assert metadata["workspace_frame"] == "table"
+    assert metadata["tracking_device"] == "pico"
+    np.testing.assert_allclose(
+        session_table_from_device(session_path),
+        mat_to_pose7(np.eye(4)),
+    )
+
+
+def test_legacy_session_metadata_accepts_table_from_quest(tmp_path):
+    spatial_path = tmp_path / "spatial.yaml"
+    session_path = tmp_path / "session.yaml"
+    spatial = new_spatial_calibration(CharucoBoardSpec())
+    write_yaml(spatial_path, spatial)
+    session = {
+        "kind": "handumi_session_calibration",
+        "created_at": "2026-07-11T00:00:00+00:00",
+        "spatial_calibration_path": str(spatial_path),
+        "spatial_calibration_sha256": calibration_hash(spatial),
+        "board": CharucoBoardSpec().to_dict(),
+        "table_from_quest": pose7_to_dict(mat_to_pose7(np.eye(4))),
+        "metrics": {},
+    }
+    write_yaml(session_path, session)
+
+    metadata = session_calibration_metadata(session_path)
+
+    assert metadata is not None
+    assert metadata["tracking_device"] == "meta"
+    assert metadata["table_from_device"] == session["table_from_quest"]
+    np.testing.assert_allclose(
+        session_table_from_device(session_path),
+        mat_to_pose7(np.eye(4)),
+    )
