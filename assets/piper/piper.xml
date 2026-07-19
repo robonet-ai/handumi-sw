@@ -127,6 +127,11 @@
         </body>
     </worldbody>
 
+    <equality>
+        <joint name="izq_gripper_mimic" joint1="izq_joint8" joint2="izq_joint7" polycoef="0 -1 0 0 0"/>
+        <joint name="der_gripper_mimic" joint1="der_joint8" joint2="der_joint7" polycoef="0 -1 0 0 0"/>
+    </equality>
+
     <actuator>
         <position name="izq_joint1" ctrllimited="true" ctrlrange="-2.618 2.618" joint="izq_joint1" kp="10000" user="1" forcelimited="true" forcerange="-20000 20000"/>
         <position name="izq_joint2" ctrllimited="true" ctrlrange="0 3.14158" joint="izq_joint2" kp="2000" user="1" forcelimited="true" forcerange="-20000 20000"/>
@@ -135,7 +140,6 @@
         <position name="izq_joint5" ctrllimited="true" ctrlrange="-1.22 1.22" joint="izq_joint5" kp="20" user="1" forcelimited="true" forcerange="-50 50"/>
         <position name="izq_joint6" ctrllimited="true" ctrlrange="-3.14158 3.14158" joint="izq_joint6" kp="5" user="1" forcelimited="true" forcerange="-6 6"/>
         <position name="izq_joint7" ctrllimited="true" ctrlrange="0 0.0475" joint="izq_joint7" kp="10000" user="1" forcelimited="true" forcerange="-100 100"/>
-        <position name="izq_joint8" ctrllimited="true" ctrlrange="-0.0475 0" joint="izq_joint8" kp="10000" user="1" forcelimited="true" forcerange="-100 100"/>
 
         <position name="der_joint1" ctrllimited="true" ctrlrange="-2.618 2.618" joint="der_joint1" kp="10000" user="1" forcelimited="true" forcerange="-20000 20000"/>
         <position name="der_joint2" ctrllimited="true" ctrlrange="0 3.14158" joint="der_joint2" kp="2000" user="1" forcelimited="true" forcerange="-20000 20000"/>
@@ -144,6 +148,5 @@
         <position name="der_joint5" ctrllimited="true" ctrlrange="-1.22 1.22" joint="der_joint5" kp="20" user="1" forcelimited="true" forcerange="-50 50"/>
         <position name="der_joint6" ctrllimited="true" ctrlrange="-3.14158 3.14158" joint="der_joint6" kp="5" user="1" forcelimited="true" forcerange="-6 6"/>
         <position name="der_joint7" ctrllimited="true" ctrlrange="0 0.0475" joint="der_joint7" kp="10000" user="1" forcelimited="true" forcerange="-100 100"/>
-        <position name="der_joint8" ctrllimited="true" ctrlrange="-0.0475 0" joint="der_joint8" kp="10000" user="1" forcelimited="true" forcerange="-100 100"/>
     </actuator>
 </mujoco>

@@ -16,7 +16,9 @@ arms:
       - left_joint5
       - left_joint6
       - left_joint7
-      - left_joint8
+    gripper_joints:
+      - name: left_joint7
+        open: 0.035
   right:
     ee_link: right_tcp
     joint_names:
@@ -27,11 +29,13 @@ arms:
       - right_joint5
       - right_joint6
       - right_joint7
-      - right_joint8
+    gripper_joints:
+      - name: right_joint7
+        open: 0.035
 # Physical Piper start pose: joint5 +25 deg per arm. Keeping simulation,
 # conversion, and real-arm startup on the same home avoids an artificial
 # offset when the controller pose is anchored.
-home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0]
+home_q: [0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4363323, 0.0, 0.0]
 gripper_max_width_m: 0.066
 # Physical tool assembly installed on HandUMI while demonstrating Piper tasks.
 # Changing this gripper or controller mount requires a new pivot calibration.

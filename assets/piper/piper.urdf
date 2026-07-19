@@ -286,6 +286,7 @@
     <child link="left_link8" />
     <axis xyz="0 0 -1" />
     <limit lower="-0.035" upper="0" effort="10" velocity="1" />
+    <mimic joint="left_joint7" multiplier="-1" offset="0" />
   </joint>
   <link name="left_tcp" />
   <joint name="left_link6_to_tcp" type="fixed">
@@ -564,6 +565,7 @@
     <child link="right_link8" />
     <axis xyz="0 0 -1" />
     <limit lower="-0.035" upper="0" effort="10" velocity="1" />
+    <mimic joint="right_joint7" multiplier="-1" offset="0" />
   </joint>
   <link name="right_tcp" />
   <joint name="right_link6_to_tcp" type="fixed">

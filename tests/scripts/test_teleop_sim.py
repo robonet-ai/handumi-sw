@@ -149,7 +149,7 @@ class PiperTeleopSimConfigTest(unittest.TestCase):
         config = load_robot_config("piper")
 
         np.testing.assert_allclose(
-            config.home_q[[0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13]],
+            config.home_q[[0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]],
             [0, 0, 0, 0, np.deg2rad(25), 0] * 2,
             atol=1e-7,
         )

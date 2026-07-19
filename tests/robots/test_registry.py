@@ -78,7 +78,27 @@ def test_piper_mjcf_prefix_mapping_stays_in_robot_config():
     runtime = load_embodiment("piper")
 
     assert runtime.mjcf_actuator_name("left_joint1") == "izq_joint1"
-    assert runtime.mjcf_actuator_name("right_joint8") == "der_joint8"
+    assert runtime.mjcf_actuator_name("right_joint7") == "der_joint7"
+
+
+def test_piper_uses_one_gripper_joint_per_arm():
+    runtime = load_embodiment("piper")
+
+    assert runtime.robot.joints.num_actuated_joints == 14
+    assert runtime.arm_joint_names("left") == [f"left_joint{i}" for i in range(1, 8)]
+    assert runtime.arm_joint_names("right") == [
+        f"right_joint{i}" for i in range(1, 8)
+    ]
+    assert runtime.arm_joint_indices("left") == list(range(7))
+    assert runtime.arm_joint_indices("right") == list(range(7, 14))
+    assert runtime.finger_joints == {
+        "left": (GripperJointRuntime(index=6, closed_value=0.0, open_value=0.035),),
+        "right": (GripperJointRuntime(index=13, closed_value=0.0, open_value=0.035),),
+    }
+
+    q = runtime.home_q()
+    runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
+    np.testing.assert_allclose(q[[6, 13]], [0.0, 0.035])
 
 
 def test_axol_bimanual_layout_and_replay_profile():
