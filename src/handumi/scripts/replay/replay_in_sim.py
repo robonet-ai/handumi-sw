@@ -236,9 +236,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail instead of warning when an IK error threshold is exceeded.",
     )
+    parser.add_argument(
+        "--only-manipulation",
+        action="store_true",
+        help=(
+            "Lock manipulation.lock_joints from the robot yaml (e.g. torso). "
+            "Default: all actuated joints remain free during replay."
+        ),
+    )
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("-o", "--output", type=Path, default=None)
     return parser
+
+
+def _replay_locked_joint_indices(
+    runtime,
+    args: argparse.Namespace,
+) -> tuple[int, ...]:
+    if not args.only_manipulation:
+        return ()
+    return runtime.manipulation_lock_indices
 
 
 def load_episode_states(
@@ -771,7 +788,11 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             max_joint_delta=runtime.config.replay_max_joint_delta,
         )
     q = runtime.config.home_q.astype(np.float32).copy()
-    solver = runtime.solver_cls(config=cfg)
+    locked_joint_indices = _replay_locked_joint_indices(runtime, args)
+    solver = runtime.solver_cls(
+        config=cfg,
+        locked_joint_indices=locked_joint_indices,
+    )
     qs: list[np.ndarray] = []
     raw_left_gt: list[np.ndarray] = []
     raw_right_gt: list[np.ndarray] = []
@@ -852,7 +873,8 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             right_tool_adapter_pose7=right_tool_adapter,
         )
         initial_solver = runtime.solver_cls(
-            config=replace(cfg, max_joint_delta=None)
+            config=replace(cfg, max_joint_delta=None),
+            locked_joint_indices=locked_joint_indices,
         )
         for initial_solve_count in range(1, args.initial_solve_iterations + 1):
             q = initial_solver.ik(

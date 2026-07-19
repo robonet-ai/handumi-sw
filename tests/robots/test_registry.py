@@ -9,7 +9,7 @@ from handumi.robots.registry import (
 
 
 def test_robot_names_are_discovered_from_yaml_configs():
-    assert {"axol", "openarmv1", "piper", "trlc_dk1", "yam"}.issubset(
+    assert {"axol", "openarmv1", "piper", "r1lite", "trlc_dk1", "yam"}.issubset(
         set(EMBODIMENT_NAMES)
     )
 
@@ -207,3 +207,83 @@ def test_legacy_ee_links_are_derived_from_arms():
         "left": "openarm_left_hand_tcp",
         "right": "openarm_right_hand_tcp",
     }
+
+
+def test_r1lite_bimanual_layout_and_joint_mapping():
+    runtime = load_embodiment("r1lite")
+
+    assert runtime.arm_joint_names("left") == [
+        f"left_arm_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_names("right") == [
+        f"right_arm_joint{i}" for i in range(1, 7)
+    ]
+    assert runtime.arm_joint_indices("left") == list(range(9, 15))
+    assert runtime.arm_joint_indices("right") == list(range(17, 23))
+    assert len(runtime.home_q()) == 25
+    assert runtime.config.replay_max_joint_delta == 0.3
+    assert runtime.config.replay_gripper_mode == "physical-width"
+    assert runtime.config.gripper_max_width_m == 0.10
+
+
+def test_r1lite_home_fk_is_symmetric_and_visual_meshes_load():
+    runtime = load_embodiment("r1lite")
+    solver = runtime.solver_cls()
+
+    left_pose7, right_pose7 = solver.fk_pose7(runtime.home_q())
+    np.testing.assert_allclose(left_pose7[0], right_pose7[0], atol=1e-4)
+    np.testing.assert_allclose(left_pose7[1], -right_pose7[1], atol=5e-3)
+    np.testing.assert_allclose(left_pose7[2], right_pose7[2], atol=1e-4)
+    np.testing.assert_allclose(np.linalg.norm(left_pose7[3:]), 1.0, atol=1e-6)
+    np.testing.assert_allclose(np.linalg.norm(right_pose7[3:]), 1.0, atol=1e-6)
+
+    urdf = runtime.load_urdf(load_meshes=True)
+    assert urdf.scene is not None
+    assert len(urdf.scene.geometry) == 32
+
+
+def test_r1lite_gripper_mapping_and_finger_indices():
+    runtime = load_embodiment("r1lite")
+    finger_indices = [15, 16, 23, 24]
+
+    assert runtime.finger_joints["left"] == (
+        GripperJointRuntime(index=15, closed_value=0.0, open_value=0.05),
+        GripperJointRuntime(index=16, closed_value=0.0, open_value=0.05),
+    )
+    assert runtime.finger_joints["right"] == (
+        GripperJointRuntime(index=23, closed_value=0.0, open_value=0.05),
+        GripperJointRuntime(index=24, closed_value=0.0, open_value=0.05),
+    )
+    np.testing.assert_allclose(runtime.home_q()[finger_indices], 0.05)
+
+    q = runtime.home_q().copy()
+    runtime.set_finger_positions(q, {"left": 0.0, "right": 1.0})
+    np.testing.assert_allclose(q[finger_indices], [0.0, 0.0, 0.05, 0.05])
+    runtime.set_finger_positions(q, {"left": 1.0, "right": 0.0})
+    np.testing.assert_allclose(q[finger_indices], [0.05, 0.05, 0.0, 0.0])
+
+
+def test_r1lite_manipulation_locks_torso_at_home():
+    runtime = load_embodiment("r1lite")
+    locked_indices = list(range(6, 9))
+
+    assert runtime.config.manipulation_lock_joints == (
+        "torso_joint1",
+        "torso_joint2",
+        "torso_joint3",
+    )
+    assert runtime.manipulation_lock_indices == tuple(locked_indices)
+    assert runtime.solver_cls().locked_joint_indices == ()
+
+    solver = runtime.solver_cls(locked_joint_indices=runtime.manipulation_lock_indices)
+    assert set(solver.locked_joint_indices) == set(locked_indices)
+
+    q = runtime.home_q().copy()
+    q[locked_indices] = 0.5
+    left_pose7, right_pose7 = solver.fk_pose7(q)
+    q_solved = solver.ik(
+        q,
+        left_pose=(left_pose7[:3], left_pose7[3:7]),
+        right_pose=(right_pose7[:3], right_pose7[3:7]),
+    )
+    np.testing.assert_allclose(q_solved[locked_indices], runtime.home_q()[locked_indices])

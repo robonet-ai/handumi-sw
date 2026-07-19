@@ -1,0 +1,17 @@
+schema_version: 1
+kind: handumi_robot_table_calibration
+robot: r1lite
+source: simulation_initial_pose_alignment
+verified: false
+calibration:
+  frame_convention: pose7=[x,y,z,qx,qy,qz,qw], meters, xyzw quaternion
+  # HandUMI table: +X right, +Y away from the operator, +Z up.
+  # R1 Lite world: +X forward, +Y left, +Z up (Galaxea URDF base at Z=0).
+  # Provisional sim placement aligned with NONHUMAN-RESEARCH/test_handumi_pickandplace
+  # episode 0 frame 0: tuned with calibrated TCP poses (same pipeline as replay).
+  # The mobile base stays fixed; only the demonstrated table frame is placed in
+  # robot world. Measure the physical table pose and set verified: true before
+  # hardware deployment.
+  robot_from_table:
+    position: [0.40581, 0.09585, 0.93974]
+    quaternion: [0.0, 0.0, -0.70710678, 0.70710678]

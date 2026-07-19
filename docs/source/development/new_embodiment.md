@@ -95,7 +95,7 @@ target gripper has a different maximum width. The default, `normalized`,
 preserves the source opening percentage.
 
 Useful references are `configs/robots/piper.yaml`, `openarmv1.yaml`,
-`trlc_dk1.yaml`, and `yam.yaml`.
+`trlc_dk1.yaml`, `yam.yaml` and `r1lite.yaml`.
 
 ## 3. Add a simulation test
 

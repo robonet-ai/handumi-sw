@@ -87,6 +87,7 @@ packages = ["src/handumi"]
 "assets/axol" = "handumi/assets/axol"
 "assets/openarm" = "handumi/assets/openarm"
 "assets/piper" = "handumi/assets/piper"
+"assets/r1lite" = "handumi/assets/r1lite"
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
 "assets/yam" = "handumi/assets/yam"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
