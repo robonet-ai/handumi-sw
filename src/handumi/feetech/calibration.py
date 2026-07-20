@@ -28,6 +28,11 @@ from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
 _ENCODER_RESOLUTION = 4096
 _HALF_TURN = _ENCODER_RESOLUTION // 2
+_MAX_CALIBRATION_OVERRUN_FRACTION = 0.15
+
+
+class GripperCalibrationRangeError(ValueError):
+    """A live encoder position is incompatible with cached endpoints."""
 
 
 def _nearest_encoder_delta(value: int, reference: int) -> int:
@@ -75,7 +80,18 @@ class GripperCalibration:
         if span == 0:
             raise ValueError(f"Servo {self.servo_id} has identical open/closed ticks.")
         delta = _nearest_encoder_delta(ticks, self.closed_ticks)
-        return float(min(1.0, max(0.0, delta / span)))
+        ratio = delta / span
+        if (
+            ratio < -_MAX_CALIBRATION_OVERRUN_FRACTION
+            or ratio > 1.0 + _MAX_CALIBRATION_OVERRUN_FRACTION
+        ):
+            raise GripperCalibrationRangeError(
+                f"Servo {self.servo_id} position {ticks} is outside cached "
+                f"calibration {self.closed_ticks}->{self.open_ticks} "
+                f"({ratio:.2f} normalized before clipping). Re-home only if "
+                "needed, then run handumi-calibrate-grippers calibrate for this side."
+            )
+        return float(min(1.0, max(0.0, ratio)))
 
     def width_mm(self, ticks: int) -> float:
         if self.max_width_mm is None:
@@ -223,3 +239,17 @@ def _read_max_width_mm(data: dict[str, Any]) -> float | None:
         return _optional_float(data.get("max_width_mm"))
     max_width_m = _optional_float(data.get("max_width_m"))
     return None if max_width_m is None else max_width_m * 1000.0
+
+
+__all__ = [
+    "FeetechConfig",
+    "GripperCalibration",
+    "GripperCalibrationRangeError",
+    "assert_calibrated",
+    "default_config",
+    "load_calibration_values",
+    "load_config",
+    "load_ports",
+    "save_calibration",
+    "user_calibration_path",
+]

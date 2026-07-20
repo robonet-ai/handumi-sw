@@ -7,6 +7,7 @@ from unittest import mock
 from handumi.feetech.calibration import (
     FeetechConfig,
     GripperCalibration,
+    GripperCalibrationRangeError,
     assert_calibrated,
     load_config,
     load_ports,
@@ -66,6 +67,16 @@ class FeetechCalibrationTest(unittest.TestCase):
         )
         self.assertEqual(calibration.width_mm(1500), 40.0)
         self.assertEqual(calibration.width_m(1500), 0.04)
+
+    def test_grossly_stale_endpoints_fail_instead_of_clipping_to_ceiling(self):
+        calibration = GripperCalibration(
+            servo_id=0,
+            closed_ticks=3966,
+            open_ticks=1298,
+            max_width_mm=66.0,
+        )
+        with self.assertRaisesRegex(GripperCalibrationRangeError, "outside cached"):
+            calibration.width_mm(2279)
 
 
 class PortsCalibrationSplitTest(unittest.TestCase):
