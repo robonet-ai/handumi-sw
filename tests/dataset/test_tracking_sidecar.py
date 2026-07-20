@@ -17,6 +17,7 @@ from handumi.dataset.raw import (
     TRACKING_VALIDITY_NAMES,
 )
 from handumi.dataset.tracking_sidecar import (
+    FrameEpochTracker,
     TrackingSidecarWriter,
     discover_tracking_sidecars,
     load_tracking_sidecar,
@@ -63,10 +64,47 @@ def test_84_joint_sidecar_round_trip_preserves_raw_and_typed_arrays(tmp_path):
     table = pd.read_parquet(path)
     assert table.iloc[0]["body_joint_count"] == 84
     assert len(table.iloc[0]["body_joint_poses"]) == 84
-    assert list(table.iloc[0]["body_joint_location_flags"]) == raw["body"][
-        "jointLocationFlags"
-    ]
+    assert (
+        list(table.iloc[0]["body_joint_location_flags"])
+        == raw["body"]["jointLocationFlags"]
+    )
     assert discover_tracking_sidecars(tmp_path, episode_index=0) == (path,)
+
+
+def test_sidecar_labels_new_epoch_after_source_restart(tmp_path):
+    _, first = _packet(7)
+    _, restarted = _packet(2)
+    writer = TrackingSidecarWriter(tmp_path)
+    writer.set_frame_calibration(
+        {"calibration_hash": "a" * 64}, reason="initial_calibration"
+    )
+    writer.start_episode(0)
+    writer.append_packets([first, restarted])
+    event = writer.consume_frame_epoch_change()
+    assert event is not None
+    assert event.index == 1
+    assert event.reason == "source_sequence_restarted"
+    path = writer.finish_episode(status="discarded")
+    assert path is not None
+    table = pd.read_parquet(path)
+    assert table["frame_epoch"].tolist() == [0, 1]
+    assert table.iloc[1]["frame_calibration_hash"] == "a" * 64
+    manifest = json.loads((tmp_path / "raw/tracking/manifest.json").read_text())
+    assert manifest["frame_epochs"][-1]["reason"] == "source_sequence_restarted"
+
+
+def test_frame_epoch_tracker_marks_reconnect_and_calibration_change():
+    tracker = FrameEpochTracker()
+    tracker.observe_connection_count(1)
+    assert tracker.consume_change() is None
+    tracker.observe_connection_count(2)
+    assert tracker.consume_change().reason == "tracking_transport_reconnected"
+    tracker.set_calibration("first", reason="initial")
+    tracker.set_calibration("second", reason="recalibrated")
+    event = tracker.consume_change()
+    assert event is not None
+    assert event.reason == "recalibrated"
+    assert tracker.index == 2
 
 
 def test_interrupted_jsonl_is_recovered_without_dropping_packets(tmp_path):
@@ -133,8 +171,8 @@ def test_provider_session_manifest_is_stored_once_and_referenced(tmp_path):
     writer.finish_episode(status="recorded")
 
     records = (
-        tmp_path / "raw/tracking/session_manifests.jsonl"
-    ).read_text().splitlines()
+        (tmp_path / "raw/tracking/session_manifests.jsonl").read_text().splitlines()
+    )
     assert len(records) == 1
     assert json.loads(records[0])["sessionId"] == "session-12"
     manifest = json.loads((tmp_path / "raw/tracking/manifest.json").read_text())
@@ -204,9 +242,12 @@ def test_derived_writer_preserves_optional_body_and_sidecar_when_requested(tmp_p
     assert discover_tracking_sidecars(output, episode_index=0)
     manifest = json.loads((output / "raw/tracking/manifest.json").read_text())
     assert manifest["session_manifests"] == "raw/tracking/session_manifests.jsonl"
-    assert json.loads(
-        (output / manifest["session_manifests"]).read_text().strip()
-    )["sessionId"] == "derived-source"
+    assert (
+        json.loads((output / manifest["session_manifests"]).read_text().strip())[
+            "sessionId"
+        ]
+        == "derived-source"
+    )
 
 
 def test_controller_only_recording_loads_none_instead_of_invented_pose(tmp_path):
@@ -278,9 +319,7 @@ def test_reader_discovers_optional_body_columns(tmp_path):
             if key == "observation.state":
                 return np.zeros((2, 16), dtype=np.float32)
             if key == "observation.valid":
-                return np.ones(
-                    (2, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64
-                )
+                return np.ones((2, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64)
             return [np.zeros((25, 7), dtype=np.float32) for _ in range(2)]
 
     class Dataset:

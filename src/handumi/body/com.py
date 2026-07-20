@@ -105,12 +105,12 @@ class SegmentDefinition:
         return cls(
             identifier=str(data["identifier"]),
             output_joint=str(data["output_joint"]),
-            proximal_landmarks=tuple(str(value) for value in data["proximal_landmarks"]),
+            proximal_landmarks=tuple(
+                str(value) for value in data["proximal_landmarks"]
+            ),
             distal_landmarks=tuple(str(value) for value in data["distal_landmarks"]),
             mass_fraction=float(data["mass_fraction"]),
-            com_fraction_from_proximal=float(
-                data["com_fraction_from_proximal"]
-            ),
+            com_fraction_from_proximal=float(data["com_fraction_from_proximal"]),
             mass_fraction_std=float(data.get("mass_fraction_std", 0.0)),
             com_fraction_std=float(data.get("com_fraction_std", 0.03)),
         )
@@ -269,9 +269,7 @@ def default_anthropometric_table() -> AnthropometricTable:
         _segment("right_hand", "right_hand", "right_wrist", "right_hand", 0.006, 0.506),
         _segment("left_thigh", "left_hip", "left_hip", "left_knee", 0.100, 0.433),
         _segment("right_thigh", "right_hip", "right_hip", "right_knee", 0.100, 0.433),
-        _segment(
-            "left_shank", "left_knee", "left_knee", "left_ankle", 0.0465, 0.433
-        ),
+        _segment("left_shank", "left_knee", "left_knee", "left_ankle", 0.0465, 0.433),
         _segment(
             "right_shank",
             "right_knee",
@@ -319,8 +317,6 @@ class ComEstimatorConfig:
     contact_accept_probability: float = 0.65
     contact_max_gap_s: float = 0.20
     contact_max_speed_m_s: float = 5.0
-    inferred_heel_offset_ratio: float = 0.35
-    inferred_foot_width_ratio: float = 0.40
     trajectory: TrajectoryFilterConfig = TrajectoryFilterConfig()
 
     def __post_init__(self) -> None:
@@ -395,7 +391,9 @@ class KinematicComEstimator:
         _clear_derived_outputs(output)
         self._clear_previous_inferred_heels(output)
 
-        segment_values: list[tuple[SegmentDefinition, np.ndarray, np.ndarray, float]] = []
+        segment_values: list[
+            tuple[SegmentDefinition, np.ndarray, np.ndarray, float]
+        ] = []
         missing_mass = 0.0
         for segment in self.table.segments:
             output_index = _JOINT_INDEX[segment.output_joint]
@@ -466,7 +464,8 @@ class KinematicComEstimator:
             if not np.isfinite(confidence):
                 confidence = (
                     1.0
-                    if frame.tracking_state[index] == int(CanonicalTrackingState.TRACKED)
+                    if frame.tracking_state[index]
+                    == int(CanonicalTrackingState.TRACKED)
                     else 0.5
                 )
             confidence = float(np.clip(confidence, 0.0, 1.0))
@@ -507,9 +506,7 @@ class KinematicComEstimator:
             confidence += segment.mass_fraction * segment_confidence
         max_std = math.sqrt(max(0.0, float(np.linalg.eigvalsh(covariance).max())))
         if max_std > self.config.max_com_std_m:
-            output.whole_com_diagnostic[0] = int(
-                ComDiagnostic.EXCESSIVE_UNCERTAINTY
-            )
+            output.whole_com_diagnostic[0] = int(ComDiagnostic.EXCESSIVE_UNCERTAINTY)
             return
         output.whole_com[:] = center
         output.whole_com_valid[0] = 1
@@ -545,6 +542,11 @@ class KinematicComEstimator:
         plane = _normalized_plane(output.ground_plane)
         if plane is None:
             return
+        foot_length_m = self.profile.foot_length_m
+        if foot_length_m is None:
+            # A platform ankle/ball pair does not determine the missing heel.
+            # Keep it unavailable instead of inventing a population-ratio foot.
+            return
         normal, offset = plane
         for side in ("left", "right"):
             heel_index = _JOINT_INDEX[f"{side}_heel"]
@@ -552,7 +554,10 @@ class KinematicComEstimator:
                 continue
             ankle_index = _JOINT_INDEX[f"{side}_ankle"]
             ball_index = _JOINT_INDEX[f"{side}_foot_ball"]
-            if not output.position_valid[ankle_index] or not output.position_valid[ball_index]:
+            if (
+                not output.position_valid[ankle_index]
+                or not output.position_valid[ball_index]
+            ):
                 continue
             ankle = np.asarray(output.joint_pose[ankle_index, :3], dtype=np.float64)
             ball = np.asarray(output.joint_pose[ball_index, :3], dtype=np.float64)
@@ -562,10 +567,7 @@ class KinematicComEstimator:
             if ankle_to_ball <= 1e-6:
                 continue
             direction = forward / ankle_to_ball
-            if self.profile.foot_length_m is not None:
-                heel_offset = max(0.01, self.profile.foot_length_m - ankle_to_ball)
-            else:
-                heel_offset = self.config.inferred_heel_offset_ratio * ankle_to_ball
+            heel_offset = max(0.01, foot_length_m - ankle_to_ball)
             heel = ankle - direction * heel_offset
             ball_height = float(np.dot(normal, ball)) + offset
             heel_height = float(np.dot(normal, heel)) + offset
@@ -606,9 +608,7 @@ class KinematicComEstimator:
             self._contact_history[contact_index] = (timestamp_ns, position.copy())
             external_value = external.get(CONTACT_NAMES[contact_index])
             if previous is None:
-                self._write_external_contact(
-                    output, contact_index, external_value
-                )
+                self._write_external_contact(output, contact_index, external_value)
                 continue
             previous_time, previous_position = previous
             dt_s = (timestamp_ns - previous_time) / 1e9
@@ -618,9 +618,7 @@ class KinematicComEstimator:
                 else float("inf")
             )
             if speed > self.config.contact_max_speed_m_s:
-                self._write_external_contact(
-                    output, contact_index, external_value
-                )
+                self._write_external_contact(output, contact_index, external_value)
                 continue
             height = abs(float(np.dot(normal, position)) + offset)
             height_probability = _decreasing_logistic(
@@ -642,9 +640,7 @@ class KinematicComEstimator:
                     1.0 - float(np.clip(external_value, 0.0, 1.0))
                 )
                 provenance = ComProvenance.FUSED_ESTIMATED
-            output.contact_probability[contact_index] = np.clip(
-                probability, 0.0, 1.0
-            )
+            output.contact_probability[contact_index] = np.clip(probability, 0.0, 1.0)
             output.contact_valid[contact_index] = 1
             output.contact_provenance[contact_index] = int(provenance)
         self._write_support_polygon(output, normal, offset)
@@ -659,13 +655,15 @@ class KinematicComEstimator:
             return
         output.contact_probability[contact_index] = np.clip(value, 0.0, 1.0)
         output.contact_valid[contact_index] = 1
-        output.contact_provenance[contact_index] = int(
-            ComProvenance.FUSED_ESTIMATED
-        )
+        output.contact_provenance[contact_index] = int(ComProvenance.FUSED_ESTIMATED)
 
     def _write_support_polygon(
         self, output: CanonicalBodyFrame, normal: np.ndarray, offset: float
     ) -> None:
+        foot_width_m = self.profile.foot_width_m
+        if foot_width_m is None:
+            # Contact points alone do not supply mediolateral foot extent.
+            return
         points = []
         for side_index, side in enumerate(("left", "right")):
             heel_contact = 2 * side_index
@@ -694,11 +692,7 @@ class KinematicComEstimator:
             if length <= 1e-6:
                 continue
             lateral = np.cross(normal, forward / length)
-            width = (
-                self.profile.foot_width_m
-                if self.profile.foot_width_m is not None
-                else self.config.inferred_foot_width_ratio * length
-            )
+            width = foot_width_m
             points.extend(
                 (
                     heel + lateral * width / 2,

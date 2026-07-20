@@ -28,6 +28,7 @@ import time
 import tty
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Iterable, Sequence, cast
 
 import numpy as np
 import yaml
@@ -37,12 +38,15 @@ from handumi.body import (
     BodyProfile,
     CanonicalBodyFrame,
     KinematicComEstimator,
+    NeutralCalibrationCapture,
     ProfileConstrainedSkeleton,
     ProfileNeutralCalibration,
     canonical_body_features,
     canonical_body_from_packet,
     canonical_body_metadata,
     estimate_profile_neutral_calibration,
+    persist_neutral_calibration_capture,
+    validate_neutral_capture,
 )
 from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
@@ -225,9 +229,9 @@ def _discard_tracking_backlog(provider: object) -> int:
     drain = getattr(provider, "drain_packets", None)
     if not callable(drain):
         return 0
-    packets = drain()
+    packets = cast(Iterable[object], drain())
     try:
-        discarded = len(packets)
+        discarded = len(cast(Sequence[object], packets))
     except TypeError:
         discarded = sum(1 for _ in packets)
     if discarded:
@@ -317,7 +321,7 @@ def _capture_profile_neutral_calibration(
     *,
     duration_s: float,
     stop_event: threading.Event,
-) -> tuple[ProfileNeutralCalibration, list[TrackingPacket]]:
+) -> tuple[ProfileNeutralCalibration, NeutralCalibrationCapture]:
     """Capture a short upright pose without consuming the sidecar queue."""
     latest_packet = getattr(tracker, "latest_packet", None)
     if not callable(latest_packet):
@@ -325,6 +329,7 @@ def _capture_profile_neutral_calibration(
             "Selected tracking backend cannot provide native body packets for "
             "profile neutral calibration."
         )
+    packet_accessor = cast(Callable[[], TrackingPacket | None], latest_packet)
     if duration_s <= 0:
         raise SystemExit("--body-neutral-calibration-s must be greater than zero.")
 
@@ -338,7 +343,7 @@ def _capture_profile_neutral_calibration(
     seen: set[tuple[int | None, int, int]] = set()
     deadline = time.monotonic() + duration_s
     while time.monotonic() < deadline and not stop_event.is_set():
-        packet = latest_packet()
+        packet = packet_accessor()
         sample = tracker.latest()
         if packet is None or packet.body is None or not packet.body.active:
             time.sleep(0.01)
@@ -347,8 +352,10 @@ def _capture_profile_neutral_calibration(
             tracker.device == "meta"
             and packet.body.calibration_state.lower() != "valid"
         ):
-            time.sleep(0.01)
-            continue
+            raise SystemExit(
+                "Meta body calibration state became invalid during neutral capture; "
+                "complete headset body setup and retry."
+            )
         if not sample.hmd_tracked:
             time.sleep(0.01)
             continue
@@ -369,7 +376,13 @@ def _capture_profile_neutral_calibration(
     if stop_event.is_set():
         raise SystemExit("Body neutral calibration interrupted.")
     min_samples = max(15, min(60, int(round(duration_s * 10.0))))
+    capture = NeutralCalibrationCapture(
+        packets=tuple(packets),
+        device_hmd_poses=tuple(hmd_poses),
+        requested_duration_s=duration_s,
+    )
     try:
+        validate_neutral_capture(capture, min_samples=min_samples)
         neutral = estimate_profile_neutral_calibration(
             source_frames,
             hmd_poses,
@@ -382,7 +395,7 @@ def _capture_profile_neutral_calibration(
             f"Body neutral calibration failed: {exc}. Stand upright and retry; "
             "do not record against an unverified floor."
         ) from exc
-    return neutral, packets
+    return neutral, capture
 
 
 def _tuple_shape(feature: dict) -> dict:
@@ -719,6 +732,19 @@ def record_episode(
         body_frame = None
         if tracking_sidecar is not None:
             tracking_sidecar.drain_provider(tracker)
+            epoch_event = tracking_sidecar.consume_frame_epoch_change()
+            if epoch_event is not None:
+                status = "frame_epoch_changed"
+                dataset.clear_episode_buffer()
+                if body_estimator is not None:
+                    body_estimator.reset()
+                log.error(
+                    "Tracking frame epoch changed to %d (%s); discarding the "
+                    "episode and requiring calibration review.",
+                    epoch_event.index,
+                    epoch_event.reason,
+                )
+                break
             body_frame = canonical_body_from_packet(
                 tracking_sidecar.nearest_packet(target_time_ns),
                 calibration=world_calibration,
@@ -1119,6 +1145,7 @@ def main() -> None:
         level_workspace_on_reset=body_estimator is not None,
     )
     if args.session_calibration is not None:
+        assert spatial_session_metadata is not None
         session_device = str(spatial_session_metadata.get("tracking_device") or "")
         if session_device and session_device != args.device:
             raise SystemExit(
@@ -1209,6 +1236,7 @@ def main() -> None:
         qualified=False,
     )
     neutral_calibration_metadata: dict | None = None
+    neutral_calibration_artifacts: list[dict] = []
     tracking_workspace = (
         "table" if spatial_session_metadata is not None else "hmd_recentered"
     )
@@ -1298,6 +1326,7 @@ def main() -> None:
             if not _wait_for_tracking(tracker, stop_event):
                 break
             if profile_skeleton is not None and not profile_skeleton.calibrated:
+                assert body_estimator is not None
                 if spatial_session_metadata is None:
                     if rerun is not None:
                         rerun.set_status(
@@ -1308,7 +1337,7 @@ def main() -> None:
                         robot_viewer.set_recording_state(
                             "CALIBRATING", "neutral/profile capture"
                         )
-                    neutral, neutral_packets = _capture_profile_neutral_calibration(
+                    neutral, neutral_capture = _capture_profile_neutral_calibration(
                         tracker,
                         body_estimator.profile,
                         duration_s=args.body_neutral_calibration_s,
@@ -1319,7 +1348,7 @@ def main() -> None:
                         canonical_body_from_packet(
                             packet, calibration=world_calibration
                         )
-                        for packet in neutral_packets
+                        for packet in neutral_capture.packets
                     ]
                     neutral_calibration_metadata = neutral.metadata()
                     set_workspace = getattr(
@@ -1347,11 +1376,11 @@ def main() -> None:
                     world_calibration = _body_calibration_from_workspace(
                         alignment_sample.workspace_from_device_pose,
                         device=args.device,
-                        qualified=True,
+                        qualified=False,
                     )
                     # A table calibration owns the rigid frame. Capture only the
                     # neutral geometry used by the profile-constrained skeleton.
-                    _, neutral_packets = _capture_profile_neutral_calibration(
+                    neutral, neutral_capture = _capture_profile_neutral_calibration(
                         tracker,
                         body_estimator.profile,
                         duration_s=args.body_neutral_calibration_s,
@@ -1361,12 +1390,29 @@ def main() -> None:
                         canonical_body_from_packet(
                             packet, calibration=world_calibration
                         )
-                        for packet in neutral_packets
+                        for packet in neutral_capture.packets
                     ]
+                    neutral_calibration_metadata = neutral.metadata()
                 try:
                     profile_skeleton.calibrate(neutral_frames)
                 except ValueError as exc:
                     raise SystemExit(f"Body profile fitting failed: {exc}") from exc
+                tracking_sidecar.set_frame_calibration(
+                    world_calibration.metadata(),
+                    reason="initial_profile_neutral_calibration",
+                )
+                _, artifact_reference = persist_neutral_calibration_capture(
+                    dataset.root,
+                    neutral_capture,
+                    neutral,
+                    body_estimator.profile,
+                    applied_world=world_calibration,
+                    profile_skeleton=profile_skeleton.metadata(),
+                    frame_epoch=tracking_sidecar.frame_epoch,
+                    frame_epoch_reason="initial_profile_neutral_calibration",
+                    neutral_world_applied=spatial_session_metadata is None,
+                )
+                neutral_calibration_artifacts.append(artifact_reference)
             _discard_tracking_backlog(tracker)
             if body_estimator is not None:
                 if profile_skeleton is None or not profile_skeleton.calibrated:
@@ -1374,13 +1420,17 @@ def main() -> None:
                     world_calibration = _body_calibration_from_workspace(
                         alignment_sample.workspace_from_device_pose,
                         device=args.device,
-                        qualified=spatial_session_metadata is not None,
+                        qualified=False,
                     )
                 log.info(
                     "Body/controller visualization locked to %s.",
                     tracking_workspace,
                 )
                 body_estimator.reset()
+                tracking_sidecar.set_frame_calibration(
+                    world_calibration.metadata(),
+                    reason="recording_world_calibration",
+                )
             tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             if rerun is not None:
@@ -1445,6 +1495,7 @@ def main() -> None:
                 restart_active = True
                 continue
             if n_frames == 0 or status in {
+                "frame_epoch_changed",
                 "tracking_lost",
                 "sensor_unhealthy",
                 "interrupted",
@@ -1462,6 +1513,19 @@ def main() -> None:
                     )
                 dataset.clear_episode_buffer()
                 tracking_sidecar.finish_episode(status="discarded", provider=tracker)
+                if status == "frame_epoch_changed":
+                    if profile_skeleton is not None:
+                        profile_skeleton.invalidate()
+                    world_calibration = HandumiWorldCalibration.identity(
+                        source_frame=f"{args.device}_right_handed_source",
+                        qualified=False,
+                    )
+                    if spatial_session_metadata is not None:
+                        log.error(
+                            "The tracking source frame changed after table calibration; "
+                            "stop and create a new spatial session calibration."
+                        )
+                        break
                 if status in {"finish", "interrupted"}:
                     break
                 continue
@@ -1514,6 +1578,10 @@ def main() -> None:
                 )
             if neutral_calibration_metadata is not None:
                 body_metadata["neutral_calibration"] = neutral_calibration_metadata
+            if neutral_calibration_artifacts:
+                body_metadata["neutral_calibration_artifacts"] = (
+                    neutral_calibration_artifacts
+                )
             body_metadata["estimator_version"] = (
                 com_estimator_metadata["schema"]
                 if body_estimator is not None
@@ -1563,6 +1631,7 @@ def main() -> None:
                     "tracking_sidecar": {
                         "schema": "handumi_tracking_sidecar_v1",
                         "manifest": "raw/tracking/manifest.json",
+                        "frame_epochs": tracking_sidecar.frame_epoch_metadata(),
                     },
                 },
             )
@@ -1580,7 +1649,7 @@ def main() -> None:
                 dataset.push_to_hub(
                     license=args.dataset_license,
                     tags=["HandUMI"],
-                    **card_kwargs,
+                    **card_kwargs,  # pyright: ignore[reportArgumentType]
                 )
         except BaseException as exc:
             finalization_error = exc
@@ -1722,7 +1791,7 @@ def _selected_camera_names(args: argparse.Namespace) -> list[str]:
 
 def _capture_sources_metadata(
     camera_specs: list[dict[str, object]],
-    cameras: list[object | None],
+    cameras: Sequence[object | None],
     grippers: object | None,
 ) -> dict[str, object]:
     """Store source enablement once instead of repeating it on every row."""

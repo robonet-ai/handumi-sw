@@ -26,13 +26,30 @@ handumi-record \
 At the first episode start, stand upright with both feet on the physical floor
 and hold a neutral or T-pose for the default three-second calibration dwell.
 HandUMI combines the platform foot estimate with `head - height_m`, rejects
-motion or a profile-inconsistent pose, and locks the body and controllers into
-one Z-up world whose experimental floor is `z=0`. Change the dwell only when
-needed with `--body-neutral-calibration-s`.
+motion, insufficient time coverage, reordered/duplicated packets, a changed
+skeleton revision, an invalid Meta calibration state, or a profile-inconsistent
+pose. It then locks the body and controllers into one Z-up world whose
+experimental floor is `z=0`. Change the dwell only when needed with
+`--body-neutral-calibration-s`.
 
 This corrects stale Quest Guardian/Stage floor height, but it is still a
 profile-assisted platform estimate. A motion-capture/physical-floor reference
 is required before making an accuracy claim.
+
+Each accepted fit writes an atomic
+`raw/tracking/calibration/neutral-<input-hash>.json` artifact. It contains the
+exact normalized native packets and device-frame HMD poses used by the fit,
+profile and output hashes, uncertainty summaries, runtime versions, applied
+world transform, frame epoch, and qualification limitations. Native packet
+mappings are retained unchanged; profile-adjusted geometry exists only in the
+derived canonical fields.
+
+A transport reconnect, source sequence/clock restart, coordinate-space change,
+skeleton revision change, or calibration-transform change begins a new frame
+epoch in the native sidecar. The active episode is discarded. Profile-neutral
+sessions require another neutral capture; a table-calibrated session stops and
+requires a new spatial session calibration. Derived trajectories never bridge
+the epoch boundary.
 
 For a quick session, `--body-height-m` and `--body-mass-kg` may be supplied
 together. A YAML profile additionally constrains the derived skeleton:
@@ -51,6 +68,11 @@ Changed joint positions are labeled `INFERRED`, rendered amber, and never
 relabeled as platform measurements. The raw platform skeleton remains in the
 tracking sidecar. A custom versioned segment table can be selected with
 `--anthropometric-table`.
+
+Optional dimensions are not filled from population ratios. In particular,
+without `foot_length_m` HandUMI leaves heel joints unavailable, and without
+`foot_width_m` it leaves the support polygon unavailable. Missing values remain
+missing rather than silently creating geometry.
 
 Measure `hand_length_m` physically with the hand flat, from wrist crease to
 middle-finger tip. Meta FullBody's middle-tip joint is used when that value is
@@ -103,6 +125,12 @@ body composition and population differences. Kinematic foot-contact thresholds
 are configurable heuristics. Quest lower-body errors directly affect CoM and
 support estimates. These outputs are engineering estimates, not anatomical
 accuracy evidence; the project ground-truth validation phase must qualify them.
+
+The research preview does not implement an online EKF or offline factor graph.
+Those remain deferred until the project has an auditable observation/noise
+model and TEST-001 reference data. The causal derivative filter is a quality
+gate for derived trajectories, not a substitute for state-estimation evidence
+or a basis for accuracy, contact, support, or timing claims.
 
 The default mass-conserving coefficients follow the 15-segment table reported
 by [Wang et al. (2022)](https://doi.org/10.3389/fnbot.2022.863722). Custom

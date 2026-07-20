@@ -7,8 +7,9 @@ import json
 import os
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 import pandas as pd
 import pyarrow as pa
@@ -18,12 +19,131 @@ from handumi.tracking.packet import TrackingPacket, tracking_packet_record
 
 SIDECAR_SCHEMA = "handumi_tracking_sidecar_v1"
 
+
+@dataclass(frozen=True)
+class FrameEpochEvent:
+    index: int
+    reason: str
+    receive_sequence: int | None
+
+
+class FrameEpochTracker:
+    """Assign monotonic epochs when a source frame can no longer be continuous."""
+
+    def __init__(self) -> None:
+        self.index = 0
+        self.reason = "session_start"
+        self.events = [FrameEpochEvent(0, self.reason, None)]
+        self._source: str | None = None
+        self._coordinate_space: str | None = None
+        self._source_sequence: int | None = None
+        self._source_time_ns: int | None = None
+        self._skeleton_revision: int | None = None
+        self._calibration_hash: str | None = None
+        self._connection_count: int | None = None
+        self._changed = False
+
+    @property
+    def calibration_hash(self) -> str:
+        return self._calibration_hash or ""
+
+    def set_calibration(self, calibration_hash: str, *, reason: str) -> None:
+        value = str(calibration_hash)
+        if not value:
+            raise ValueError("Frame calibration hash must not be empty")
+        if self._calibration_hash is None:
+            self._calibration_hash = value
+            self.reason = reason
+            self.events[0] = FrameEpochEvent(0, reason, None)
+        elif value != self._calibration_hash:
+            self._calibration_hash = value
+            self._advance(reason, None)
+
+    def observe_connection_count(self, count: int) -> None:
+        value = int(count)
+        if self._connection_count is not None and value > self._connection_count:
+            self._advance("tracking_transport_reconnected", None)
+            self._source_sequence = None
+            self._source_time_ns = None
+            self._skeleton_revision = None
+        self._connection_count = value
+
+    def observe_packet(self, packet: TrackingPacket) -> None:
+        body = packet.body
+        source_time = int(
+            (0 if body is None else body.source_time_ns)
+            or packet.timestamps.source_time_ns
+        )
+        revision = None if body is None else int(body.skeleton_revision)
+        reason: str | None = None
+        if self._source is not None and packet.source != self._source:
+            reason = "tracking_source_changed"
+        elif (
+            self._coordinate_space is not None
+            and packet.coordinate_space != self._coordinate_space
+        ):
+            reason = "coordinate_space_changed"
+        elif (
+            packet.sequence is not None
+            and self._source_sequence is not None
+            and packet.sequence < self._source_sequence
+        ):
+            reason = "source_sequence_restarted"
+        elif (
+            source_time > 0
+            and self._source_time_ns is not None
+            and source_time < self._source_time_ns
+        ):
+            reason = "source_clock_restarted"
+        elif (
+            revision is not None
+            and self._skeleton_revision is not None
+            and revision != self._skeleton_revision
+        ):
+            reason = "body_skeleton_revision_changed"
+        if reason is not None:
+            self._advance(reason, packet.receive_sequence)
+        self._source = packet.source
+        self._coordinate_space = packet.coordinate_space
+        if packet.sequence is not None:
+            self._source_sequence = packet.sequence
+        if source_time > 0:
+            self._source_time_ns = source_time
+        if revision is not None:
+            self._skeleton_revision = revision
+
+    def consume_change(self) -> FrameEpochEvent | None:
+        if not self._changed:
+            return None
+        self._changed = False
+        return self.events[-1]
+
+    def metadata(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "index": event.index,
+                "reason": event.reason,
+                "receive_sequence": event.receive_sequence,
+            }
+            for event in self.events
+        ]
+
+    def _advance(self, reason: str, receive_sequence: int | None) -> None:
+        self.index += 1
+        self.reason = reason
+        self.events.append(FrameEpochEvent(self.index, reason, receive_sequence))
+        self._changed = True
+
+
 _ARROW_SCHEMA = pa.schema(
     [
         ("sidecar_schema", pa.string()),
         ("episode_index", pa.int64()),
         ("attempt_id", pa.string()),
         ("capture_status", pa.string()),
+        ("frame_epoch", pa.int64()),
+        ("frame_epoch_reason", pa.string()),
+        ("frame_calibration_hash", pa.string()),
         ("schema", pa.string()),
         ("source_schema_version", pa.int64()),
         ("source", pa.string()),
@@ -64,8 +184,7 @@ _ARROW_SCHEMA = pa.schema(
 
 def _packet_time_ns(packet: TrackingPacket) -> int:
     return int(
-        packet.timestamps.mapped_pc_monotonic_ns
-        or packet.timestamps.receive_time_ns
+        packet.timestamps.mapped_pc_monotonic_ns or packet.timestamps.receive_time_ns
     )
 
 
@@ -75,6 +194,9 @@ def _sidecar_row(
     episode_index: int,
     attempt_id: str,
     capture_status: str,
+    frame_epoch: int,
+    frame_epoch_reason: str,
+    frame_calibration_hash: str,
 ) -> dict[str, Any]:
     envelope = tracking_packet_record(packet)
     body = packet.body
@@ -84,6 +206,9 @@ def _sidecar_row(
         "episode_index": int(episode_index),
         "attempt_id": attempt_id,
         "capture_status": capture_status,
+        "frame_epoch": int(frame_epoch),
+        "frame_epoch_reason": frame_epoch_reason,
+        "frame_calibration_hash": frame_calibration_hash,
         "schema": packet.schema,
         "source_schema_version": packet.source_schema_version,
         "source": packet.source,
@@ -175,6 +300,7 @@ class TrackingSidecarWriter:
         self._episode_index: int | None = None
         self._attempt_id: str | None = None
         self._recent: deque[TrackingPacket] = deque(maxlen=4096)
+        self._frame_epochs = FrameEpochTracker()
         self._manifest_hashes: set[str] = set()
         manifest_records = self.root / "session_manifests.jsonl"
         if manifest_records.exists():
@@ -201,16 +327,26 @@ class TrackingSidecarWriter:
         return self._attempt_id
 
     def append_packets(self, packets: Iterable[TrackingPacket]) -> int:
-        if self._journal is None or self._episode_index is None or self._attempt_id is None:
-            raise RuntimeError("start_episode() must be called before appending packets")
+        if (
+            self._journal is None
+            or self._episode_index is None
+            or self._attempt_id is None
+        ):
+            raise RuntimeError(
+                "start_episode() must be called before appending packets"
+            )
         count = 0
         for packet in packets:
+            self._frame_epochs.observe_packet(packet)
             self._recent.append(packet)
             record = _sidecar_row(
                 packet,
                 episode_index=self._episode_index,
                 attempt_id=self._attempt_id,
                 capture_status="inprogress",
+                frame_epoch=self._frame_epochs.index,
+                frame_epoch_reason=self._frame_epochs.reason,
+                frame_calibration_hash=self._frame_epochs.calibration_hash,
             )
             self._journal.write(
                 json.dumps(record, separators=(",", ":"), allow_nan=True) + "\n"
@@ -223,8 +359,39 @@ class TrackingSidecarWriter:
 
     def drain_provider(self, provider: object) -> int:
         self._capture_provider_manifest(provider)
+        self._capture_provider_epoch(provider)
         drain = getattr(provider, "drain_packets", None)
-        return self.append_packets(drain()) if callable(drain) else 0
+        if not callable(drain):
+            return 0
+        return self.append_packets(cast(Iterable[TrackingPacket], drain()))
+
+    @property
+    def frame_epoch(self) -> int:
+        return self._frame_epochs.index
+
+    def set_frame_calibration(self, metadata: dict[str, Any], *, reason: str) -> None:
+        digest = str(metadata.get("calibration_hash") or metadata.get("sha256") or "")
+        if not digest:
+            encoded = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(encoded.encode()).hexdigest()
+        self._frame_epochs.set_calibration(digest, reason=reason)
+
+    def consume_frame_epoch_change(self) -> FrameEpochEvent | None:
+        return self._frame_epochs.consume_change()
+
+    def frame_epoch_metadata(self) -> list[dict[str, Any]]:
+        return self._frame_epochs.metadata()
+
+    def _capture_provider_epoch(self, provider: object) -> None:
+        accessor = getattr(provider, "packet_stream_stats", None)
+        if not callable(accessor):
+            receiver = getattr(provider, "receiver", None)
+            accessor = getattr(receiver, "packet_stream_stats", None)
+        if not callable(accessor):
+            return
+        stats = accessor()
+        if isinstance(stats, dict) and "connection_count" in stats:
+            self._frame_epochs.observe_connection_count(int(stats["connection_count"]))
 
     def _capture_provider_manifest(self, provider: object) -> None:
         accessor = getattr(provider, "session_manifest", None)
@@ -250,7 +417,9 @@ class TrackingSidecarWriter:
             key=lambda packet: abs(_packet_time_ns(packet) - int(target_time_ns)),
         )
 
-    def finish_episode(self, *, status: str, provider: object | None = None) -> Path | None:
+    def finish_episode(
+        self, *, status: str, provider: object | None = None
+    ) -> Path | None:
         if self._journal is None or self._journal_path is None:
             return None
         if provider is not None:
@@ -337,9 +506,13 @@ class TrackingSidecarWriter:
             else:
                 journal.unlink(missing_ok=True)
             return None
-        assert parquet_writer is not None and temporary is not None and output is not None
+        assert (
+            parquet_writer is not None and temporary is not None and output is not None
+        )
         if chunk:
-            parquet_writer.write_table(pa.Table.from_pylist(chunk, schema=_ARROW_SCHEMA))
+            parquet_writer.write_table(
+                pa.Table.from_pylist(chunk, schema=_ARROW_SCHEMA)
+            )
         parquet_writer.close()
         temporary.replace(output)
         journal.unlink()
@@ -388,12 +561,15 @@ class TrackingSidecarWriter:
         )
         if (self.root / "session_manifests.jsonl").exists():
             manifest["session_manifests"] = "raw/tracking/session_manifests.jsonl"
+        manifest["frame_epochs"] = self._frame_epochs.metadata()
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(manifest, indent=2) + "\n")
         temporary.replace(path)
 
 
 __all__ = [
+    "FrameEpochEvent",
+    "FrameEpochTracker",
     "SIDECAR_SCHEMA",
     "TrackingSidecarWriter",
     "discover_tracking_sidecars",

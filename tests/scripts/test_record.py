@@ -210,6 +210,9 @@ class _FakeTrackingSidecar:
     def nearest_packet(self, target_time_ns: int):
         return None
 
+    def consume_frame_epoch_change(self):
+        return None
+
 
 class _FakeBodyEstimator:
     def __init__(self):
@@ -624,6 +627,40 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):
+    def test_frame_epoch_change_discards_before_writing_a_row(self):
+        dataset = _FakeDataset()
+
+        class _ChangedEpochSidecar(_FakeTrackingSidecar):
+            def consume_frame_epoch_change(self):
+                return type(
+                    "Event",
+                    (),
+                    {"index": 2, "reason": "tracking_transport_reconnected"},
+                )()
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=1.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            tracking_sidecar=_ChangedEpochSidecar(),
+        )
+
+        self.assertEqual((n_frames, status), (0, "frame_epoch_changed"))
+        self.assertEqual(dataset.frames, [])
+
     def test_sustained_tracking_loss_discards_episode(self):
         dataset = _FakeDataset()
         with (

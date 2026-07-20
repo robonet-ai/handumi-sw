@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import platform
+import sys
 from dataclasses import dataclass, fields, replace
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -30,8 +34,11 @@ from handumi.tracking.transforms import (
     HandumiWorldCalibration,
     quat_rotate,
 )
+from handumi.tracking.packet import TrackingPacket, tracking_packet_record
+from handumi import __version__ as handumi_version
 
 BODY_CALIBRATION_SCHEMA = "handumi_profile_neutral_calibration_v1"
+BODY_CALIBRATION_CAPTURE_SCHEMA = "handumi_profile_neutral_capture_v1"
 PROFILE_SKELETON_SCHEMA = "handumi_profile_constrained_skeleton_v1"
 
 _INDEX = {joint.identifier: joint.index for joint in CANONICAL_JOINTS}
@@ -83,6 +90,192 @@ class ProfileNeutralCalibration:
         return {**values, "sha256": hashlib.sha256(encoded.encode()).hexdigest()}
 
 
+@dataclass(frozen=True)
+class NeutralCalibrationCapture:
+    """Exact native packets and HMD poses accepted for one neutral fit."""
+
+    packets: tuple[TrackingPacket, ...]
+    device_hmd_poses: tuple[np.ndarray, ...]
+    requested_duration_s: float
+
+    def __post_init__(self) -> None:
+        if len(self.packets) != len(self.device_hmd_poses):
+            raise ValueError("Neutral packets and HMD poses must have equal length")
+        if self.requested_duration_s <= 0:
+            raise ValueError("Neutral capture duration must be positive")
+
+    @property
+    def observed_duration_s(self) -> float:
+        times = [_packet_capture_time_ns(packet) for packet in self.packets]
+        return 0.0 if len(times) < 2 else (times[-1] - times[0]) / 1e9
+
+
+def validate_neutral_capture(
+    capture: NeutralCalibrationCapture,
+    *,
+    min_samples: int,
+    min_duration_fraction: float = 0.8,
+) -> None:
+    """Reject incomplete, mixed, reordered, or stale neutral inputs."""
+    if len(capture.packets) < min_samples:
+        raise ValueError(
+            f"Neutral calibration requires {min_samples} unique packets; "
+            f"received {len(capture.packets)}"
+        )
+    if not 0.0 < min_duration_fraction <= 1.0:
+        raise ValueError("min_duration_fraction must be in (0, 1]")
+
+    sources = {packet.source for packet in capture.packets}
+    spaces = {packet.coordinate_space for packet in capture.packets}
+    schemas = {
+        (packet.schema, packet.source_schema_version) for packet in capture.packets
+    }
+    revisions = {
+        packet.body.skeleton_revision
+        for packet in capture.packets
+        if packet.body is not None
+    }
+    joint_sets = {
+        (packet.body.active_joint_set, packet.body.joint_count)
+        for packet in capture.packets
+        if packet.body is not None
+    }
+    if any(
+        len(values) != 1 for values in (sources, spaces, schemas, revisions, joint_sets)
+    ):
+        raise ValueError(
+            "Neutral calibration packets use mismatched source/body schemas"
+        )
+
+    previous_time = -1
+    previous_receive = -1
+    source_sequences: list[int] = []
+    for packet, hmd_pose in zip(capture.packets, capture.device_hmd_poses, strict=True):
+        body = packet.body
+        if body is None or not body.active or body.joint_count != len(body.joints):
+            raise ValueError("Neutral calibration contains an incomplete body packet")
+        if packet.source == "meta_quest" and body.calibration_state.lower() != "valid":
+            raise ValueError("Meta body calibration state is not valid")
+        if not np.all(np.isfinite(np.asarray(hmd_pose, dtype=np.float64).reshape(7))):
+            raise ValueError("Neutral calibration contains a non-finite HMD pose")
+        capture_time = _packet_capture_time_ns(packet)
+        if capture_time <= previous_time or packet.receive_sequence <= previous_receive:
+            raise ValueError("Neutral calibration packets are duplicated or reordered")
+        previous_time = capture_time
+        previous_receive = packet.receive_sequence
+        if packet.sequence is not None:
+            source_sequences.append(packet.sequence)
+    if any(
+        second <= first for first, second in zip(source_sequences, source_sequences[1:])
+    ):
+        raise ValueError(
+            "Neutral calibration source sequences are duplicated or reordered"
+        )
+
+    required_duration = capture.requested_duration_s * min_duration_fraction
+    if capture.observed_duration_s < required_duration:
+        raise ValueError(
+            "Neutral calibration packet coverage is too short: "
+            f"{capture.observed_duration_s:.3f}s observed; "
+            f"at least {required_duration:.3f}s required"
+        )
+
+
+def persist_neutral_calibration_capture(
+    dataset_root: str | Path,
+    capture: NeutralCalibrationCapture,
+    calibration: ProfileNeutralCalibration,
+    profile: BodyProfile,
+    *,
+    applied_world: HandumiWorldCalibration,
+    profile_skeleton: dict[str, Any],
+    frame_epoch: int,
+    frame_epoch_reason: str,
+    neutral_world_applied: bool,
+) -> tuple[Path, dict[str, Any]]:
+    """Atomically persist replayable calibration inputs, outputs, and hashes."""
+    if not capture.packets:
+        raise ValueError("Cannot persist an empty neutral calibration capture")
+    packet_records = [tracking_packet_record(packet) for packet in capture.packets]
+    hmd_poses = [
+        np.asarray(pose, dtype=np.float64).reshape(7).tolist()
+        for pose in capture.device_hmd_poses
+    ]
+    packet_hash = _json_sha256(packet_records)
+    hmd_hash = _json_sha256(hmd_poses)
+    profile_metadata = profile.metadata()
+    inputs = {
+        "native_packets": packet_records,
+        "device_hmd_poses": hmd_poses,
+    }
+    input_hash = _json_sha256(inputs)
+    uncertainties = [packet.timestamps.uncertainty_ns for packet in capture.packets]
+    source_times = [_packet_capture_time_ns(packet) for packet in capture.packets]
+    artifact: dict[str, Any] = {
+        "schema": BODY_CALIBRATION_CAPTURE_SCHEMA,
+        "qualified": False,
+        "frame_epoch": {
+            "index": int(frame_epoch),
+            "reason": frame_epoch_reason,
+            "relocalization_policy": "new_epoch_discard_episode_and_recalibrate",
+        },
+        "capture": {
+            "requested_duration_s": capture.requested_duration_s,
+            "observed_duration_s": capture.observed_duration_s,
+            "sample_count": len(capture.packets),
+            "first_capture_time_ns": source_times[0],
+            "last_capture_time_ns": source_times[-1],
+            "packet_records_sha256": packet_hash,
+            "device_hmd_poses_sha256": hmd_hash,
+            "inputs_sha256": input_hash,
+            "uncertainty_ns": {
+                "median": int(np.median(uncertainties)),
+                "maximum": int(max(uncertainties)),
+            },
+        },
+        "inputs": inputs,
+        "outputs": {
+            "neutral_calibration": calibration.metadata(),
+            "neutral_world_applied": bool(neutral_world_applied),
+            "applied_world_calibration": applied_world.metadata(),
+            "profile_constrained_skeleton": profile_skeleton,
+        },
+        "profile": profile_metadata,
+        "runtime": {
+            "handumi": handumi_version,
+            "python": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
+            "numpy": np.__version__,
+            "platform": platform.platform(),
+            "byte_order": sys.byteorder,
+        },
+        "limitations": [
+            "profile-assisted platform estimate; not anatomical ground truth",
+            "not qualified for medical, ergonomic, timing, or safety use",
+            "TEST-001 ground-truth validation has not passed",
+        ],
+    }
+    artifact["sha256"] = _json_sha256(artifact)
+    directory = Path(dataset_root) / "raw" / "tracking" / "calibration"
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / f"neutral-{input_hash[:16]}.json"
+    temporary = directory / f".{output.name}.{os.getpid()}.tmp"
+    encoded = json.dumps(artifact, indent=2, sort_keys=True, allow_nan=True) + "\n"
+    with temporary.open("w", encoding="utf-8") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, output)
+    return output, {
+        "schema": BODY_CALIBRATION_CAPTURE_SCHEMA,
+        "path": output.relative_to(Path(dataset_root)).as_posix(),
+        "sha256": artifact["sha256"],
+        "inputs_sha256": input_hash,
+        "frame_epoch": int(frame_epoch),
+        "qualified": False,
+    }
+
+
 def estimate_profile_neutral_calibration(
     frames: Sequence[CanonicalBodyFrame],
     device_hmd_poses: Sequence[np.ndarray],
@@ -132,9 +325,7 @@ def estimate_profile_neutral_calibration(
         )
 
     foot_heights = np.asarray([item[0] for item in accepted], dtype=np.float64)
-    profile_floor_heights = np.asarray(
-        [item[1] for item in accepted], dtype=np.float64
-    )
+    profile_floor_heights = np.asarray([item[1] for item in accepted], dtype=np.float64)
     observed_statures = foot_heights * -1.0 + np.asarray(
         [item[1] + profile.height_m for item in accepted], dtype=np.float64
     )
@@ -208,10 +399,19 @@ class ProfileConstrainedSkeleton:
     def calibrated(self) -> bool:
         return self._calibrated
 
+    def invalidate(self) -> None:
+        """Require a fresh neutral fit after a source-frame epoch change."""
+        self._root_translation[:] = 0.0
+        self._target_hip_height_m = 0.0
+        self._observed.clear()
+        self._calibrated = False
+
     def calibrate(self, frames: Sequence[CanonicalBodyFrame]) -> None:
         complete = [frame for frame in frames if self._has_required_neutral(frame)]
         if not complete:
-            raise ValueError("No complete neutral frames are available for profile fitting")
+            raise ValueError(
+                "No complete neutral frames are available for profile fitting"
+            )
 
         representative = _median_frame(complete)
         plane = _plane(representative.ground_plane)
@@ -286,8 +486,7 @@ class ProfileConstrainedSkeleton:
             output, source, "left_shoulder", "right_shoulder"
         )
         original_shoulders = {
-            side: _point(output, f"{side}_shoulder")
-            for side in ("left", "right")
+            side: _point(output, f"{side}_shoulder") for side in ("left", "right")
         }
         shoulder_anchor = None
         if (
@@ -349,9 +548,7 @@ class ProfileConstrainedSkeleton:
                 hip = _point(output, f"{side}_hip")
                 if hip is None:
                     continue
-                ankle_clearance = self._observed.get(
-                    f"{side}_ankle_ground_height", 0.0
-                )
+                ankle_clearance = self._observed.get(f"{side}_ankle_ground_height", 0.0)
                 target_leg_chain = self.profile.leg_length_m - ankle_clearance
                 if target_leg_chain <= 0:
                     raise ValueError(
@@ -493,7 +690,10 @@ class ProfileConstrainedSkeleton:
             return
         left_index = _INDEX[left_name]
         right_index = _INDEX[right_name]
-        if not output.position_valid[left_index] or not output.position_valid[right_index]:
+        if (
+            not output.position_valid[left_index]
+            or not output.position_valid[right_index]
+        ):
             return
         left = source[left_index]
         right = source[right_index]
@@ -514,6 +714,26 @@ def _point(frame: CanonicalBodyFrame, name: str) -> np.ndarray | None:
     if not frame.position_valid[index] or not np.all(np.isfinite(point)):
         return None
     return point
+
+
+def _packet_capture_time_ns(packet: TrackingPacket) -> int:
+    body_time = 0 if packet.body is None else int(packet.body.source_time_ns)
+    return int(
+        body_time
+        or packet.timestamps.source_time_ns
+        or packet.timestamps.mapped_pc_monotonic_ns
+        or packet.timestamps.receive_time_ns
+    )
+
+
+def _json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=True,
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def _plane(value: np.ndarray) -> tuple[np.ndarray, float] | None:
@@ -552,7 +772,11 @@ def _distance(
 ) -> float | None:
     first = _point(frame, first_name)
     second = _point(frame, second_name)
-    return None if first is None or second is None else float(np.linalg.norm(second - first))
+    return (
+        None
+        if first is None or second is None
+        else float(np.linalg.norm(second - first))
+    )
 
 
 def _chain_length(frame: CanonicalBodyFrame, names: Sequence[str]) -> float:
@@ -745,9 +969,13 @@ def _median_frame(frames: Sequence[CanonicalBodyFrame]) -> CanonicalBodyFrame:
 
 
 __all__ = [
+    "BODY_CALIBRATION_CAPTURE_SCHEMA",
     "BODY_CALIBRATION_SCHEMA",
+    "NeutralCalibrationCapture",
     "PROFILE_SKELETON_SCHEMA",
     "ProfileConstrainedSkeleton",
     "ProfileNeutralCalibration",
     "estimate_profile_neutral_calibration",
+    "persist_neutral_calibration_capture",
+    "validate_neutral_capture",
 ]

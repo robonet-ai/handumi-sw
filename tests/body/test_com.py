@@ -94,7 +94,9 @@ def _reference_com(frame: CanonicalBodyFrame, table: AnthropometricTable) -> np.
 def test_default_table_has_15_segments_and_conserves_total_mass():
     table = default_anthropometric_table()
     assert len(table.segments) == 15
-    assert sum(segment.mass_fraction for segment in table.segments) == pytest.approx(1.0)
+    assert sum(segment.mass_fraction for segment in table.segments) == pytest.approx(
+        1.0
+    )
     assert {segment.identifier for segment in table.segments} >= {
         "head_neck",
         "trunk",
@@ -104,9 +106,7 @@ def test_default_table_has_15_segments_and_conserves_total_mass():
     }
     estimator_metadata = KinematicComEstimator(_profile()).metadata()
     assert estimator_metadata["resolved_total_mass_kg"] == pytest.approx(70.0)
-    assert sum(estimator_metadata["segment_mass_kg"].values()) == pytest.approx(
-        70.0
-    )
+    assert sum(estimator_metadata["segment_mass_kg"].values()) == pytest.approx(70.0)
 
 
 def test_profile_and_custom_table_round_trip_through_yaml(tmp_path):
@@ -140,9 +140,7 @@ def test_analytic_reference_mass_weighted_com_and_ground_projection():
         [expected[0], expected[1], 0.0],
         atol=1e-7,
     )
-    assert result.whole_com_provenance[0] == int(
-        ComProvenance.KINEMATIC_INFERRED
-    )
+    assert result.whole_com_provenance[0] == int(ComProvenance.KINEMATIC_INFERRED)
     assert np.isfinite(result.whole_com_covariance).all()
     assert np.isfinite(result.whole_com_ground_projection_covariance).all()
     segment_mask = result.segment_com_valid.astype(bool)
@@ -212,9 +210,7 @@ def test_predicted_uncertainty_gate_invalidates_result():
         _analytic_frame()
     )
     assert result.whole_com_valid[0] == 0
-    assert result.whole_com_diagnostic[0] == int(
-        ComDiagnostic.EXCESSIVE_UNCERTAINTY
-    )
+    assert result.whole_com_diagnostic[0] == int(ComDiagnostic.EXCESSIVE_UNCERTAINTY)
 
 
 def test_low_confidence_increases_covariance_and_reaches_whole_result():
@@ -229,9 +225,7 @@ def test_low_confidence_increases_covariance_and_reaches_whole_result():
     ).estimate(low_frame)
     assert low.whole_com_valid[0] == 1
     assert low.whole_com_confidence[0] == pytest.approx(0.2)
-    assert np.trace(low.whole_com_covariance) > np.trace(
-        baseline.whole_com_covariance
-    )
+    assert np.trace(low.whole_com_covariance) > np.trace(baseline.whole_com_covariance)
 
 
 def test_contact_support_polygon_airborne_and_unilateral_states():
@@ -241,9 +235,7 @@ def test_contact_support_polygon_airborne_and_unilateral_states():
     assert standing.contact_valid.tolist() == [1, 1, 1, 1]
     assert np.all(standing.contact_probability > 0.65)
     assert standing.support_polygon_valid.sum() >= 4
-    assert standing.provenance[_INDEX["left_heel"]] == int(
-        CanonicalProvenance.INFERRED
-    )
+    assert standing.provenance[_INDEX["left_heel"]] == int(CanonicalProvenance.INFERRED)
 
     estimator.reset()
     airborne_frame = _analytic_frame(time_ns=1_066_666_666)
@@ -273,6 +265,18 @@ def test_contact_support_polygon_airborne_and_unilateral_states():
     assert np.all(unilateral.contact_probability[:2] > 0.65)
     assert np.all(unilateral.contact_probability[2:] < 0.01)
     assert unilateral.support_polygon_valid.sum() == 4
+
+
+def test_missing_foot_dimensions_do_not_fabricate_heel_or_support_geometry():
+    profile = BodyProfile(height_m=1.75, mass_kg=70.0)
+    estimator = KinematicComEstimator(profile)
+    first = estimator.estimate(_analytic_frame(time_ns=1_000_000_000))
+    second = estimator.estimate(_analytic_frame(time_ns=1_033_000_000))
+
+    for frame in (first, second):
+        assert not frame.position_valid[_INDEX["left_heel"]]
+        assert not frame.position_valid[_INDEX["right_heel"]]
+        assert frame.support_polygon_valid.sum() == 0
 
 
 def test_external_contact_input_is_labeled_fused_estimated():
