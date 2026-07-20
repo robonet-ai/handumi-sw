@@ -8,6 +8,8 @@ remain available for later retargeting to any supported embodiment.
 
 Confirm that:
 
+- `handumi-preflight` passes for the exact device, camera, calibration, output,
+  and viewer profile used by the recording command.
 - Both gripper widths respond correctly from closed to fully open.
 - Both controllers report valid tracking.
 - Camera intrinsics and controller-camera mounts still match the hardware.

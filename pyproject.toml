@@ -73,6 +73,7 @@ handumi-calibrate-tcp-offset = "handumi.scripts.setup.calibrate_tcp_offset:main"
 handumi-calibrate-spatial = "handumi.scripts.setup.calibrate_spatial:main"
 handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
 handumi-quest-probe = "handumi.tracking.quest_probe:main"
+handumi-preflight = "handumi.scripts.preflight:main"
 
 [dependency-groups]
 dev = [
