@@ -166,7 +166,7 @@ def test_path_that_exists_but_is_now_serial_fails_camera_class_check():
     assert "not a camera" in check.summary
 
 
-def test_duplicate_camera_serial_and_busy_handle_are_both_actionable_failures():
+def test_duplicate_camera_serial_with_distinct_topology_warns_while_busy_fails():
     cameras = dict(_inventory().cameras)
     cameras["left_wrist"] = _camera("left_wrist", serial="duplicate")
     cameras["right_wrist"] = _camera(
@@ -177,9 +177,14 @@ def test_duplicate_camera_serial_and_busy_handle_are_both_actionable_failures():
 
     report = evaluate_preflight(_request(), _inventory(cameras=cameras))
 
-    codes = {check.code for check in report.failures}
-    assert "CAMERA-DUPLICATE-IDENTITY" in codes
-    assert "CAMERA-RIGHT_WRIST-ACCESS" in codes
+    duplicate = next(
+        check for check in report.checks if check.code == "CAMERA-DUPLICATE-IDENTITY"
+    )
+    assert duplicate.status is CheckStatus.WARN
+    assert "pinned by USB by-path" in duplicate.action
+    assert "CAMERA-RIGHT_WRIST-ACCESS" in {
+        check.code for check in report.failures
+    }
 
 
 def test_duplicate_usb_topology_fails_even_when_camera_serials_differ():

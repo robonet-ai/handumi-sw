@@ -473,16 +473,41 @@ def _camera_checks(
         )
     for identity, names in identities.items():
         if len(names) > 1:
+            assigned = [cameras[name] for name in names]
+            distinct_canonical = len(
+                {camera.canonical_path for camera in assigned if camera.canonical_path}
+            ) == len(assigned)
+            distinct_topology = len(
+                {camera.usb_path for camera in assigned if camera.usb_path}
+            ) == len(assigned)
+            safely_disambiguated = distinct_canonical and distinct_topology
             checks.append(
                 PreflightCheck(
                     "CAMERA-DUPLICATE-IDENTITY",
-                    CheckStatus.FAIL,
-                    f"Camera assignments {', '.join(names)} resolve to one physical identity.",
-                    "Assign distinct left/right/workspace camera serials and USB paths.",
+                    CheckStatus.WARN if safely_disambiguated else CheckStatus.FAIL,
+                    (
+                        f"Camera assignments {', '.join(names)} report the same "
+                        "vendor identity but resolve to distinct canonical devices "
+                        "and USB paths."
+                        if safely_disambiguated
+                        else f"Camera assignments {', '.join(names)} cannot be "
+                        "distinguished by identity and topology."
+                    ),
+                    (
+                        "Keep these roles pinned by USB by-path; reconnect one at a "
+                        "time before accepting any topology change."
+                        if safely_disambiguated
+                        else "Assign distinct left/right/workspace devices or remap "
+                        "them by unique USB topology."
+                    ),
                     {
                         "identity_token": hashlib.sha256(identity.encode()).hexdigest()[
                             :12
-                        ]
+                        ],
+                        "canonical_paths": {
+                            name: cameras[name].canonical_path for name in names
+                        },
+                        "usb_paths": {name: cameras[name].usb_path for name in names},
                     },
                 )
             )
