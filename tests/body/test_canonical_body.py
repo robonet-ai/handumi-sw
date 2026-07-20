@@ -36,6 +36,10 @@ def _meta_84_fixture():
         11: "FullBody_LeftArmLower",
         18: "FullBody_LeftHandPalm",
         19: "FullBody_LeftHandWrist",
+        33: "FullBody_LeftHandMiddleTip",
+        44: "FullBody_RightHandPalm",
+        45: "FullBody_RightHandWrist",
+        59: "FullBody_RightHandMiddleTip",
         70: "FullBody_LeftUpperLeg",
         71: "FullBody_LeftLowerLeg",
         73: "FullBody_LeftFootAnkle",
@@ -82,6 +86,14 @@ def test_84_joint_meta_maps_deterministically_without_filling_missing_heel():
     assert np.isnan(frame.joint_pose[by_name["left_heel"]]).all()
     assert frame.position_valid[by_name["left_heel"]] == 0
     assert frame.platform_root_position_valid[0] == 1
+    # The canonical distal hand endpoint is Meta's middle fingertip, not the
+    # palm. Fixture joint 33 has Unity position (0.33, 1.0, 0.0).
+    np.testing.assert_allclose(
+        frame.joint_pose[by_name["left_hand"], :3], [0.0, -0.33, 1.0]
+    )
+    np.testing.assert_allclose(
+        frame.joint_pose[by_name["right_hand"], :3], [0.0, -0.59, 1.0]
+    )
 
 
 def test_invalid_source_joint_stays_nan_even_when_source_pose_has_numbers():
@@ -92,6 +104,18 @@ def test_invalid_source_joint_stays_nan_even_when_source_pose_has_numbers():
     assert np.isnan(frame.joint_pose[0]).all()
     assert frame.position_valid[0] == 0
     assert frame.orientation_valid[0] == 0
+
+
+def test_invalid_meta_body_calibration_is_retained_raw_but_not_interpreted():
+    raw = _meta_84_fixture()
+    raw["body"]["calibrationState"] = "Invalid"
+    packet = parse_tracking_packet(raw, pc_monotonic_ns=123, receive_sequence=1)
+
+    frame = canonical_body_from_packet(packet)
+
+    assert frame.receive_time_ns[0] == 123
+    assert not frame.position_valid.any()
+    assert np.isnan(frame.joint_pose).all()
 
 
 def test_pico_public_24_joint_order_maps_to_canonical_and_leaves_heel_missing():

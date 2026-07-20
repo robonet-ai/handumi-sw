@@ -39,11 +39,15 @@ META_TO_CANONICAL: dict[str, str] = {
     "LeftArmUpper": "left_shoulder",
     "LeftArmLower": "left_elbow",
     "LeftHandWrist": "left_wrist",
-    "LeftHandPalm": "left_hand",
+    # Canonical ``*_hand`` is the distal hand endpoint used by the hand segment
+    # model. Meta FullBody provides the middle fingertip directly; mapping the
+    # palm here shortened a ~0.19 m hand to ~0.043 m. The raw palm remains in
+    # the native sidecar.
+    "LeftHandMiddleTip": "left_hand",
     "RightArmUpper": "right_shoulder",
     "RightArmLower": "right_elbow",
     "RightHandWrist": "right_wrist",
-    "RightHandPalm": "right_hand",
+    "RightHandMiddleTip": "right_hand",
     "LeftUpperLeg": "left_hip",
     "LeftLowerLeg": "left_knee",
     "LeftFootAnkle": "left_ankle",
@@ -205,6 +209,11 @@ def canonical_body_from_packet(
     quality = body.timestamp_quality if body is not None else timestamps.quality
     frame.clock_quality[0] = int(_CLOCK_QUALITY[quality])
     if body is None or not body.active:
+        return frame
+    if packet.source == "meta_quest" and body.calibration_state.lower() != "valid":
+        # Retain the native packet and state in the raw sidecar, but do not
+        # turn an explicitly invalid Meta skeleton into interpreted canonical,
+        # CoM, contact, or support outputs.
         return frame
 
     for joint in body.joints:

@@ -313,8 +313,14 @@ class HandumiWorldCalibration:
         ground_normal: npt.ArrayLike,
         initial_heading: npt.ArrayLike,
         source_frame: str = "source_right_handed",
+        qualified: bool = True,
     ) -> "HandumiWorldCalibration":
-        """Build ``handumi_world`` with X heading, Y left, and Z gravity-up."""
+        """Build ``handumi_world`` with X heading, Y left, and Z gravity-up.
+
+        ``qualified=False`` is for profile/platform-assisted calibration that
+        is geometrically usable but has not passed independent ground-truth
+        validation.
+        """
         origin = np.asarray(ground_origin, dtype=np.float64).reshape(3)
         z_axis = np.asarray(ground_normal, dtype=np.float64).reshape(3)
         z_norm = float(np.linalg.norm(z_axis))
@@ -340,7 +346,7 @@ class HandumiWorldCalibration:
             world_from_source,
             ground_plane=(0.0, 0.0, 1.0, 0.0),
             source_frame=source_frame,
-            qualified=True,
+            qualified=qualified,
         )
 
     def apply_position(self, position: npt.ArrayLike) -> np.ndarray:

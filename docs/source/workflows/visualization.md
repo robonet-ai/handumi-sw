@@ -33,7 +33,9 @@ recording gate opens, not while the recorder is waiting at the prompt.
 
 Body-enabled Meta recording freezes one common workspace transform for the
 controllers, TCPs, and canonical body so an accidental X-button press cannot
-move only the controllers. For accurate table/ground alignment, pass the
+move only the controllers. With a body profile, the required upright neutral
+dwell places the experimental ground at Rerun `z=0`; profile-constrained joints
+are amber because their positions are inferred. For table alignment, pass the
 session calibration produced by `handumi-calibrate-spatial`:
 
 ```bash
@@ -142,8 +144,10 @@ archetype, no pelvis is substituted for CoM, and no previous valid pose is
 carried forward. CoM trails insert a gap when CoM is invalid, so replay never
 connects across a dropout.
 
-The translucent ground mesh is constructed from the calibrated plane equation
-and supports tilted planes. `com_projection` is the orthogonal
+The translucent ground mesh is constructed from the calibrated plane equation.
+Profile-neutral calibration produces a horizontal `z=0` plane; explicit
+external/session calibrations may intentionally produce another plane.
+`com_projection` is the orthogonal
 **ground-projected CoM**, not center of pressure (CoP). `center_of_pressure` is
 displayed only when its explicit validity mask is true; without force/pressure
 input it remains absent.

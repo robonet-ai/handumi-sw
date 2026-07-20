@@ -35,6 +35,7 @@ class BodyProfile:
     mass_kg: float
     arm_span_m: float | None = None
     leg_length_m: float | None = None
+    hand_length_m: float | None = None
     foot_length_m: float | None = None
     foot_width_m: float | None = None
     shoulder_breadth_m: float | None = None
@@ -51,6 +52,7 @@ class BodyProfile:
         for name in (
             "arm_span_m",
             "leg_length_m",
+            "hand_length_m",
             "foot_length_m",
             "foot_width_m",
             "shoulder_breadth_m",

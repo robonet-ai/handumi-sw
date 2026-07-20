@@ -2,9 +2,16 @@ schema: handumi_body_profile_v1
 height_m: 1.75
 mass_kg: 70.0
 
-# Optional measured dimensions improve inferred heel/support geometry.
+# Optional measured dimensions constrain inferred geometry. Measure:
+# - arm span: middle fingertip to middle fingertip in a level T-pose
+# - leg length: floor to estimated hip-joint center while standing
+# - shoulder breadth: left to right acromion (shoulder landmark)
+# - hip breadth: estimated left to right hip-joint centers
 arm_span_m: null
 leg_length_m: null
+# Wrist crease to middle-finger tip. Measure the hand flat; do not copy a
+# platform estimate here if physical length is required.
+hand_length_m: null
 foot_length_m: null
 foot_width_m: null
 shoulder_breadth_m: null

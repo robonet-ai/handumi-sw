@@ -37,9 +37,12 @@ from handumi.body import (
     BodyProfile,
     CanonicalBodyFrame,
     KinematicComEstimator,
+    ProfileConstrainedSkeleton,
+    ProfileNeutralCalibration,
     canonical_body_features,
     canonical_body_from_packet,
     canonical_body_metadata,
+    estimate_profile_neutral_calibration,
 )
 from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
@@ -90,6 +93,7 @@ from handumi.synchronization import (
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
+from handumi.tracking.packet import TrackingPacket
 from handumi.tracking.pico import (
     START_BUTTON_CHOICES,
     PicoTrackingProvider,
@@ -293,6 +297,80 @@ def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | No
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid anthropometric table: {exc}") from exc
     return KinematicComEstimator(profile, table=table)
+
+
+def _capture_profile_neutral_calibration(
+    tracker: TrackingProvider,
+    profile: BodyProfile,
+    *,
+    duration_s: float,
+    stop_event: threading.Event,
+) -> tuple[ProfileNeutralCalibration, list[TrackingPacket]]:
+    """Capture a short upright pose without consuming the sidecar queue."""
+    latest_packet = getattr(tracker, "latest_packet", None)
+    if not callable(latest_packet):
+        raise SystemExit(
+            "Selected tracking backend cannot provide native body packets for "
+            "profile neutral calibration."
+        )
+    if duration_s <= 0:
+        raise SystemExit("--body-neutral-calibration-s must be greater than zero.")
+
+    log.info(
+        "Stand upright in a neutral or T-pose with both feet on the floor for %.1fs.",
+        duration_s,
+    )
+    source_frames: list[CanonicalBodyFrame] = []
+    hmd_poses: list[np.ndarray] = []
+    packets: list[TrackingPacket] = []
+    seen: set[tuple[int | None, int, int]] = set()
+    deadline = time.monotonic() + duration_s
+    while time.monotonic() < deadline and not stop_event.is_set():
+        packet = latest_packet()
+        sample = tracker.latest()
+        if packet is None or packet.body is None or not packet.body.active:
+            time.sleep(0.01)
+            continue
+        if (
+            tracker.device == "meta"
+            and packet.body.calibration_state.lower() != "valid"
+        ):
+            time.sleep(0.01)
+            continue
+        if not sample.hmd_tracked:
+            time.sleep(0.01)
+            continue
+        key = (
+            packet.sequence,
+            int(packet.body.source_time_ns),
+            int(packet.body.observation_sequence or -1),
+        )
+        if key in seen:
+            time.sleep(0.005)
+            continue
+        seen.add(key)
+        source_frames.append(canonical_body_from_packet(packet))
+        hmd_poses.append(np.asarray(sample.device_hmd_pose, dtype=np.float64).copy())
+        packets.append(packet)
+        time.sleep(0.005)
+
+    if stop_event.is_set():
+        raise SystemExit("Body neutral calibration interrupted.")
+    min_samples = max(15, min(60, int(round(duration_s * 10.0))))
+    try:
+        neutral = estimate_profile_neutral_calibration(
+            source_frames,
+            hmd_poses,
+            profile,
+            source_frame=f"{tracker.device}_right_handed_source",
+            min_samples=min_samples,
+        )
+    except ValueError as exc:
+        raise SystemExit(
+            f"Body neutral calibration failed: {exc}. Stand upright and retry; "
+            "do not record against an unverified floor."
+        ) from exc
+    return neutral, packets
 
 
 def _tuple_shape(feature: dict) -> dict:
@@ -506,6 +584,7 @@ def record_episode(
     sensor_loss_timeout_s: float = 1.0,
     tracking_sidecar: TrackingSidecarWriter | None = None,
     world_calibration: HandumiWorldCalibration | None = None,
+    profile_skeleton: ProfileConstrainedSkeleton | None = None,
     body_estimator: KinematicComEstimator | None = None,
     rerun: _RecordingRerun | None = None,
 ) -> tuple[int, str]:
@@ -609,6 +688,8 @@ def record_episode(
                 tracking_sidecar.nearest_packet(target_time_ns),
                 calibration=world_calibration,
             )
+            if profile_skeleton is not None:
+                body_frame = profile_skeleton.apply(body_frame)
             if body_estimator is not None:
                 body_frame = body_estimator.estimate(body_frame)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
@@ -832,6 +913,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--body-foot-length-m", type=float, default=None)
     p.add_argument("--body-foot-width-m", type=float, default=None)
     p.add_argument(
+        "--body-neutral-calibration-s",
+        type=float,
+        default=3.0,
+        help=(
+            "Upright neutral/T-pose dwell used to place the experimental body "
+            "floor at z=0 and fit supplied body dimensions (default: 3.0s)."
+        ),
+    )
+    p.add_argument(
         "--anthropometric-table",
         type=Path,
         default=None,
@@ -905,6 +995,11 @@ def main() -> None:
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid session calibration: {exc}") from exc
     body_estimator = build_body_estimator(args)
+    profile_skeleton = (
+        ProfileConstrainedSkeleton(body_estimator.profile)
+        if body_estimator is not None
+        else None
+    )
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
         left=IDENTITY_POSE7.astype(np.float32).copy(),
@@ -989,6 +1084,10 @@ def main() -> None:
         source_frame=f"{args.device}_right_handed_source",
         qualified=False,
     )
+    neutral_calibration_metadata: dict | None = None
+    tracking_workspace = (
+        "table" if spatial_session_metadata is not None else "hmd_recentered"
+    )
 
     stop_event = threading.Event()
 
@@ -1060,19 +1159,84 @@ def main() -> None:
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
+            if profile_skeleton is not None and not profile_skeleton.calibrated:
+                if spatial_session_metadata is None:
+                    if rerun is not None:
+                        rerun.set_status(
+                            "CALIBRATING",
+                            "Stand upright: fitting experimental body profile and floor",
+                        )
+                    neutral, neutral_packets = _capture_profile_neutral_calibration(
+                        tracker,
+                        body_estimator.profile,
+                        duration_s=args.body_neutral_calibration_s,
+                        stop_event=stop_event,
+                    )
+                    world_calibration = neutral.world
+                    neutral_frames = [
+                        canonical_body_from_packet(
+                            packet, calibration=world_calibration
+                        )
+                        for packet in neutral_packets
+                    ]
+                    neutral_calibration_metadata = neutral.metadata()
+                    set_workspace = getattr(
+                        tracker, "set_workspace_from_device_pose", None
+                    )
+                    if not callable(set_workspace):
+                        raise SystemExit(
+                            "Selected tracking backend cannot apply the calibrated body world."
+                        )
+                    world_pose = world_calibration.world_from_source
+                    set_workspace(
+                        np.concatenate(
+                            (world_pose.position, world_pose.quaternion)
+                        ).astype(np.float32),
+                        locked=True,
+                    )
+                    tracking_workspace = "profile_neutral_ground"
+                    log.info(
+                        "Experimental profile-assisted floor locked at source z=%.3f m; "
+                        "Rerun ground is z=0.",
+                        neutral.source_ground_height_m,
+                    )
+                else:
+                    alignment_sample = tracker.latest()
+                    world_calibration = _body_calibration_from_workspace(
+                        alignment_sample.workspace_from_device_pose,
+                        device=args.device,
+                        qualified=True,
+                    )
+                    # A table calibration owns the rigid frame. Capture only the
+                    # neutral geometry used by the profile-constrained skeleton.
+                    _, neutral_packets = _capture_profile_neutral_calibration(
+                        tracker,
+                        body_estimator.profile,
+                        duration_s=args.body_neutral_calibration_s,
+                        stop_event=stop_event,
+                    )
+                    neutral_frames = [
+                        canonical_body_from_packet(
+                            packet, calibration=world_calibration
+                        )
+                        for packet in neutral_packets
+                    ]
+                try:
+                    profile_skeleton.calibrate(neutral_frames)
+                except ValueError as exc:
+                    raise SystemExit(f"Body profile fitting failed: {exc}") from exc
             _discard_tracking_backlog(tracker)
             if body_estimator is not None:
-                alignment_sample = tracker.latest()
-                world_calibration = _body_calibration_from_workspace(
-                    alignment_sample.workspace_from_device_pose,
-                    device=args.device,
-                    qualified=spatial_session_metadata is not None,
-                )
+                if profile_skeleton is None or not profile_skeleton.calibrated:
+                    alignment_sample = tracker.latest()
+                    world_calibration = _body_calibration_from_workspace(
+                        alignment_sample.workspace_from_device_pose,
+                        device=args.device,
+                        qualified=spatial_session_metadata is not None,
+                    )
                 log.info(
-                    "Body/controller visualization locked to the %s workspace.",
-                    "calibrated table"
-                    if spatial_session_metadata is not None
-                    else "episode HMD-recentered",
+                    "Body/controller visualization locked to %s.",
+                    tracking_workspace,
                 )
                 body_estimator.reset()
             tracking_sidecar.start_episode(dataset.num_episodes)
@@ -1106,6 +1270,7 @@ def main() -> None:
                     sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                     tracking_sidecar=tracking_sidecar,
                     world_calibration=world_calibration,
+                    profile_skeleton=profile_skeleton,
                     body_estimator=body_estimator,
                     rerun=rerun,
                 )
@@ -1178,6 +1343,12 @@ def main() -> None:
                     "reason": "body_profile_not_supplied",
                 }
             )
+            if profile_skeleton is not None:
+                com_estimator_metadata["profile_constrained_skeleton"] = (
+                    profile_skeleton.metadata()
+                )
+            if neutral_calibration_metadata is not None:
+                body_metadata["neutral_calibration"] = neutral_calibration_metadata
             body_metadata["estimator_version"] = (
                 com_estimator_metadata["schema"]
                 if body_estimator is not None
@@ -1190,9 +1361,7 @@ def main() -> None:
                 {
                     "recording_device": args.device,
                     "tracking_schema": HANDUMI_TRACKING_SCHEMA,
-                    "tracking_workspace": (
-                        "table" if spatial_session_metadata is not None else "hmd_recentered"
-                    ),
+                    "tracking_workspace": tracking_workspace,
                     "state_semantics": HANDUMI_STATE_SEMANTICS,
                     "capture_schema": HANDUMI_CAPTURE_SCHEMA,
                     "sync_lag_s": args.sync_lag_s,
