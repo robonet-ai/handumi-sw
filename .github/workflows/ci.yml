@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Verify lock file
+        run: uv lock --check
+
+      - name: Install locked development environment
+        run: uv sync --locked --dev
+
+      - name: Run software tests
+        run: uv run --locked pytest -q
+
+      - name: Build source and wheel distributions
+        run: uv build
+
+      - name: Verify packaged body profile and typing marker
+        run: unzip -l dist/*.whl | grep -E 'handumi/(configs/body_profile.example.yaml|py.typed)'

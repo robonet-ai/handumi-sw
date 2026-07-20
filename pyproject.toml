@@ -1,7 +1,7 @@
 [project]
 name = "handumi"
 version = "0.1.0"
-description = "Robot-free bimanual demonstration recording and retargeting for HandUMI"
+description = "Research-preview bimanual demonstration recording and retargeting for HandUMI"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -18,13 +18,17 @@ dependencies = [
     "python-dotenv==1.2.2",
     "pyyaml>=6.0",
     "opencv-python>=4.10,<5",
+    # LeRobot imports these at runtime. Declare them directly so uv can pin
+    # their source to the official CPU-only index below.
+    "torch>=2.2,<3",
+    "torchvision>=0.17,<1",
     # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
     "jax>=0.4.0",
     "jaxlie>=1.0.0",
-    "jaxls @ git+https://github.com/brentyi/jaxls.git",
+    "jaxls @ git+https://github.com/brentyi/jaxls.git@f8f8dbb54b3e0c16e8bf014496462a4e675e9389",
     "yourdfpy",
-    "pyroki @ git+https://github.com/chungmin99/pyroki.git",
+    "pyroki @ git+https://github.com/chungmin99/pyroki.git@388e43e1fc0d0ee382968d3dd72970fd62a0450c",
     "matplotlib>=3.11.0",
     "scipy>=1.17.1",
 ]
@@ -36,7 +40,7 @@ Issues = "https://github.com/robonet-ai/handumi-sw/issues"
 
 [project.optional-dependencies]
 piper = [
-    "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git",
+    "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git@c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad",
 ]
 openarm = [
     "openarm_can @ git+https://github.com/enactic/openarm_can.git@1.2.9#subdirectory=python",
@@ -92,6 +96,7 @@ packages = ["src/handumi"]
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
 "assets/yam" = "handumi/assets/yam"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"
+"configs/body_profile.example.yaml" = "handumi/configs/body_profile.example.yaml"
 "configs/robots" = "handumi/configs/robots"
 "configs/calibration" = "handumi/configs/calibration"
 
@@ -102,11 +107,26 @@ include = [
     "configs",
     "docs",
     "README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
     "LICENSE",
 ]
 
 [tool.uv]
 no-build-isolation-package = ["xrobotoolkit-sdk"]
+
+# Recording, validation, and CI do not require CUDA-enabled PyTorch. Keeping
+# the default LeRobot transitive dependency on the official CPU index avoids
+# multi-gigabyte NVIDIA runtime downloads; GPU users can manage an accelerator
+# environment separately from this reproducible release lock.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.basedpyright]
 # "standard" catches real bugs (broken imports, missing attributes, type
