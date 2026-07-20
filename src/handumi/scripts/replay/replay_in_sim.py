@@ -44,7 +44,6 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 from handumi.robots.utils import pose_mul, quat_normalize
 
@@ -458,7 +457,9 @@ def _resolved_tcp_calibration(
     metadata_calibration = _metadata_tcp_calibration(source_info)
     if use_dataset:
         if metadata_calibration is None:
-            raise SystemExit("Dataset has no unapplied controller->TCP calibration snapshot.")
+            raise SystemExit(
+                "Dataset has no unapplied controller->TCP calibration snapshot."
+            )
         calibration, source = metadata_calibration
         identity = _metadata_tcp_identity(source_info)
         return TcpCalibrationSelection(
@@ -487,8 +488,7 @@ def _resolved_tcp_calibration(
         calibration = load_controller_tcp_calibration(configured_path)
         sha256 = controller_tcp_calibration_sha256(configured_path)
         source = (
-            f"configured {robot}/{controller_device}: {configured_path} "
-            f"sha256={sha256}"
+            f"configured {robot}/{controller_device}: {configured_path} sha256={sha256}"
         )
         return TcpCalibrationSelection(
             calibration=calibration,
@@ -533,9 +533,7 @@ def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
             np.asarray(value["quaternion"], dtype=np.float32).reshape(4)
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{name} must contain position[3] and quaternion[4]"
-        ) from exc
+        raise ValueError(f"{name} must contain position[3] and quaternion[4]") from exc
     return np.concatenate([position, quaternion]).astype(np.float32)
 
 
@@ -622,9 +620,13 @@ def _tcp_geometry_diagnostics(
     left = np.asarray(left_tcp_pose7, dtype=np.float32)
     right = np.asarray(right_tcp_pose7, dtype=np.float32)
     if left.ndim != 2 or right.ndim != 2 or left.shape != right.shape:
-        raise ValueError("left/right calibrated TCP trajectories must have equal 2-D shapes")
+        raise ValueError(
+            "left/right calibrated TCP trajectories must have equal 2-D shapes"
+        )
     if left.shape[1] < 3 or len(left) == 0:
-        raise ValueError("calibrated TCP trajectories must contain at least one position")
+        raise ValueError(
+            "calibrated TCP trajectories must contain at least one position"
+        )
     separation = np.linalg.norm(left[:, :3] - right[:, :3], axis=1)
     return {
         "offset_position_norm_m": np.asarray(
@@ -674,6 +676,11 @@ def _print_tcp_geometry_diagnostics(
 
 
 def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
+    from handumi.robots.kinematics import (
+        optimization_score_from_errors,
+        pose_error_arrays,
+    )
+
     runtime = load_embodiment(args.robot)
     states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
     source_metadata = handumi_metadata(source_info)
@@ -822,9 +829,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         )
     elif retarget_mode == "local-relative":
         world_map = (
-            VR_TO_ROBOT
-            if controller_device == "pico"
-            else np.eye(3, dtype=np.float32)
+            VR_TO_ROBOT if controller_device == "pico" else np.eye(3, dtype=np.float32)
         )
         left_adapter = local_frame_adapter(
             first_left_pose7,
@@ -1134,9 +1139,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             dtype=np.float32,
         ),
         "absolute_orientation": np.asarray([args.absolute_orientation]),
-        "initial_solve_iterations": np.asarray(
-            [initial_solve_count], dtype=np.int64
-        ),
+        "initial_solve_iterations": np.asarray([initial_solve_count], dtype=np.int64),
         "initial_max_position_error_m": np.asarray(
             [initial_max_position_error_m], dtype=np.float32
         ),
@@ -1173,7 +1176,9 @@ def save_rollout(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Pa
     return output
 
 
-def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
+def _render_task_scene(
+    server, args: argparse.Namespace, rollout: dict[str, np.ndarray]
+) -> None:
     if args.scene is None:
         return
     transforms = rollout["robot_from_table_pose7"]
@@ -1265,8 +1270,12 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     def draw(i: int) -> None:
         robot_view.update_cfg(rollout["qpos"][i])
         if not args.hide_trajectories:
-            target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
-            target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
+            target_left.position = tuple(
+                rollout["target_left_pose7_robot_world"][i, :3]
+            )
+            target_right.position = tuple(
+                rollout["target_right_pose7_robot_world"][i, :3]
+            )
             achieved_left.position = tuple(
                 rollout["achieved_left_pose7_robot_world"][i, :3]
             )

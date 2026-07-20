@@ -90,24 +90,18 @@ def load_openarm_settings(
         home_tolerance_rad=float(control.get("home_tolerance_rad", 0.05)),
         watchdog_timeout_s=float(control.get("watchdog_timeout_s", 0.15)),
         following_error_rad=float(control.get("following_error_rad", 0.35)),
-        gripper_closed_position_rad=float(
-            gripper.get("closed_position_rad", 0.0)
-        ),
+        gripper_closed_position_rad=float(gripper.get("closed_position_rad", 0.0)),
         gripper_open_position_rad=float(
             gripper.get("open_position_rad", -1.0471975511965976)
         ),
         left_gripper_closed_position_rad=calibrated_value(
             "left", "closed_position_rad"
         ),
-        left_gripper_open_position_rad=calibrated_value(
-            "left", "open_position_rad"
-        ),
+        left_gripper_open_position_rad=calibrated_value("left", "open_position_rad"),
         right_gripper_closed_position_rad=calibrated_value(
             "right", "closed_position_rad"
         ),
-        right_gripper_open_position_rad=calibrated_value(
-            "right", "open_position_rad"
-        ),
+        right_gripper_open_position_rad=calibrated_value("right", "open_position_rad"),
         kp=tuple(float(v) for v in gains.get("kp", DEFAULT_KP)),
         kd=tuple(float(v) for v in gains.get("kd", DEFAULT_KD)),
     )
@@ -119,7 +113,7 @@ def require_openarm_can() -> ModuleType:
     except ImportError as exc:
         raise RuntimeError(
             "OpenArm real support is optional. Install the official C++ library "
-            "and run `uv sync --extra openarm`."
+            "and run `uv sync --group openarm-source` from the source release."
         ) from exc
 
 
@@ -447,9 +441,7 @@ class OpenArmCanEnvironment:
         ports = {"left": self.settings.left_port, "right": self.settings.right_port}
         for side in self.active_sides:
             port = ports[side]
-            closed = getattr(
-                self.settings, f"{side}_gripper_closed_position_rad"
-            )
+            closed = getattr(self.settings, f"{side}_gripper_closed_position_rad")
             open_ = getattr(self.settings, f"{side}_gripper_open_position_rad")
             log.info("Connecting OpenArm %s on %s.", side, port)
             self.arms[side] = self.side_factory(
@@ -463,9 +455,7 @@ class OpenArmCanEnvironment:
                     else closed
                 ),
                 gripper_open_position_rad=(
-                    self.settings.gripper_open_position_rad
-                    if open_ is None
-                    else open_
+                    self.settings.gripper_open_position_rad if open_ is None else open_
                 ),
             )
 
@@ -510,8 +500,7 @@ class OpenArmCanEnvironment:
 
     def _split_q(self, q: np.ndarray, joint_names: list[str]) -> dict[str, np.ndarray]:
         return {
-            side: self._split_side_q(q, joint_names, side)
-            for side in self.active_sides
+            side: self._split_side_q(q, joint_names, side) for side in self.active_sides
         }
 
     @staticmethod

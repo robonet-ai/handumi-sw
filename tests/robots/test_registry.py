@@ -1,3 +1,6 @@
+import subprocess
+import sys
+
 import numpy as np
 
 from handumi.robots.registry import (
@@ -12,6 +15,30 @@ def test_robot_names_are_discovered_from_yaml_configs():
     assert {"axol", "openarmv1", "piper", "r1lite", "trlc_dk1", "yam"}.issubset(
         set(EMBODIMENT_NAMES)
     )
+
+
+def test_config_registry_import_does_not_require_source_only_ik_packages():
+    code = """
+import importlib.abc
+import sys
+
+class BlockIk(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname.split('.', 1)[0] in {'pyroki', 'jaxls'}:
+            raise ModuleNotFoundError(fullname)
+        return None
+
+sys.meta_path.insert(0, BlockIk())
+from handumi.robots.registry import load_embodiment, load_robot_config
+assert load_robot_config('piper').kind == 'piper'
+try:
+    load_embodiment('piper')
+except ImportError as exc:
+    assert 'uv sync --group ik-source' in str(exc)
+else:
+    raise AssertionError('source-only IK unexpectedly loaded')
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_openarm_uses_configured_arm_joint_names_not_left_prefix():
@@ -124,12 +151,8 @@ def test_axol_home_fk_is_symmetric_and_visual_meshes_load():
 def test_trlc_dk1_bimanual_layout_and_joint_mapping():
     runtime = load_embodiment("trlc_dk1")
 
-    assert runtime.arm_joint_names("left") == [
-        f"left_joint{i}" for i in range(1, 7)
-    ]
-    assert runtime.arm_joint_names("right") == [
-        f"right_joint{i}" for i in range(1, 7)
-    ]
+    assert runtime.arm_joint_names("left") == [f"left_joint{i}" for i in range(1, 7)]
+    assert runtime.arm_joint_names("right") == [f"right_joint{i}" for i in range(1, 7)]
     assert runtime.arm_joint_indices("left") == list(range(6))
     assert runtime.arm_joint_indices("right") == list(range(8, 14))
 
@@ -166,12 +189,8 @@ def test_trlc_dk1_gripper_mapping_avoids_visual_finger_overlap():
 def test_yam_bimanual_layout_and_forward_home():
     runtime = load_embodiment("yam")
 
-    assert runtime.arm_joint_names("left") == [
-        f"left_joint{i}" for i in range(1, 7)
-    ]
-    assert runtime.arm_joint_names("right") == [
-        f"right_joint{i}" for i in range(1, 7)
-    ]
+    assert runtime.arm_joint_names("left") == [f"left_joint{i}" for i in range(1, 7)]
+    assert runtime.arm_joint_names("right") == [f"right_joint{i}" for i in range(1, 7)]
     assert runtime.arm_joint_indices("left") == list(range(6))
     assert runtime.arm_joint_indices("right") == list(range(8, 14))
     assert runtime.config.replay_max_joint_delta == 0.35
@@ -286,4 +305,6 @@ def test_r1lite_manipulation_locks_torso_at_home():
         left_pose=(left_pose7[:3], left_pose7[3:7]),
         right_pose=(right_pose7[:3], right_pose7[3:7]),
     )
-    np.testing.assert_allclose(q_solved[locked_indices], runtime.home_q()[locked_indices])
+    np.testing.assert_allclose(
+        q_solved[locked_indices], runtime.home_q()[locked_indices]
+    )

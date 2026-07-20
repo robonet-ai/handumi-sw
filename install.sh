@@ -161,9 +161,11 @@ ensure_venv() {
 ensure_project_deps() {
   echo "==> Syncing project dependencies (update only if needed)"
   local extras=()
+  local groups=()
   [[ "$WITH_SIM" -eq 1 ]] && extras+=(--extra sim)
-  [[ -n "$ROBOT" ]] && extras+=(--extra "${ROBOT/openarmv1/openarm}")
-  UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync "${extras[@]}"
+  [[ "$SKIP_XRT" -eq 0 ]] && groups+=(--group pico-source)
+  [[ -n "$ROBOT" ]] && groups+=(--group "${ROBOT/openarmv1/openarm}-source")
+  UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync "${extras[@]}" "${groups[@]}"
 }
 
 ensure_openarm_system_deps() {
@@ -193,8 +195,7 @@ ensure_xrobotoolkit_python_package() {
   fi
 
   echo "==> Installing XRoboToolkit SDK (editable, no build isolation)"
-  # cmake and pybind11 are declared in pyproject.toml so uv sync already put
-  # them in the venv before we reach this point.
+  # cmake and pybind11 are in the pico-source group selected above.
   export CMAKE_PREFIX_PATH="$(python -m pybind11 --cmakedir)"
   uv pip install --no-build-isolation -e "$XROBO_DIR/"
 }

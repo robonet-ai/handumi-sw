@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -11,7 +12,9 @@ from handumi.retargeting.handumi_to_robot import (
     local_frame_adapter,
     local_relative_robot_target_pose7,
 )
-from handumi.robots.registry import RobotRuntime
+
+if TYPE_CHECKING:
+    from handumi.robots.registry import RobotRuntime
 
 SIDES: tuple[str, str] = ("left", "right")
 

@@ -886,82 +886,95 @@ name = "handumi"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "cmake" },
-    { name = "huggingface-hub" },
-    { name = "jax" },
-    { name = "jaxlie" },
-    { name = "jaxls" },
-    { name = "lerobot", extra = ["feetech"] },
-    { name = "matplotlib" },
+    { name = "feetech-servo-sdk" },
     { name = "numpy" },
     { name = "opencv-python" },
-    { name = "pybind11" },
-    { name = "pyroki" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
+    { name = "pandas", version = "3.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
+    { name = "pyarrow" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "rerun-sdk" },
     { name = "scipy" },
-    { name = "setuptools" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'emscripten' or sys_platform == 'linux' or sys_platform == 'win32'" },
-    { name = "torchvision", version = "0.25.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
-    { name = "torchvision", version = "0.25.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'emscripten' or sys_platform == 'linux' or sys_platform == 'win32'" },
-    { name = "yourdfpy" },
 ]
 
 [package.optional-dependencies]
 cuda = [
     { name = "jax", extra = ["cuda13"] },
 ]
-openarm = [
-    { name = "openarm-can" },
-]
-piper = [
-    { name = "piper-sdk" },
-]
 sim = [
     { name = "mujoco" },
     { name = "pyvista" },
     { name = "viser" },
+    { name = "yourdfpy" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
 ]
+ik-source = [
+    { name = "jaxls" },
+    { name = "pyroki" },
+]
+openarm-source = [
+    { name = "openarm-can" },
+]
+pico-source = [
+    { name = "cmake" },
+    { name = "pybind11" },
+    { name = "setuptools" },
+]
+piper-source = [
+    { name = "piper-sdk" },
+]
+recording-source = [
+    { name = "huggingface-hub" },
+    { name = "lerobot", extra = ["feetech"] },
+    { name = "torch", version = "2.10.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "torch", version = "2.10.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'emscripten' or sys_platform == 'linux' or sys_platform == 'win32'" },
+    { name = "torchvision", version = "0.25.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'emscripten' and sys_platform != 'linux' and sys_platform != 'win32'" },
+    { name = "torchvision", version = "0.25.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'emscripten' or sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "cmake", specifier = ">=3.29" },
-    { name = "huggingface-hub", specifier = ">=1.0.0,<2.0.0" },
-    { name = "jax", specifier = ">=0.4.0" },
+    { name = "feetech-servo-sdk", specifier = ">=1,<2" },
     { name = "jax", extras = ["cuda13"], marker = "extra == 'cuda'", specifier = ">=0.4.0" },
-    { name = "jaxlie", specifier = ">=1.0.0" },
-    { name = "jaxls", git = "https://github.com/brentyi/jaxls.git?rev=f8f8dbb54b3e0c16e8bf014496462a4e675e9389" },
-    { name = "lerobot", extras = ["feetech"], specifier = "==0.5.1" },
-    { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "mujoco", marker = "extra == 'sim'", specifier = ">=3.9.0" },
     { name = "numpy", specifier = ">=2.0" },
-    { name = "openarm-can", marker = "extra == 'openarm'", git = "https://github.com/enactic/openarm_can.git?subdirectory=python&rev=1.2.9" },
     { name = "opencv-python", specifier = ">=4.10,<5" },
-    { name = "piper-sdk", marker = "extra == 'piper'", git = "https://github.com/agilexrobotics/piper_sdk.git?rev=c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad" },
-    { name = "pybind11", specifier = ">=2.13" },
-    { name = "pyroki", git = "https://github.com/chungmin99/pyroki.git?rev=388e43e1fc0d0ee382968d3dd72970fd62a0450c" },
+    { name = "pandas", specifier = ">=2.2,<4" },
+    { name = "pyarrow", specifier = ">=18,<26" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "pyvista", marker = "extra == 'sim'", specifier = ">=0.43.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rerun-sdk", specifier = ">=0.24.0,<0.27.0" },
     { name = "scipy", specifier = ">=1.17.1" },
-    { name = "setuptools", specifier = ">=71" },
-    { name = "torch", specifier = ">=2.2,<3", index = "https://download.pytorch.org/whl/cpu" },
-    { name = "torchvision", specifier = ">=0.17,<1", index = "https://download.pytorch.org/whl/cpu" },
     { name = "viser", marker = "extra == 'sim'", specifier = ">=1.0.0" },
-    { name = "yourdfpy" },
+    { name = "yourdfpy", marker = "extra == 'sim'" },
 ]
-provides-extras = ["piper", "openarm", "sim", "cuda"]
+provides-extras = ["sim", "cuda"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0" }]
+ik-source = [
+    { name = "jaxls", git = "https://github.com/brentyi/jaxls.git?rev=f8f8dbb54b3e0c16e8bf014496462a4e675e9389" },
+    { name = "pyroki", git = "https://github.com/chungmin99/pyroki.git?rev=388e43e1fc0d0ee382968d3dd72970fd62a0450c" },
+]
+openarm-source = [{ name = "openarm-can", git = "https://github.com/enactic/openarm_can.git?subdirectory=python&rev=1.2.9" }]
+pico-source = [
+    { name = "cmake", specifier = ">=3.29" },
+    { name = "pybind11", specifier = ">=2.13" },
+    { name = "setuptools", specifier = ">=71" },
+]
+piper-source = [{ name = "piper-sdk", git = "https://github.com/agilexrobotics/piper_sdk.git?rev=c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad" }]
+recording-source = [
+    { name = "huggingface-hub", specifier = ">=1.0.0,<2.0.0" },
+    { name = "lerobot", extras = ["feetech"], specifier = "==0.5.1" },
+    { name = "torch", specifier = ">=2.2,<3", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torchvision", specifier = ">=0.17,<1", index = "https://download.pytorch.org/whl/cpu" },
+]
 
 [[package]]
 name = "hf-xet"

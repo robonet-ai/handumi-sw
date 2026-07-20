@@ -7,29 +7,14 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
-    "lerobot[feetech]==0.5.1",
-    "huggingface-hub>=1.0.0,<2.0.0",
     "rerun-sdk>=0.24.0,<0.27.0",
-    # Build tools for xrobotoolkit-sdk (CMake-based). Listed here so uv sync
-    # tracks them in the lockfile and they are available when building the SDK.
-    "cmake>=3.29",
-    "pybind11>=2.13",
-    "setuptools>=71",
     "python-dotenv==1.2.2",
     "pyyaml>=6.0",
     "opencv-python>=4.10,<5",
-    # LeRobot imports these at runtime. Declare them directly so uv can pin
-    # their source to the official CPU-only index below.
-    "torch>=2.2,<3",
-    "torchvision>=0.17,<1",
-    # Axol IK solver (src/handumi/robots/axol/solver.py)
     "numpy>=2.0",
-    "jax>=0.4.0",
-    "jaxlie>=1.0.0",
-    "jaxls @ git+https://github.com/brentyi/jaxls.git@f8f8dbb54b3e0c16e8bf014496462a4e675e9389",
-    "yourdfpy",
-    "pyroki @ git+https://github.com/chungmin99/pyroki.git@388e43e1fc0d0ee382968d3dd72970fd62a0450c",
-    "matplotlib>=3.11.0",
+    "pandas>=2.2,<4",
+    "pyarrow>=18,<26",
+    "feetech-servo-sdk>=1,<2",
     "scipy>=1.17.1",
 ]
 
@@ -39,16 +24,11 @@ Repository = "https://github.com/robonet-ai/handumi-sw"
 Issues = "https://github.com/robonet-ai/handumi-sw/issues"
 
 [project.optional-dependencies]
-piper = [
-    "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git@c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad",
-]
-openarm = [
-    "openarm_can @ git+https://github.com/enactic/openarm_can.git@1.2.9#subdirectory=python",
-]
 sim = [
     "viser>=1.0.0",
     "mujoco>=3.9.0",
     "pyvista>=0.43.0",
+    "yourdfpy",
 ]
 cuda = [
     "jax[cuda13]>=0.4.0",
@@ -78,6 +58,33 @@ handumi-preflight = "handumi.scripts.preflight:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+]
+ik-source = [
+    # PyRoki is not published on PyPI and its metadata declares an unpinned
+    # JAXLS URL. Keep both reviewed revisions in a source-only uv group so
+    # wheel metadata stays installable and free of direct references.
+    "jaxls @ git+https://github.com/brentyi/jaxls.git@f8f8dbb54b3e0c16e8bf014496462a4e675e9389",
+    "pyroki @ git+https://github.com/chungmin99/pyroki.git@388e43e1fc0d0ee382968d3dd72970fd62a0450c",
+]
+recording-source = [
+    # LeRobot currently requires PyTorch. uv's source policy below resolves it
+    # from the CPU-only index; wheel metadata cannot portably express that
+    # index, so recording remains a source-install group for this preview.
+    "lerobot[feetech]==0.5.1",
+    "huggingface-hub>=1.0.0,<2.0.0",
+    "torch>=2.2,<3",
+    "torchvision>=0.17,<1",
+]
+pico-source = [
+    "cmake>=3.29",
+    "pybind11>=2.13",
+    "setuptools>=71",
+]
+piper-source = [
+    "piper_sdk @ git+https://github.com/agilexrobotics/piper_sdk.git@c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad",
+]
+openarm-source = [
+    "openarm_can @ git+https://github.com/enactic/openarm_can.git@1.2.9#subdirectory=python",
 ]
 
 [build-system]
@@ -115,6 +122,7 @@ include = [
 ]
 
 [tool.uv]
+default-groups = ["dev", "ik-source", "recording-source"]
 no-build-isolation-package = ["xrobotoolkit-sdk"]
 
 # Recording, validation, and CI do not require CUDA-enabled PyTorch. Keeping

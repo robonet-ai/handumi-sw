@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import jax
 import jax.numpy as jnp
 import jax_dataclasses as jdc
@@ -12,18 +10,7 @@ import jaxls
 import numpy as np
 import pyroki as pk
 
-
-@dataclass(frozen=True)
-class KinematicsConfig:
-    """Position-dominant IK weights."""
-
-    pos_weight: float = 100.0
-    ori_weight: float = 15.0
-    rest_weight: float = 2.0
-    posture_weight: float = 0.0
-    manipulability_weight: float = 0.0
-    max_joint_delta: float | None = None
-    max_reach: float | None = None
+from handumi.robots.types import KinematicsConfig
 
 
 def limit_joint_delta(
@@ -241,7 +228,9 @@ def se3_to_pose7(transform: jaxlie.SE3) -> np.ndarray:
     return np.concatenate([translation, quat]).astype(np.float32)
 
 
-def rotation_error_deg(target_pose7: np.ndarray, achieved_pose7: np.ndarray) -> np.ndarray:
+def rotation_error_deg(
+    target_pose7: np.ndarray, achieved_pose7: np.ndarray
+) -> np.ndarray:
     """Shortest quaternion angular distance between pose7 arrays, in degrees."""
     target_quat = np.asarray(target_pose7, dtype=np.float32)[..., 3:7]
     achieved_quat = np.asarray(achieved_pose7, dtype=np.float32)[..., 3:7]
@@ -275,8 +264,12 @@ def pose_error_arrays(
         "right_pos_error_m": np.linalg.norm(
             target_right_pose7[:, :3] - achieved_right_pose7[:, :3], axis=1
         ).astype(np.float32),
-        "left_rot_error_deg": rotation_error_deg(target_left_pose7, achieved_left_pose7),
-        "right_rot_error_deg": rotation_error_deg(target_right_pose7, achieved_right_pose7),
+        "left_rot_error_deg": rotation_error_deg(
+            target_left_pose7, achieved_left_pose7
+        ),
+        "right_rot_error_deg": rotation_error_deg(
+            target_right_pose7, achieved_right_pose7
+        ),
     }
 
 
@@ -288,10 +281,7 @@ def optimization_score_from_errors(
 ) -> float:
     """Single scalar useful for comparing IK weight sweeps."""
     return float(
-        pos_mean_cm
-        + 0.35 * pos_max_cm
-        + 0.25 * rot_mean_deg
-        + 0.08 * rot_max_deg
+        pos_mean_cm + 0.35 * pos_max_cm + 0.25 * rot_mean_deg + 0.08 * rot_max_deg
     )
 
 
