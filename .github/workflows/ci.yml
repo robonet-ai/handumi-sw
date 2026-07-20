@@ -81,6 +81,20 @@ jobs:
             "/tmp/handumi-wheel-smoke/bin/$cli" --help >/dev/null
           done
 
+      - name: Generate dependency, license, vulnerability, and SBOM evidence
+        run: |
+          /tmp/handumi-wheel-smoke/bin/python \
+            bin/generate_dependency_report.py \
+            --output dist/dependency-licenses.json
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --path /tmp/handumi-wheel-smoke/lib/python3.12/site-packages \
+            --progress-spinner off --format json \
+            --output dist/pip-audit.json
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --path /tmp/handumi-wheel-smoke/lib/python3.12/site-packages \
+            --progress-spinner off --format cyclonedx-json \
+            --output dist/handumi-wheel.cdx.json
+
       - name: Generate artifact checksums
         run: sha256sum dist/* | tee dist/SHA256SUMS
 
@@ -92,4 +106,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/dependency-licenses.json
+            dist/pip-audit.json
+            dist/handumi-wheel.cdx.json
           if-no-files-found: error

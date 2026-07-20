@@ -97,11 +97,19 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/handumi"]
 
+# The tracked R1 Lite model has provenance but no redistribution grant. Keep
+# it out of every built distribution until the copyright owner supplies terms.
+[tool.hatch.build]
+exclude = [
+    "assets/r1lite/**",
+    "configs/robots/r1lite.yaml",
+    "configs/calibration/r1lite_table.yaml",
+]
+
 [tool.hatch.build.targets.wheel.force-include]
 "assets/axol" = "handumi/assets/axol"
 "assets/openarm" = "handumi/assets/openarm"
 "assets/piper" = "handumi/assets/piper"
-"assets/r1lite" = "handumi/assets/r1lite"
 "assets/trlc-dk1" = "handumi/assets/trlc-dk1"
 "assets/yam" = "handumi/assets/yam"
 "configs/rig.example.yaml" = "handumi/configs/rig.example.yaml"

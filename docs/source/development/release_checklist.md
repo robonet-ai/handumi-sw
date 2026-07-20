@@ -25,14 +25,18 @@ experimental estimates.
 
 ## Distribution boundary
 
-The current lock intentionally pins `jaxls`, `pyroki`, and optional
-`piper_sdk` to immutable Git commits. The
-[Python packaging specification](https://packaging.python.org/en/latest/specifications/version-specifiers/#direct-references)
-says public indexes should not accept distributions whose metadata contains
-direct references, so the current wheel is a source/GitHub-release artifact,
-not a PyPI-ready artifact.
-Move those dependencies to published releases or a clearly documented optional
-integration before enabling PyPI trusted publishing.
+The source lock intentionally pins `jaxls`, `pyroki`, and optional robot SDKs
+to immutable Git commits. Those integrations live in source-only uv dependency
+groups and are deliberately absent from wheel metadata. The bounded wheel can
+therefore be installed without Git or the heavyweight IK/recording stack, but
+it is still only a GitHub/source release candidate: the source-only integration
+policy, all runtime modes, asset rights, project ownership, and publication
+authority have not passed their release gates. Do not enable PyPI trusted
+publishing merely because the metadata has no direct references.
+
+The tracked R1 Lite URDF and meshes have no documented redistribution grant.
+The build configuration must exclude the model and its runtime configuration
+from wheel and sdist artifacts until legal review records compatible terms.
 
 The default uv environment resolves LeRobot's PyTorch dependencies from the
 official CPU-only index. This keeps recording/validation/CI installs bounded;

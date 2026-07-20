@@ -31,6 +31,11 @@ REQUIRED_COMMANDS = (
     "handumi-replay-in-sim",
     "handumi-preflight",
 )
+FORBIDDEN_MEMBERS = (
+    "handumi/assets/r1lite/",
+    "handumi/configs/robots/r1lite.yaml",
+    "handumi/configs/calibration/r1lite_table.yaml",
+)
 
 
 def verify(path: Path) -> None:
@@ -49,6 +54,19 @@ def verify(path: Path) -> None:
     missing = [name for name in REQUIRED_MEMBERS if name not in names]
     if missing:
         raise SystemExit(f"Wheel is missing required resources: {missing}")
+    forbidden_members = [
+        name
+        for name in names
+        if any(
+            name == forbidden or name.startswith(forbidden)
+            for forbidden in FORBIDDEN_MEMBERS
+        )
+    ]
+    if forbidden_members:
+        raise SystemExit(
+            "Wheel contains R1 Lite resources without redistribution terms: "
+            f"{sorted(forbidden_members)}"
+        )
     leaked = [
         requirement
         for requirement in requirements
