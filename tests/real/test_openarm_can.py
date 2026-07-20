@@ -165,7 +165,7 @@ def test_environment_streams_holds_and_disables_both_arms():
     environment = OpenArmCanEnvironment(settings, side_factory=FakeSide)
     runtime = load_embodiment("openarmv1")
     names = list(runtime.joint_names)
-    home = runtime.home_q("down")
+    home = runtime.home_q()
 
     environment.connect()
     environment.home(home, names)
@@ -187,7 +187,7 @@ def test_home_target_survives_stale_command_watchdog():
     FakeSide.instances.clear()
     runtime = load_embodiment("openarmv1")
     names = list(runtime.joint_names)
-    target = runtime.home_q("down")
+    target = runtime.home_q()
     target[names.index("openarm_right_joint4")] = 0.1
     environment = OpenArmCanEnvironment(
         OpenArmCanSettings(
@@ -225,13 +225,13 @@ def test_home_commands_closed_gripper_before_live_feetech_control():
 
     environment.connect()
     try:
-        environment.home(runtime.home_q("down"), list(runtime.joint_names))
+        environment.home(runtime.home_q(), list(runtime.joint_names))
         assert FakeSide.instances[0].gripper == 0.0
     finally:
         environment.close()
 
 
-def test_forward_open_home_spreads_shoulders_before_bending_elbows():
+def test_openarm_home_spreads_shoulders_before_bending_elbows():
     runtime = load_embodiment("openarmv1")
     names = list(runtime.joint_names)
     environment = OpenArmCanEnvironment(OpenArmCanSettings())
@@ -242,7 +242,7 @@ def test_forward_open_home_spreads_shoulders_before_bending_elbows():
     }
     environment.streamer.feedback.return_value = measured
 
-    environment.move_home(runtime.home_q("forward_open"), names)
+    environment.move_home(runtime.home_q(), names)
 
     calls = environment.streamer.set_targets.call_args_list
     clearance, clearance_grippers = calls[0].args

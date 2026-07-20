@@ -953,8 +953,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def _validate_args(args: argparse.Namespace) -> None:
     if args.manual_control and args.device != "pico":
         raise SystemExit("--manual-control currently requires --device pico.")
     if args.manual_control and args.start_button == "enter":
@@ -964,8 +963,6 @@ def main() -> None:
         raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
-    if args.session_calibration is not None and args.device != "meta":
-        raise SystemExit("--session-calibration currently requires --device meta.")
     if args.tracking_loss_timeout_s <= 0:
         raise SystemExit("--tracking-loss-timeout-s must be greater than zero.")
     for name in (
@@ -978,6 +975,11 @@ def main() -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
+
+
+def main() -> None:
+    args = parse_args()
+    _validate_args(args)
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds

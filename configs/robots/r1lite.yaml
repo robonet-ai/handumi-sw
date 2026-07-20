@@ -1,0 +1,76 @@
+kind: r1lite
+# Galaxea R1 Lite with parallel grippers. Vendor wheel_motor_joint{1,2,3} are
+# continuous without limits; pyroki needs velocity metadata, so r1lite.urdf adds
+# <limit lower="-3.1416" upper="3.1416" effort="100" velocity="20"/>.
+urdf: assets/r1lite/r1lite.urdf
+pkg_root: assets/r1lite
+
+arms:
+  left:
+    ee_link: left_gripper_link
+    joint_names:
+      - left_arm_joint1
+      - left_arm_joint2
+      - left_arm_joint3
+      - left_arm_joint4
+      - left_arm_joint5
+      - left_arm_joint6
+    gripper_joints:
+      - name: left_gripper_finger_joint1
+        closed: 0.0
+        open: 0.05
+      - name: left_gripper_finger_joint2
+        closed: 0.0
+        open: 0.05
+  right:
+    ee_link: right_gripper_link
+    joint_names:
+      - right_arm_joint1
+      - right_arm_joint2
+      - right_arm_joint3
+      - right_arm_joint4
+      - right_arm_joint5
+      - right_arm_joint6
+    gripper_joints:
+      - name: right_gripper_finger_joint1
+        closed: 0.0
+        open: 0.05
+      - name: right_gripper_finger_joint2
+        closed: 0.0
+        open: 0.05
+
+# URDF actuated joint order: steer/wheel pairs (6), torso (3), left arm (6), left
+# gripper (2), right arm (6), right gripper (2). Torso joint3 is bent forward for
+# table-height reach; arms start at zero with grippers fully open.
+home_q: [0,0,0,0,0,0, 0,0,0, 0,1.8,-1.7,0,0,0, 0.05,0.05, 0,1.8,-1.7,0,0,0, 0.05,0.05]
+gripper_max_width_m: 0.10
+
+ik_weights:
+  pos: 200
+  ori: 10
+  rest: 4.5
+  max_joint_delta: 0.12
+  max_reach: 0.65
+replay:
+  max_joint_delta: 0.3
+  gripper_retarget: physical-width
+
+# Keep the mobile base and torso at home_q during IK/replay; only arms move.
+
+# Replay leaves all actuated joints free by default, including the torso, so IK
+#can use the full mobile-manipulator workspace. Pass `--only-manipulation` to
+#`handumi-replay-in-sim` only when you want an arms-only replay: it applies
+#`manipulation.lock_joints` from `configs/robots/r1lite.yaml` (torso by
+#default) and keeps those joints at `home_q`.
+
+manipulation:
+  lock_joints:
+#    - steer_motor_joint1
+#    - steer_motor_joint2
+#    - steer_motor_joint3
+#    - wheel_motor_joint1
+#    - wheel_motor_joint2
+#    - wheel_motor_joint3
+   - torso_joint1
+   - torso_joint2
+   - torso_joint3

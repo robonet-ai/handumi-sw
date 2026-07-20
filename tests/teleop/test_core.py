@@ -10,7 +10,7 @@ def _pose(x, y, z):
 
 def test_anchor_at_current_source_starts_from_named_home():
     runtime = load_embodiment("openarmv1")
-    home = runtime.home_q("down")
+    home = runtime.home_q()
     controller = TeleopController(
         runtime,
         home_q=home,
@@ -40,11 +40,11 @@ def test_tracking_loss_clears_anchors_and_holds_feedback():
     runtime = load_embodiment("openarmv1")
     controller = TeleopController(
         runtime,
-        home_q=runtime.home_q("down"),
+        home_q=runtime.home_q(),
         enabled_sides=("right",),
         source_world_to_robot_world=np.eye(3, dtype=np.float32),
     )
-    held = runtime.home_q("down")
+    held = runtime.home_q()
     held[runtime.arm_joint_indices("right")[0]] = 0.2
 
     controller.tracking_lost(held)

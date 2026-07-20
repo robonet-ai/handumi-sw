@@ -124,11 +124,13 @@ class BimanualKinematicsSolver:
         arm_joint_indices: dict[str, list[int]] | None = None,
         home_q: np.ndarray,
         config: KinematicsConfig,
+        locked_joint_indices: tuple[int, ...] = (),
     ) -> None:
         self.robot = robot
         self.ee_indices = ee_indices
         self.home_q = np.asarray(home_q, dtype=np.float32)
         self.config = config
+        self.locked_joint_indices = tuple(locked_joint_indices)
         self.l_ee_idx, self.r_ee_idx = ee_indices
         arm_joint_indices = arm_joint_indices or {}
         self.left_indices = list(
@@ -152,6 +154,14 @@ class BimanualKinematicsSolver:
 
     def set_posture_pose(self, q: np.ndarray) -> None:
         self.home_q = np.asarray(q, dtype=np.float32)
+
+    def _with_locked_joints(self, q: np.ndarray) -> np.ndarray:
+        if not self.locked_joint_indices:
+            return np.asarray(q, dtype=np.float32)
+        out = np.asarray(q, dtype=np.float32).copy()
+        for index in self.locked_joint_indices:
+            out[index] = self.home_q[index]
+        return out
 
     def fk(self, q: np.ndarray) -> tuple[jaxlie.SE3, jaxlie.SE3]:
         fk = self.robot.forward_kinematics(jnp.asarray(q, dtype=jnp.float32))
@@ -179,9 +189,9 @@ class BimanualKinematicsSolver:
     ) -> np.ndarray:
         del left_elbow_pos, right_elbow_pos
         if left_pose is None and right_pose is None:
-            return np.asarray(q_current, dtype=np.float32)
+            return self._with_locked_joints(q_current)
 
-        q_prev = np.asarray(q_current, dtype=np.float32)
+        q_prev = self._with_locked_joints(q_current)
         left_fk, right_fk = self.fk(q_prev)
         tgt_pos = []
         tgt_wxyz = []
@@ -206,7 +216,8 @@ class BimanualKinematicsSolver:
             ori_weight=self.config.ori_weight,
             rest_weight=self.config.rest_weight,
         )
-        return limit_joint_delta(q_prev, q_target, self.config.max_joint_delta)
+        q_limited = limit_joint_delta(q_prev, q_target, self.config.max_joint_delta)
+        return self._with_locked_joints(q_limited)
 
 
 def _side_indices(robot: pk.Robot, side: str) -> list[int]:

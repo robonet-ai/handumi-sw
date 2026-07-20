@@ -557,8 +557,8 @@ class OpenArmCanEnvironment:
             # For the collision-safe forward pose, establish shoulder/elbow
             # lateral clearance while retaining the measured distal posture.
             # Only after both arms are spread do we bend J4 toward 90 degrees.
-            # ``down`` and ``arms_90`` remain exact diagnostic poses and skip
-            # this waypoint because their first three target joints are zero.
+            # Zero-style diagnostic targets skip this waypoint because their
+            # first three target joints are zero.
             if any(np.any(np.abs(target[:3]) > 1e-4) for target in targets.values()):
                 feedback = self.streamer.feedback()
                 clearance_targets = {

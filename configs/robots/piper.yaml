@@ -52,6 +52,7 @@ ik_weights:
   max_joint_delta: 0.06981317
   max_reach: 0.45
 real:
+  backend: piper_can
   command_rate_hz: 100
   max_joint_speed_deg_s: 180
   home_max_joint_speed_deg_s: 20

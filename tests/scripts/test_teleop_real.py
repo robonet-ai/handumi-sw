@@ -7,17 +7,13 @@ import numpy as np
 
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
-    _apply_inactive_side_policy,
-    _clear_enabled_anchors,
     _enabled_tracking_ok,
-    _has_enabled_anchors,
     _load_required_calibration,
     _validate_feetech_ports_exist,
     _validate_args,
     parse_args,
 )
 from handumi.scripts.teleop_sim import _start_sides
-from handumi.tracking.gestures import DoubleClapDetector
 
 
 class TeleopRealArgsTest(unittest.TestCase):
@@ -64,56 +60,10 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertEqual(_start_sides(anchors, ("left", "right")), ("right",))
 
-    def test_double_clap_starts_idle_arms_or_resets_active_arms(self):
-        detector = DoubleClapDetector(window_s=1.2)
-        detector.update(50.0, 50.0, 0.0)
-        self.assertFalse(detector.update(2.0, 50.0, 0.05))
-        detector.update(50.0, 50.0, 0.2)
-
-        triggered = detector.update(2.0, 50.0, 0.5)
-        enabled_sides = ("left", "right")
-        idle_anchors = {"left": None, "right": None}
-        active_anchors = {"left": {"source": object()}, "right": None}
-        start_sides = (
-            enabled_sides
-            if triggered and not _has_enabled_anchors(idle_anchors, enabled_sides)
-            else ()
-        )
-
-        self.assertEqual(start_sides, enabled_sides)
-        self.assertTrue(_has_enabled_anchors(active_anchors, enabled_sides))
-        _clear_enabled_anchors(active_anchors, enabled_sides)
-        self.assertFalse(_has_enabled_anchors(active_anchors, enabled_sides))
-
-    def test_tracking_loss_policy_clears_enabled_anchors(self):
-        anchors = {"left": {"source": object()}, "right": {"source": object()}}
-
+    def test_tracking_loss_policy_requires_all_enabled_sides(self):
         self.assertFalse(
             _enabled_tracking_ok({"left": True, "right": False}, ("left", "right"))
         )
-        _clear_enabled_anchors(anchors, ("left", "right"))
-
-        self.assertIsNone(anchors["left"])
-        self.assertIsNone(anchors["right"])
-
-    def test_tracking_recovery_holds_command_until_reanchored(self):
-        previous_q = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
-        solved_q = np.zeros(4, dtype=np.float32)
-        home_q = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float32)
-        anchors = {"left": None, "right": None}
-        side_indices = {"left": [0, 1], "right": [2, 3]}
-
-        _apply_inactive_side_policy(
-            solved_q,
-            previous_q,
-            home_q,
-            anchors,
-            side_indices,
-            {"left"},
-        )
-
-        np.testing.assert_array_equal(solved_q[:2], previous_q[:2])
-        np.testing.assert_array_equal(solved_q[2:], home_q[2:])
 
     def test_single_side_mode_only_requires_that_side_tracked(self):
         self.assertTrue(_enabled_tracking_ok({"left": True, "right": False}, ("left",)))

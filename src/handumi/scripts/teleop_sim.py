@@ -107,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--home-pose",
         default=None,
-        help="Named safe pose from the robot YAML (OpenArm: forward_open, arms_90, down).",
+        help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help="Viser port.")
@@ -347,19 +347,24 @@ def _start_sides(
     return tuple(side for side in enabled_sides if anchors[side] is None)
 
 
-def _has_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> bool:
-    return any(anchors[side] is not None for side in enabled_sides)
+def _resolve_camera_usage(args: argparse.Namespace) -> None:
+    """Cameras only ever appear in Rerun, so tie their lifecycle to it.
 
-
-def _clear_enabled_anchors(
-    anchors: dict[str, dict[str, np.ndarray] | None],
-    enabled_sides: tuple[str, ...],
-) -> None:
-    for side in enabled_sides:
-        anchors[side] = None
+    Without Rerun, connecting cameras just occupies devices for nothing:
+    disable them automatically. Camera-selection flags with --no-rerun are
+    almost certainly a mistake, so fail loudly instead of silently ignoring
+    them.
+    """
+    if not args.no_rerun:
+        return
+    if args.context_camera or args.cam_ids is not None:
+        raise SystemExit(
+            "Cameras are only shown in Rerun. Remove --no-rerun, or drop "
+            "--context-camera/--workspace-camera and --cam-ids."
+        )
+    if not args.skip_cameras:
+        log.info("Rerun disabled; skipping cameras (they are only shown in Rerun).")
+        args.skip_cameras = True
 
 
 def _load_calibration(args: argparse.Namespace):
@@ -384,11 +389,6 @@ def _load_calibration(args: argparse.Namespace):
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-
-
-def _side_joint_indices(runtime) -> dict[str, list[int]]:
-    """Actuated-joint indices per configured logical side."""
-    return {side: runtime.arm_joint_indices(side) for side in ("left", "right")}
 
 
 def _sample_state(sample, widths=None) -> np.ndarray:
@@ -457,6 +457,7 @@ def main() -> None:
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
 
+    _resolve_camera_usage(args)
     calibration = _load_calibration(args)
     # Keep controller buttons from changing the tracking workspace during sim
     # teleop. Gripper double-clap and optional Space are the only start inputs.

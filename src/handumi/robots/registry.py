@@ -74,6 +74,7 @@ class RobotRealConfig:
     be commanded once the local rig has supplied the transport.
     """
 
+    backend: str | None = None
     command_rate_hz: float = 100.0
     max_joint_speed_deg_s: float = 180.0
     home_max_joint_speed_deg_s: float = 20.0
@@ -105,6 +106,7 @@ class RobotConfig:
     handumi_controller_mount: str | None
     real: RobotRealConfig
     real_options: dict[str, Any]
+    manipulation_lock_joints: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,7 @@ class RobotRuntime:
     # Per side: resolved finger joints. The joint value for a given HandUMI
     # opening is interpolated from ``closed_value`` to ``open_value``.
     finger_joints: dict[str, tuple[GripperJointRuntime, ...]] = None  # type: ignore[assignment]
+    manipulation_lock_indices: tuple[int, ...] = ()
 
     @property
     def ee_indices(self) -> tuple[int, int]:
@@ -283,7 +286,7 @@ def load_robot_config(name: str) -> RobotConfig:
     pkg_root = _resolve_path(data["pkg_root"])
     mjcf = _resolve_path(data["mjcf"]) if data.get("mjcf") else None
     home_q = np.asarray(data.get("home_q") or [], dtype=np.float32)
-    default_home_pose = str(data.get("default_home_pose") or "default")
+    default_home_pose = str(data.get("default_home_pose") or "home_q")
     raw_home_poses = data.get("home_poses") or {}
     home_poses = {
         str(pose_name): np.asarray(values, dtype=np.float32)
@@ -302,6 +305,10 @@ def load_robot_config(name: str) -> RobotConfig:
         for device, value in (data.get("controller_tcp_calibrations") or {}).items()
     }
     handumi_tool = data.get("handumi_tool") or {}
+    manipulation = data.get("manipulation") or {}
+    manipulation_lock_joints = tuple(
+        str(name) for name in (manipulation.get("lock_joints") or ())
+    )
     return RobotConfig(
         kind=str(data.get("kind") or name),
         urdf=urdf,
@@ -354,6 +361,7 @@ def load_robot_config(name: str) -> RobotConfig:
         ),
         replay_gripper_mode=replay_gripper_mode,
         real=RobotRealConfig(
+            backend=(None if real.get("backend") is None else str(real["backend"])),
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),
             max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),
             home_max_joint_speed_deg_s=float(
@@ -365,6 +373,7 @@ def load_robot_config(name: str) -> RobotConfig:
             gripper_effort=int(real.get("gripper_effort", 1000)),
         ),
         real_options={str(key): value for key, value in real.items()},
+        manipulation_lock_joints=manipulation_lock_joints,
     )
 
 
@@ -380,6 +389,9 @@ def load_embodiment(name: str) -> RobotRuntime:
     arms = _resolve_arms(name, cfg, robot)
     ee_indices = (arms["left"].ee_index, arms["right"].ee_index)
     arm_joint_indices = {side: list(arms[side].joint_indices) for side in SIDES}
+    locked_joint_indices = _resolve_lock_joint_indices(
+        name, cfg.manipulation_lock_joints, robot
+    )
     home_q = cfg.home_q
     if home_q.size == 0:
         home_q = np.zeros(robot.joints.num_actuated_joints, dtype=np.float32)
@@ -396,13 +408,22 @@ def load_embodiment(name: str) -> RobotRuntime:
             )
 
     class _Solver(BimanualKinematicsSolver):
-        def __init__(self, config: KinematicsConfig | None = None) -> None:
+        def __init__(
+            self,
+            config: KinematicsConfig | None = None,
+            locked_joint_indices: tuple[int, ...] | None = None,
+        ) -> None:
             super().__init__(
                 robot=robot,
                 ee_indices=ee_indices,
                 arm_joint_indices=arm_joint_indices,
                 home_q=home_q,
                 config=config or cfg.ik_weights,
+                locked_joint_indices=(
+                    locked_joint_indices
+                    if locked_joint_indices is not None
+                    else ()
+                ),
             )
 
     command_size = max(len(arms[side].joint_names) for side in SIDES)
@@ -417,6 +438,7 @@ def load_embodiment(name: str) -> RobotRuntime:
         command_size=command_size,
         default_port=8002 if name == "axol" else 8003,
         finger_joints=finger_joints,
+        manipulation_lock_indices=locked_joint_indices,
     )
 
 
@@ -492,6 +514,23 @@ def _parse_gripper_joints(value: Any) -> tuple[GripperJointConfig, ...]:
             )
         )
     return tuple(joints)
+
+
+def _resolve_lock_joint_indices(
+    name: str,
+    joint_names: tuple[str, ...],
+    robot: pk.Robot,
+) -> tuple[int, ...]:
+    if not joint_names:
+        return ()
+    actuated_names = list(robot.joints.actuated_names)
+    missing = [joint for joint in joint_names if joint not in actuated_names]
+    if missing:
+        raise ValueError(
+            f"{name}: manipulation.lock_joints not in URDF actuated joints: "
+            f"{missing}"
+        )
+    return tuple(actuated_names.index(joint) for joint in joint_names)
 
 
 def _resolve_arms(
