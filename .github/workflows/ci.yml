@@ -52,7 +52,7 @@ jobs:
 
       - name: Check Python compilation and patch whitespace
         run: |
-          python -m compileall -q src tests
+          uv run --locked python -m compileall -q src tests
           git diff --check
 
       - name: Run software tests
@@ -66,20 +66,22 @@ jobs:
 
       - name: Build strict documentation
         run: |
-          uv pip install -r docs/requirements.txt
-          sphinx-build -W --keep-going -b html docs/source /tmp/handumi-docs
+          uv run --locked --with-requirements docs/requirements.txt \
+            sphinx-build -W --keep-going -b html \
+            docs/source /tmp/handumi-docs
 
       - name: Export headless Rerun fixtures
         run: |
-          python bin/generate_ux001_golden.py /tmp/handumi-body.rrd
-          python bin/generate_ux001_golden.py \
+          uv run --locked python \
+            bin/generate_ux001_golden.py /tmp/handumi-body.rrd
+          uv run --locked python bin/generate_ux001_golden.py \
             /tmp/handumi-controller-only.rrd --controller-only
 
       - name: Build source and wheel distributions
         run: uv build
 
       - name: Verify bounded wheel metadata and resources
-        run: python bin/verify_release_wheel.py dist/*.whl
+        run: uv run --locked python bin/verify_release_wheel.py dist/*.whl
 
       - name: Smoke test isolated installed wheel
         run: |
