@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import numpy as np
 import yaml
 
 from handumi.body.com import BodyProfile
@@ -405,12 +406,35 @@ def _collect_cameras(
                     / (ordered[-1].capture_time_ns - ordered[0].capture_time_ns)
                 )
             shape = ordered[-1].image.shape if ordered else ()
+            latest_image = ordered[-1].image if ordered else None
+            first_image = ordered[0].image if ordered else None
+            luminance_mean = (
+                float(np.mean(latest_image)) if latest_image is not None else None
+            )
+            luminance_std = (
+                float(np.std(latest_image)) if latest_image is not None else None
+            )
+            frame_delta_mean = (
+                float(
+                    np.mean(
+                        np.abs(
+                            latest_image.astype(np.int16)
+                            - first_image.astype(np.int16)
+                        )
+                    )
+                )
+                if latest_image is not None and first_image is not None
+                else None
+            )
             probes[name] = replace(
                 probe,
                 frame_count=len(ordered),
                 width=int(shape[1]) if len(shape) >= 2 else None,
                 height=int(shape[0]) if len(shape) >= 2 else None,
                 fps=fps,
+                luminance_mean=luminance_mean,
+                luminance_std=luminance_std,
+                frame_delta_mean=frame_delta_mean,
             )
         except Exception as exc:  # noqa: BLE001 - diagnostic boundary.
             probes[name] = replace(probe, error=f"{type(exc).__name__}: {exc}")

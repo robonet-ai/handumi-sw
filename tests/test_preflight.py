@@ -32,6 +32,9 @@ def _camera(name: str, *, serial: str | None = None, **overrides) -> CameraProbe
         "width": 640,
         "height": 480,
         "fps": 30.0,
+        "luminance_mean": 64.0,
+        "luminance_std": 20.0,
+        "frame_delta_mean": 1.0,
     }
     values.update(overrides)
     return CameraProbe(**values)
@@ -195,6 +198,28 @@ def test_duplicate_usb_topology_fails_even_when_camera_serials_differ():
     report = evaluate_preflight(_request(), _inventory(cameras=cameras))
 
     assert "CAMERA-USB-TOPOLOGY" in {check.code for check in report.failures}
+
+
+def test_black_camera_frames_fail_content_even_when_mode_and_fps_pass():
+    cameras = dict(_inventory().cameras)
+    cameras["workspace"] = _camera(
+        "workspace",
+        luminance_mean=0.0,
+        luminance_std=0.0,
+        frame_delta_mean=0.0,
+    )
+
+    report = evaluate_preflight(_request(), _inventory(cameras=cameras))
+
+    content = next(
+        check for check in report.checks if check.code == "CAMERA-WORKSPACE-CONTENT"
+    )
+    stream = next(
+        check for check in report.checks if check.code == "CAMERA-WORKSPACE-STREAM"
+    )
+    assert content.status is CheckStatus.FAIL
+    assert stream.status is CheckStatus.PASS
+    assert "lens cover" in content.action
 
 
 def test_partial_hardware_and_wrong_feetech_class_fail_closed():

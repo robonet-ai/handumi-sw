@@ -74,6 +74,9 @@ class CameraProbe(DeviceProbe):
     width: int | None = None
     height: int | None = None
     fps: float | None = None
+    luminance_mean: float | None = None
+    luminance_std: float | None = None
+    frame_delta_mean: float | None = None
 
 
 @dataclass(frozen=True)
@@ -469,6 +472,33 @@ def _camera_checks(
                 f"Verify {request.camera_width}x{request.camera_height} at {request.camera_fps} FPS and USB bandwidth."
                 if not mode_ok
                 else "",
+            )
+        )
+        content_ok = (
+            camera.luminance_mean is not None
+            and camera.luminance_std is not None
+            and (camera.luminance_mean >= 2.0 or camera.luminance_std >= 2.0)
+        )
+        checks.append(
+            PreflightCheck(
+                f"CAMERA-{name.upper()}-CONTENT",
+                CheckStatus.PASS if content_ok else CheckStatus.FAIL,
+                (
+                    f"Camera {name} produced non-black image content."
+                    if content_ok
+                    else f"Camera {name} produced only black or unusable frames."
+                ),
+                (
+                    "Remove a lens cover, provide light, check exposure, and verify "
+                    "the camera is aimed at the intended workspace."
+                    if not content_ok
+                    else ""
+                ),
+                {
+                    "luminance_mean": camera.luminance_mean,
+                    "luminance_std": camera.luminance_std,
+                    "frame_delta_mean": camera.frame_delta_mean,
+                },
             )
         )
     for identity, names in identities.items():
