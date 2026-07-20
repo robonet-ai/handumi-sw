@@ -57,7 +57,7 @@ class MetaQuestConfigTest(unittest.TestCase):
             path.write_text(
                 "meta_quest:\n"
                 "  connection:\n"
-                "    quest_ip: 192.168.1.42\n"
+                "    quest_ip: 192.0.2.2\n"
                 "    tcp_port: 60000\n"
                 "    sync_port: 41000\n"
                 "  health:\n"
@@ -66,7 +66,7 @@ class MetaQuestConfigTest(unittest.TestCase):
             )
             config = MetaQuestConfig.from_yaml(path)
 
-        self.assertEqual(config.quest_ip, "192.168.1.42")
+        self.assertEqual(config.quest_ip, "192.0.2.2")
         self.assertEqual(config.tcp_port, 60000)
         self.assertEqual(config.sync_port, 41000)
         self.assertEqual(config.frame_stale_timeout_s, 0.5)

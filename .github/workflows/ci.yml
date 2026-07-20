@@ -20,6 +20,23 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Scan complete Git history for secrets
+        run: |
+          mkdir -p /tmp/handumi-gitleaks dist
+          curl --proto '=https' --tlsv1.2 -fsSLo \
+            /tmp/handumi-gitleaks/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          printf '%s  %s\n' \
+            551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb \
+            /tmp/handumi-gitleaks/gitleaks.tar.gz | sha256sum --check
+          tar -xzf /tmp/handumi-gitleaks/gitleaks.tar.gz \
+            -C /tmp/handumi-gitleaks gitleaks
+          /tmp/handumi-gitleaks/gitleaks git --redact \
+            --report-format json --report-path dist/gitleaks.json \
+            --log-opts=--all
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -109,4 +126,5 @@ jobs:
             dist/dependency-licenses.json
             dist/pip-audit.json
             dist/handumi-wheel.cdx.json
+            dist/gitleaks.json
           if-no-files-found: error

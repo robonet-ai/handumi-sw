@@ -21,7 +21,7 @@ Usage
 ::
 
     handumi-print-controller-pose --device meta
-    handumi-print-controller-pose --device meta --quest-ip 192.168.1.42
+    handumi-print-controller-pose --device meta --quest-ip 192.0.2.2
     handumi-print-controller-pose --device pico --pico-mode mandos
 """
 
