@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: >-
+  If you use this research-preview software, cite this repository and the exact
+  commit. A versioned archival citation will be added only after an authorized
+  release is deposited.
+title: HandUMI software
+type: software
+authors:
+  - name: HandUMI contributors
+repository-code: https://github.com/robonet-ai/handumi-sw
+url: https://github.com/BrikHMP18/HandUMI
+license: Apache-2.0
+version: 0.1.0

@@ -1,0 +1,28 @@
+HandUMI
+Copyright 2026 BrikHMP18 and HandUMI contributors
+
+This product includes software derived from yubi-sw, Copyright 2026 AI Robot
+Association, licensed under Apache-2.0. The complete license is in LICENSE.
+
+Bundled robot descriptions and meshes have separate provenance and terms:
+
+- Axol and Piper assets: Copyright 2026 Almond AI, Inc. and Copyright 2024
+  RosenYin, licensed under MIT. The notice and terms are reproduced in LICENSE.
+- OpenArm assets: Copyright 2025 Enactic, Inc., licensed under Apache-2.0. See
+  assets/openarm/README.md and assets/openarm/LICENSE.openarm.
+- TRLC-DK1 assets: Copyright 2025 The Robot Learning Company UG
+  (haftungsbeschränkt), licensed under Apache-2.0 with upstream third-party
+  notices. See assets/trlc-dk1/README.md and
+  assets/trlc-dk1/LICENSE.trlc-dk1.
+- YAM assets: Copyright I2RT Robotics, licensed under MIT. See
+  assets/yam/README.md and assets/yam/LICENSE.i2rt.
+
+The tracked Galaxea R1 Lite files have provenance but no documented
+redistribution grant. HandUMI's wheel and sdist configuration excludes those
+files and their runtime configuration. Do not redistribute them from a source
+checkout until the copyright owner supplies compatible terms and the release
+owner records approval.
+
+Names and trademarks remain the property of their respective owners. This
+NOTICE is an attribution inventory and does not expand any license grant or
+constitute legal approval of a release.

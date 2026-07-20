@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security disclosure
+    url: https://github.com/robonet-ai/handumi-sw/security/advisories/new
+    about: Report vulnerabilities, credential exposure, privacy leaks, or unsafe command paths privately.

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Research-preview bimanual demonstration recording and retargeting for HandUMI"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "rerun-sdk>=0.24.0,<0.27.0",
@@ -126,7 +126,12 @@ include = [
     "docs",
     "README.md",
     "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "CHANGELOG.md",
+    "CITATION.cff",
+    "NOTICE",
     "SECURITY.md",
+    "SUPPORT.md",
     "LICENSE",
 ]
 

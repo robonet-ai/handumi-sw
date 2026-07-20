@@ -54,6 +54,8 @@ def verify(path: Path) -> None:
     missing = [name for name in REQUIRED_MEMBERS if name not in names]
     if missing:
         raise SystemExit(f"Wheel is missing required resources: {missing}")
+    if not any(name.endswith(".dist-info/licenses/NOTICE") for name in names):
+        raise SystemExit("Wheel is missing the release NOTICE")
     forbidden_members = [
         name
         for name in names
