@@ -35,6 +35,7 @@ from handumi.calibration.spatial import (
     solve_table_device,
     write_yaml,
 )
+from handumi.cameras.base import CameraSample
 from handumi.cameras.opencv import OpenCVCameraDevice
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
@@ -52,6 +53,7 @@ MIN_CORNERS = 12
 MAX_SYNC_ERROR_MS = 20.0
 PICO_MAX_SYNC_ERROR_MS = 80.0
 AUTO_CAPTURE_INTERVAL_S = 2.0
+CAMERA_STALE_TIMEOUT_S = 1.0
 MIN_POSE_ROTATION_DEG = 8.0
 STABLE_HOLD_S = 0.25
 STABLE_TRANSLATION_M = 0.010
@@ -201,6 +203,22 @@ def _controller_is_stable(pose: np.ndarray, reference: np.ndarray) -> bool:
     )
 
 
+def _assert_fresh_camera_sample(
+    sample: CameraSample,
+    *,
+    now_ns: int | None = None,
+    timeout_s: float = CAMERA_STALE_TIMEOUT_S,
+) -> None:
+    """Stop calibration instead of reusing a frame after a camera disconnect."""
+    current_ns = time.monotonic_ns() if now_ns is None else now_ns
+    age_s = max(0.0, (current_ns - sample.capture_time_ns) / 1e9)
+    if age_s > timeout_s:
+        raise SystemExit(
+            f"Camera stream stalled: latest frame is {age_s:.2f}s old. "
+            "Reconnect the camera and restart calibration; no calibration was saved."
+        )
+
+
 def _capture(
     *,
     camera: OpenCVCameraDevice,
@@ -225,6 +243,7 @@ def _capture(
     try:
         while len(detections) < requested_views:
             sample = camera.sample_at()
+            _assert_fresh_camera_sample(sample)
             detection = detect_charuco(sample.image, board, min_corners=MIN_CORNERS)
             pair = None if pair_at is None else pair_at(sample.capture_time_ns)
             sync_ms = None if pair is None else pair[1]
