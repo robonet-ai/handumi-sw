@@ -113,6 +113,7 @@ packages = ["src/handumi"]
 include = [
     "src/handumi",
     "assets",
+    "bin",
     "configs",
     "docs",
     "README.md",

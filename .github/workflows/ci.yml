@@ -33,11 +33,63 @@ jobs:
       - name: Install locked development environment
         run: uv sync --locked --dev
 
+      - name: Check Python compilation and patch whitespace
+        run: |
+          python -m compileall -q src tests
+          git diff --check
+
       - name: Run software tests
         run: uv run --locked pytest -q
+
+      - name: Run critical recording and body suites
+        run: |
+          uv run --locked pytest -q \
+            tests/body tests/dataset/test_tracking_sidecar.py \
+            tests/scripts/test_record.py tests/teleop/test_recording_viewer.py
+
+      - name: Build strict documentation
+        run: |
+          uv pip install -r docs/requirements.txt
+          sphinx-build -W --keep-going -b html docs/source /tmp/handumi-docs
+
+      - name: Export headless Rerun fixtures
+        run: |
+          python bin/generate_ux001_golden.py /tmp/handumi-body.rrd
+          python bin/generate_ux001_golden.py \
+            /tmp/handumi-controller-only.rrd --controller-only
 
       - name: Build source and wheel distributions
         run: uv build
 
-      - name: Verify packaged body profile and typing marker
-        run: unzip -l dist/*.whl | grep -E 'handumi/(configs/body_profile.example.yaml|py.typed)'
+      - name: Verify bounded wheel metadata and resources
+        run: python bin/verify_release_wheel.py dist/*.whl
+
+      - name: Smoke test isolated installed wheel
+        run: |
+          uv venv --clear /tmp/handumi-wheel-smoke
+          uv pip install --python /tmp/handumi-wheel-smoke/bin/python dist/*.whl
+          uv pip check --python /tmp/handumi-wheel-smoke/bin/python
+          for cli in \
+            handumi-record handumi-view-trajectory handumi-teleop-sim \
+            handumi-teleop-real handumi-pico-camera handumi-convert \
+            handumi-validate handumi-setup-ports handumi-setup-hardware \
+            handumi-set-servo-id handumi-home-servos \
+            handumi-calibrate-grippers handumi-calibrate-openarm-grippers \
+            handumi-print-controller-pose handumi-calibrate-tcp-offset \
+            handumi-calibrate-spatial handumi-replay-in-sim \
+            handumi-quest-probe handumi-preflight; do
+            "/tmp/handumi-wheel-smoke/bin/$cli" --help >/dev/null
+          done
+
+      - name: Generate artifact checksums
+        run: sha256sum dist/* | tee dist/SHA256SUMS
+
+      - name: Upload unsigned candidate artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: handumi-unsigned-candidate-${{ github.sha }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
