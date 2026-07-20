@@ -31,6 +31,21 @@ tracking, cameras, timing, protocols, state/action arrays, and episode gates
 continue unchanged. Geometry and cameras begin updating after the episode
 recording gate opens, not while the recorder is waiting at the prompt.
 
+Add `--viser --robot piper` to the same recorder command to show the selected
+simulated robot alongside Rerun. The recorder owns all providers and sends an
+immutable copy of each aligned row's TCP/gripper sample to a separate bounded
+IK/Viser queue. No second Quest, camera, or Feetech connection is opened.
+Recording state, anchor state, controller tracking loss, reach limiting, saved
+or discarded state, and viewer failures are shown in the Viser status panel.
+Viewer and IK failures remain non-fatal to recording.
+
+Viser listens only on `127.0.0.1` by default. Use `--viser-host` only for an
+intentional trusted-LAN exposure. `--viser-anchor episode-start` anchors on the
+first fully tracked sample after the recording gate; `first-tracked` anchors
+once when a fully tracked sample first reaches the worker; and `disabled`
+keeps the model parked at home. Existing `handumi-teleop-sim` workflows remain
+available for non-recording simulation.
+
 Body-enabled Meta recording freezes one common workspace transform for the
 controllers, TCPs, and canonical body so an accidental X-button press cannot
 move only the controllers. With a body profile, the required upright neutral
@@ -49,9 +64,9 @@ pivot calibration aligns each rendered TCP with the physical HandUMI tip;
 body wrist estimates are not used as a substitute for that physical
 calibration.
 
-`handumi-teleop-sim` still uses controller/TCP-only visualization because that
-pipeline does not expose an aligned canonical body frame. It never fabricates
-body data.
+The Viser robot layer uses controller/TCP and gripper samples only. It does not
+consume or fabricate body data; the aligned canonical body, when present,
+continues to appear only in the recorder-owned Rerun stream and raw sidecar.
 
 ## Recorded Episode Viewer
 

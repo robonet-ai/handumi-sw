@@ -90,6 +90,12 @@ from handumi.synchronization import (
     synchronized_gripper_frame,
     tracking_sample_at,
 )
+from handumi.teleop.recording_viewer import (
+    QueuedRecorderRobotViewer,
+    RecorderRobotFrame,
+    RecorderRobotSink,
+    RecorderRobotViewerConfig,
+)
 from handumi.tracking.base import ControllerPairSample, TrackingProvider
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
@@ -113,6 +119,8 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
+
+
 class _EscapeStopListener:
     """Turn terminal Escape into the recorder's graceful stop event."""
 
@@ -266,7 +274,11 @@ def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | No
         except (OSError, KeyError, TypeError, ValueError) as exc:
             raise SystemExit(f"Invalid body profile: {exc}") from exc
     elif height_m is None and mass_kg is None:
-        if table_path is not None or foot_length_m is not None or foot_width_m is not None:
+        if (
+            table_path is not None
+            or foot_length_m is not None
+            or foot_width_m is not None
+        ):
             raise SystemExit(
                 "Body dimensions and anthropometric tables require both "
                 "--body-height-m and --body-mass-kg, or --body-profile."
@@ -397,11 +409,21 @@ def build_observation(
         "observation.state": state,
         "action": state.copy(),
         "observation.feetech.left_ticks": np.array([widths.left_ticks], dtype=np.int64),
-        "observation.feetech.right_ticks": np.array([widths.right_ticks], dtype=np.int64),
-        "observation.feetech.left_width_mm": np.array([widths.left_mm], dtype=np.float32),
-        "observation.feetech.right_width_mm": np.array([widths.right_mm], dtype=np.float32),
-        "observation.feetech.left_normalized": np.array([widths.left_normalized], dtype=np.float32),
-        "observation.feetech.right_normalized": np.array([widths.right_normalized], dtype=np.float32),
+        "observation.feetech.right_ticks": np.array(
+            [widths.right_ticks], dtype=np.int64
+        ),
+        "observation.feetech.left_width_mm": np.array(
+            [widths.left_mm], dtype=np.float32
+        ),
+        "observation.feetech.right_width_mm": np.array(
+            [widths.right_mm], dtype=np.float32
+        ),
+        "observation.feetech.left_normalized": np.array(
+            [widths.left_normalized], dtype=np.float32
+        ),
+        "observation.feetech.right_normalized": np.array(
+            [widths.right_normalized], dtype=np.float32
+        ),
         **sample.tracking_frame(),
     }
     if body_frame is not None:
@@ -480,7 +502,9 @@ class _RecordingRerun:
 
     @staticmethod
     def _on_error(exc: BaseException) -> None:
-        log.error("Rerun failed; disabling live view while recording continues: %s", exc)
+        log.error(
+            "Rerun failed; disabling live view while recording continues: %s", exc
+        )
 
     def set_status(self, state: str, detail: str) -> None:
         """Show the current recorder state as a persistent operator flag."""
@@ -587,6 +611,7 @@ def record_episode(
     profile_skeleton: ProfileConstrainedSkeleton | None = None,
     body_estimator: KinematicComEstimator | None = None,
     rerun: _RecordingRerun | None = None,
+    robot_viewer: RecorderRobotSink | None = None,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -643,13 +668,23 @@ def record_episode(
             break
 
         if manual_control and xrt is not None:
-            start_pressed = read_start_button_value(xrt, start_button) >= start_threshold
-            repeat_pressed = read_start_button_value(xrt, repeat_button) >= start_threshold
-            finish_pressed = read_start_button_value(xrt, finish_button) >= start_threshold
+            start_pressed = (
+                read_start_button_value(xrt, start_button) >= start_threshold
+            )
+            repeat_pressed = (
+                read_start_button_value(xrt, repeat_button) >= start_threshold
+            )
+            finish_pressed = (
+                read_start_button_value(xrt, finish_button) >= start_threshold
+            )
             start_rise = start_pressed and not prev_start
             repeat_rise = repeat_pressed and not prev_repeat
             finish_rise = finish_pressed and not prev_finish
-            prev_start, prev_repeat, prev_finish = start_pressed, repeat_pressed, finish_pressed
+            prev_start, prev_repeat, prev_finish = (
+                start_pressed,
+                repeat_pressed,
+                finish_pressed,
+            )
             if repeat_rise:
                 status = "repeat"
                 dataset.clear_episode_buffer()
@@ -757,6 +792,34 @@ def record_episode(
         if rerun is not None:
             # This is the same aligned, already-estimated frame written below.
             rerun.log(cam_frames, sample, widths, body_frame=body_frame)
+        if robot_viewer is not None:
+            try:
+                robot_viewer.submit(
+                    RecorderRobotFrame(
+                        sample_time_ns=sample_time_ns,
+                        left_tcp_pose=sample.left_tcp_pose,
+                        right_tcp_pose=sample.right_tcp_pose,
+                        left_tracked=sample.left_tracked,
+                        right_tracked=sample.right_tracked,
+                        left_gripper_opening=widths.left_normalized,
+                        right_gripper_opening=widths.right_normalized,
+                    )
+                )
+                viewer_status = robot_viewer.status()
+            except Exception as exc:  # noqa: BLE001 - viewer never owns capture.
+                log.exception("Recorder Viser sink failed; recording continues")
+                if rerun is not None:
+                    rerun.set_status(
+                        "RECORDING",
+                        f"Dataset capture continues; Viser sink failed: {exc}",
+                    )
+            else:
+                if rerun is not None and viewer_status.failures:
+                    rerun.set_status(
+                        "RECORDING",
+                        "Dataset capture continues; Viser degraded: "
+                        f"{viewer_status.last_error}",
+                    )
         dataset.add_frame(
             {
                 **cam_frames,
@@ -773,13 +836,17 @@ def record_episode(
         if sleep > 0:
             time.sleep(sleep)
         else:
-            log.warning("Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6))
+            log.warning(
+                "Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6)
+            )
 
     return n_frames, status
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Record HandUMI data with PICO or Meta Quest.")
+    p = argparse.ArgumentParser(
+        description="Record HandUMI data with PICO or Meta Quest."
+    )
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument(
         "--rig-config",
@@ -861,6 +928,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Open a live Rerun view with recorded cameras, controller/TCP trails, and gripper widths.",
     )
+    p.add_argument(
+        "--viser",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Show recorder-owned robot IK in Viser without opening another "
+            "tracking, camera, or Feetech provider (default: disabled)."
+        ),
+    )
+    p.add_argument(
+        "--viser-host",
+        default="127.0.0.1",
+        help="Viser bind host (default: localhost; use LAN addresses explicitly).",
+    )
+    p.add_argument("--viser-port", type=int, default=8003)
+    p.add_argument(
+        "--viser-anchor",
+        choices=("episode-start", "first-tracked", "disabled"),
+        default="episode-start",
+        help="When the simulated robot establishes its controller/TCP anchor.",
+    )
+    p.add_argument("--viser-anchor-z", type=float, default=None)
+    p.add_argument("--viser-home-pose", default=None)
+    p.add_argument("--viser-scene", default=None)
+    p.add_argument("--viser-queue-size", type=int, default=2)
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
     p.add_argument(
@@ -928,7 +1020,9 @@ def parse_args() -> argparse.Namespace:
         help="Optional custom versioned anthropometric segment table YAML.",
     )
 
-    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
+    p.add_argument(
+        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+    )
     pico_transport = p.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")
     pico_transport.add_argument("--pico-wifi", action="store_true")
@@ -960,7 +1054,9 @@ def _validate_args(args: argparse.Namespace) -> None:
         args.start_button = "A"
         log.info("--manual-control set: using PICO A as start/stop button.")
     if args.clap_control and args.skip_feetech:
-        raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
+        raise SystemExit(
+            "--clap-control needs real Feetech widths; drop --skip-feetech."
+        )
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
     if args.tracking_loss_timeout_s <= 0:
@@ -975,6 +1071,12 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
+    if not 0 <= getattr(args, "viser_port", 8003) <= 65535:
+        raise SystemExit("--viser-port must be between 0 and 65535.")
+    if getattr(args, "viser_queue_size", 2) <= 0:
+        raise SystemExit("--viser-queue-size must be greater than zero.")
+    if not str(getattr(args, "viser_host", "127.0.0.1")).strip():
+        raise SystemExit("--viser-host must not be empty.")
 
 
 def main() -> None:
@@ -993,7 +1095,9 @@ def main() -> None:
     )
     log.info("Controller->TCP setup: %s", calibration_source)
     try:
-        spatial_session_metadata = session_calibration_metadata(args.session_calibration)
+        spatial_session_metadata = session_calibration_metadata(
+            args.session_calibration
+        )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid session calibration: {exc}") from exc
     body_estimator = build_body_estimator(args)
@@ -1023,7 +1127,9 @@ def main() -> None:
             )
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
         if set_workspace is None:
-            raise SystemExit("Selected tracking backend cannot apply a table calibration.")
+            raise SystemExit(
+                "Selected tracking backend cannot apply a table calibration."
+            )
         set_workspace(session_table_from_device(args.session_calibration), locked=True)
     tracker.start()
 
@@ -1082,6 +1188,22 @@ def main() -> None:
     )
     log.info("Dataset created at: %s", dataset.root)
     tracking_sidecar = TrackingSidecarWriter(dataset.root)
+    robot_viewer: RecorderRobotSink | None = None
+    if args.viser:
+        robot_viewer = QueuedRecorderRobotViewer(
+            RecorderRobotViewerConfig(
+                robot=args.robot,
+                device=args.device,
+                host=args.viser_host,
+                port=args.viser_port,
+                rig_config=args.rig_config,
+                home_pose=args.viser_home_pose,
+                scene=args.viser_scene,
+                anchor_mode=args.viser_anchor,
+                anchor_z=args.viser_anchor_z,
+                queue_size=args.viser_queue_size,
+            )
+        )
     world_calibration = HandumiWorldCalibration.identity(
         source_frame=f"{args.device}_right_handed_source",
         qualified=False,
@@ -1107,21 +1229,33 @@ def main() -> None:
     clap_detector = DoubleClapDetector() if args.clap_control else None
     restart_active = False
     try:
-        while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
+        while (
+            args.num_episodes <= 0 or recorded < args.num_episodes
+        ) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if rerun is not None:
-                rerun.set_status("WAITING", f"Episode {ep_num}/{ep_total}: waiting to start")
+                rerun.set_status(
+                    "WAITING", f"Episode {ep_num}/{ep_total}: waiting to start"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "WAITING", f"episode {ep_num}/{ep_total}"
+                )
             if args.clap_control:
                 assert clap_detector is not None
                 if restart_active:
                     restart_active = False
                     log.info("  Restarting episode %d immediately ...", ep_num)
                     if rerun is not None:
-                        rerun.set_status("RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now")
+                        rerun.set_status(
+                            "RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now"
+                        )
                 else:
-                    log.info("  Double-squeeze right gripper to start episode %d ...", ep_num)
+                    log.info(
+                        "  Double-squeeze right gripper to start episode %d ...", ep_num
+                    )
                     if not _wait_for_clap(
                         grippers, clap_detector, stop_event, side="right"
                     ):
@@ -1157,7 +1291,9 @@ def main() -> None:
                 ):
                     break
             else:
-                raise SystemExit("--start-button other than enter currently requires --device pico.")
+                raise SystemExit(
+                    "--start-button other than enter currently requires --device pico."
+                )
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
@@ -1167,6 +1303,10 @@ def main() -> None:
                         rerun.set_status(
                             "CALIBRATING",
                             "Stand upright: fitting experimental body profile and floor",
+                        )
+                    if robot_viewer is not None:
+                        robot_viewer.set_recording_state(
+                            "CALIBRATING", "neutral/profile capture"
                         )
                     neutral, neutral_packets = _capture_profile_neutral_calibration(
                         tracker,
@@ -1244,7 +1384,13 @@ def main() -> None:
             tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             if rerun is not None:
-                rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
+                rerun.set_status(
+                    "RECORDING", f"Episode {ep_num}/{ep_total} is being recorded"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "RECORDING", f"episode {ep_num}/{ep_total}"
+                )
             try:
                 n_frames, status = record_episode(
                     dataset=dataset,
@@ -1275,24 +1421,27 @@ def main() -> None:
                     profile_skeleton=profile_skeleton,
                     body_estimator=body_estimator,
                     rerun=rerun,
+                    robot_viewer=robot_viewer,
                 )
             except BaseException:
-                tracking_sidecar.finish_episode(
-                    status="interrupted", provider=tracker
-                )
+                tracking_sidecar.finish_episode(status="interrupted", provider=tracker)
                 raise
             if status == "repeat":
-                log.warning("Episode restart requested (%d frames discarded).", n_frames)
+                log.warning(
+                    "Episode restart requested (%d frames discarded).", n_frames
+                )
                 log_say("Restart recording", play_sounds=play_sounds)
                 if rerun is not None:
                     rerun.set_status(
                         "RESTARTED",
                         f"Episode {ep_num}/{ep_total}: {n_frames} frames discarded; restarting",
                     )
+                if robot_viewer is not None:
+                    robot_viewer.set_recording_state(
+                        "RESTARTED", f"{n_frames} frames discarded"
+                    )
                 dataset.clear_episode_buffer()
-                tracking_sidecar.finish_episode(
-                    status="discarded", provider=tracker
-                )
+                tracking_sidecar.finish_episode(status="discarded", provider=tracker)
                 restart_active = True
                 continue
             if n_frames == 0 or status in {
@@ -1307,6 +1456,10 @@ def main() -> None:
                         "DISCARDED",
                         f"Episode {ep_num}/{ep_total}: {status} after {n_frames} frames",
                     )
+                if robot_viewer is not None:
+                    robot_viewer.set_recording_state(
+                        "DISCARDED", f"{status} after {n_frames} frames"
+                    )
                 dataset.clear_episode_buffer()
                 tracking_sidecar.finish_episode(status="discarded", provider=tracker)
                 if status in {"finish", "interrupted"}:
@@ -1316,17 +1469,27 @@ def main() -> None:
             tracking_sidecar.finish_episode(status="recorded", provider=tracker)
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
-            log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
+            log_say(
+                f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds
+            )
             if rerun is not None:
                 rerun.set_status(
                     "SAVED", f"Episode {ep_num}/{ep_total}: {n_frames} frames saved"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "SAVED", f"episode {ep_num}/{ep_total}; {n_frames} frames"
                 )
             if status == "finish":
                 break
     finally:
         escape_listener.stop()
         if rerun is not None:
-            rerun.set_status("STOPPED", f"Recording stopped: {recorded} episode(s) saved")
+            rerun.set_status(
+                "STOPPED", f"Recording stopped: {recorded} episode(s) saved"
+            )
+        if robot_viewer is not None:
+            robot_viewer.set_recording_state("STOPPED", f"{recorded} episode(s) saved")
         log_say("Stop recording", play_sounds=play_sounds, blocking=True)
         log.info("--- Finalising ---")
         finalization_error: BaseException | None = None
@@ -1380,6 +1543,21 @@ def main() -> None:
                     "controller_tcp_calibration": calibration_metadata,
                     "spatial_session_calibration": spatial_session_metadata,
                     "target_robot": robot_metadata,
+                    "robot_viewer": (
+                        {
+                            "enabled": True,
+                            "robot": args.robot,
+                            "host": args.viser_host,
+                            "port": args.viser_port,
+                            "anchor_mode": args.viser_anchor,
+                            "home_pose": args.viser_home_pose,
+                            "scene": args.viser_scene,
+                            "status": robot_viewer.status().__dict__,
+                            "raw_recording_robot_agnostic": True,
+                        }
+                        if robot_viewer is not None
+                        else {"enabled": False}
+                    ),
                     "body_tracking_schema": body_tracking_schema,
                     "canonical_body": body_metadata,
                     "tracking_sidecar": {
@@ -1408,6 +1586,8 @@ def main() -> None:
             finalization_error = exc
             log.exception("Dataset finalization failed; do not upload this dataset.")
         finally:
+            if robot_viewer is not None:
+                robot_viewer.close()
             if rerun is not None:
                 rerun.close()
             disconnect_cameras(cameras)
@@ -1556,7 +1736,9 @@ def _capture_sources_metadata(
     }
 
 
-def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str, object]:
+def _robot_metadata(
+    name: str, config_dir: Path = ROBOT_CONFIG_DIR
+) -> dict[str, object]:
     path = config_dir / f"{name}.yaml"
     if not path.exists():
         available = ", ".join(sorted(item.stem for item in config_dir.glob("*.yaml")))
@@ -1586,7 +1768,9 @@ def _recording_tcp_calibration_metadata(
         raise SystemExit(f"Robot {robot!r} has invalid configuration metadata.")
 
     configured = configuration.get("controller_tcp_calibrations") or {}
-    configured_path_value = configured.get(device) if isinstance(configured, dict) else None
+    configured_path_value = (
+        configured.get(device) if isinstance(configured, dict) else None
+    )
     associated_with_robot_tool = configured_path_value is not None
     if explicit_path is not None:
         calibration_path = explicit_path
@@ -1634,9 +1818,7 @@ def _validate_unique_camera_ids(
     camera_ids: list[int | str],
 ) -> None:
     duplicates = {
-        camera_id
-        for camera_id in camera_ids
-        if camera_ids.count(camera_id) > 1
+        camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1
     }
     if duplicates:
         mappings = ", ".join(
@@ -1754,10 +1936,14 @@ def _validate_finalized_lerobot_dataset(root: Path) -> None:
         if isinstance(feature, dict) and feature.get("dtype") == "video"
     ]
     missing_videos = [
-        key for key in video_keys if not list((root / "videos" / key).glob("chunk-*/*.mp4"))
+        key
+        for key in video_keys
+        if not list((root / "videos" / key).glob("chunk-*/*.mp4"))
     ]
     if missing_videos:
-        raise RuntimeError(f"Dataset is missing videos for: {', '.join(missing_videos)}.")
+        raise RuntimeError(
+            f"Dataset is missing videos for: {', '.join(missing_videos)}."
+        )
 
 
 def _camera_arg(value: str) -> int | str:

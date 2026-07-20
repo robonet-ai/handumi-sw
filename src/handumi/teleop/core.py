@@ -23,6 +23,7 @@ class TeleopStep:
     q: np.ndarray
     anchored_sides: tuple[str, ...]
     target_pose7: dict[str, np.ndarray]
+    reach_limited_sides: tuple[str, ...] = ()
 
 
 class TeleopController:
@@ -131,10 +132,26 @@ class TeleopController:
             side: None for side in SIDES
         }
         target_pose7: dict[str, np.ndarray] = {}
+        reach_limited_sides: list[str] = []
         for side in SIDES:
             anchor = self.anchors[side]
             if anchor is None or not side_tracked[side]:
                 continue
+            unclamped_pose7 = local_relative_robot_target_pose7(
+                previous_source_pose7=anchor["source"],
+                current_source_pose7=source_poses[side],
+                base_robot_pose7=self.anchor_ref[side],
+                adapter_rot=anchor["adapter"],
+                home_robot_pose7=self.anchor_ref[side],
+                translation_scale=self.translation_scale,
+                max_reach=None,
+            )
+            if (
+                self.max_reach is not None
+                and np.linalg.norm(unclamped_pose7[:3] - self.anchor_ref[side][:3])
+                > self.max_reach
+            ):
+                reach_limited_sides.append(side)
             pose7 = local_relative_robot_target_pose7(
                 previous_source_pose7=anchor["source"],
                 current_source_pose7=source_poses[side],
@@ -165,4 +182,5 @@ class TeleopController:
                 side for side in SIDES if self.anchors[side] is not None
             ),
             target_pose7=target_pose7,
+            reach_limited_sides=tuple(reach_limited_sides),
         )
