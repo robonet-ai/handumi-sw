@@ -7,6 +7,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from typing import Protocol
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
@@ -54,12 +55,16 @@ class GripperSample:
     enabled: bool = True
 
 
+class GripperWidthSource(Protocol):
+    def read_normalized_widths(self) -> GripperWidths: ...
+
+
 class FeetechGripperSampler:
     """Continuously sample both encoders and retain a short native-rate buffer."""
 
     def __init__(
         self,
-        grippers: "FeetechGripperPair",
+        grippers: GripperWidthSource,
         *,
         sample_hz: float = 100.0,
         buffer_seconds: float = 1.0,

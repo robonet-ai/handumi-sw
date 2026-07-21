@@ -14,6 +14,7 @@ frames", ...) are on by default — pass --no-sounds to disable them. Without
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import logging
@@ -26,9 +27,10 @@ import termios
 import threading
 import time
 import tty
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Sequence, cast
+from typing import Callable, Iterable, Protocol, Sequence, cast
 
 import numpy as np
 import yaml
@@ -86,8 +88,18 @@ from handumi.feetech import (
     user_calibration_path,
     zero_gripper_widths,
 )
+from handumi.feetech.gripper import GripperWidthSource
 from handumi.feetech.bus import FeetechUnavailableError
 from handumi.robots.utils import IDENTITY_POSE7
+from handumi.reliability import (
+    CaptureSession,
+    CaptureStorageError,
+    StageProfiler,
+    check_disk_space,
+    hash_configuration,
+    recover_interrupted_sessions,
+    resolve_capture_profile,
+)
 from handumi.synchronization import (
     SustainedHealthGate,
     capture_timing_frame,
@@ -100,7 +112,11 @@ from handumi.teleop.recording_viewer import (
     RecorderRobotSink,
     RecorderRobotViewerConfig,
 )
-from handumi.tracking.base import ControllerPairSample, TrackingProvider
+from handumi.tracking.base import (
+    ControllerPairSample,
+    TrackingProvider,
+    TrackingSampleSource,
+)
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
 from handumi.tracking.packet import TrackingPacket
@@ -123,6 +139,33 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
+
+
+class _TrackingSidecarSink(Protocol):
+    def drain_provider(self, provider: object) -> int: ...
+
+    def consume_frame_epoch_change(self) -> object | None: ...
+
+    def nearest_packet(self, target_time_ns: int) -> TrackingPacket | None: ...
+
+
+class _BodyEstimator(Protocol):
+    def estimate(self, frame: CanonicalBodyFrame) -> CanonicalBodyFrame: ...
+
+
+class _RerunSink(Protocol):
+    def log(
+        self,
+        cam_frames: dict,
+        sample: ControllerPairSample,
+        widths: GripperWidths,
+        *,
+        body_frame: CanonicalBodyFrame | None = None,
+    ) -> None: ...
+
+
+class _RobotFrameSink(Protocol):
+    def submit(self, frame: RecorderRobotFrame) -> bool: ...
 
 
 class _EscapeStopListener:
@@ -454,7 +497,7 @@ def _tracking_healthy(sample: ControllerPairSample) -> bool:
 
 
 def _wait_for_tracking(
-    tracker: TrackingProvider,
+    tracker: TrackingSampleSource,
     stop_event: threading.Event,
     *,
     poll_s: float = 0.05,
@@ -599,8 +642,8 @@ def record_episode(
     dataset,
     cameras: list,
     cam_names: list[str],
-    tracker: TrackingProvider,
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    tracker: TrackingSampleSource,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
     episode_time_s: float,
     fps: int,
     task: str,
@@ -619,12 +662,16 @@ def record_episode(
     camera_stale_timeout_s: float = 0.25,
     gripper_stale_timeout_s: float = 0.10,
     sensor_loss_timeout_s: float = 1.0,
-    tracking_sidecar: TrackingSidecarWriter | None = None,
+    tracking_sidecar: _TrackingSidecarSink | None = None,
     world_calibration: HandumiWorldCalibration | None = None,
     profile_skeleton: ProfileConstrainedSkeleton | None = None,
-    body_estimator: KinematicComEstimator | None = None,
-    rerun: _RecordingRerun | None = None,
-    robot_viewer: RecorderRobotSink | None = None,
+    body_estimator: _BodyEstimator | None = None,
+    rerun: _RerunSink | None = None,
+    robot_viewer: _RobotFrameSink | None = None,
+    profiler: StageProfiler | None = None,
+    capture_session: CaptureSession | None = None,
+    minimum_free_bytes: int = 0,
+    disk_check_interval_s: float = 5.0,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -657,10 +704,30 @@ def record_episode(
     sync_lag_ns = int(sync_lag_s * 1e9)
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     health_gate = SustainedHealthGate(sensor_loss_timeout_s)
+    next_disk_check = time.monotonic()
 
     while True:
         loop_start = time.perf_counter()
         tracking_now_ns = time.monotonic_ns()
+        disk_now = time.monotonic()
+        if minimum_free_bytes and disk_now >= next_disk_check:
+            try:
+                with (
+                    profiler.measure("disk_space_check")
+                    if profiler is not None
+                    else nullcontext()
+                ):
+                    check_disk_space(
+                        Path(dataset.root), minimum_free_bytes=minimum_free_bytes
+                    )
+            except CaptureStorageError as exc:
+                status = "storage_failure"
+                dataset.clear_episode_buffer()
+                log.error("Capture storage check failed; discarding episode: %s", exc)
+                break
+            if profiler is not None and capture_session is not None:
+                capture_session.checkpoint(profiler, reason="periodic_disk_check")
+            next_disk_check = disk_now + disk_check_interval_s
         if episode_start_ns is None:
             episode_start_ns = tracking_now_ns
         elapsed = loop_start - start_t
@@ -710,16 +777,24 @@ def record_episode(
                 break
 
         target_time_ns = max(episode_start_ns, tracking_now_ns - sync_lag_ns)
-        cam_frames, camera_health = read_camera_samples(
-            cameras,
-            cam_names,
-            target_time_ns=target_time_ns,
-            record_time_ns=tracking_now_ns,
-            width=cam_width,
-            height=cam_height,
-            stale_timeout_s=camera_stale_timeout_s,
-            max_sync_skew_s=max_sync_skew_s,
-        )
+        with (
+            profiler.measure("camera_synchronization", items=len(cameras))
+            if profiler is not None
+            else nullcontext()
+        ):
+            cam_frames, camera_health = read_camera_samples(
+                cameras,
+                cam_names,
+                target_time_ns=target_time_ns,
+                record_time_ns=tracking_now_ns,
+                width=cam_width,
+                height=cam_height,
+                stale_timeout_s=camera_stale_timeout_s,
+                max_sync_skew_s=max_sync_skew_s,
+            )
+        if profiler is not None:
+            with profiler.measure("camera_acquisition", items=len(cam_frames)):
+                pass
         gripper_frame = synchronized_gripper_frame(
             grippers,
             target_time_ns=target_time_ns,
@@ -728,31 +803,54 @@ def record_episode(
             max_sync_skew_s=max_sync_skew_s,
         )
         widths = gripper_frame.widths
-        sample = tracking_sample_at(tracker, target_time_ns)
+        with (
+            profiler.measure("tracking_reception_clock_alignment")
+            if profiler is not None
+            else nullcontext()
+        ):
+            sample = tracking_sample_at(tracker, target_time_ns)
         body_frame = None
         if tracking_sidecar is not None:
-            tracking_sidecar.drain_provider(tracker)
+            with (
+                profiler.measure("tracking_sidecar_write")
+                if profiler is not None
+                else nullcontext()
+            ):
+                tracking_sidecar.drain_provider(tracker)
             epoch_event = tracking_sidecar.consume_frame_epoch_change()
             if epoch_event is not None:
+                epoch_index = getattr(epoch_event, "index", None)
+                epoch_reason = getattr(epoch_event, "reason", None)
+                if not isinstance(epoch_index, int) or not isinstance(
+                    epoch_reason, str
+                ):
+                    raise TypeError("invalid tracking frame epoch event")
                 status = "frame_epoch_changed"
                 dataset.clear_episode_buffer()
                 if body_estimator is not None:
-                    body_estimator.reset()
+                    reset_estimator = getattr(body_estimator, "reset", None)
+                    if callable(reset_estimator):
+                        reset_estimator()
                 log.error(
                     "Tracking frame epoch changed to %d (%s); discarding the "
                     "episode and requiring calibration review.",
-                    epoch_event.index,
-                    epoch_event.reason,
+                    epoch_index,
+                    epoch_reason,
                 )
                 break
-            body_frame = canonical_body_from_packet(
-                tracking_sidecar.nearest_packet(target_time_ns),
-                calibration=world_calibration,
-            )
-            if profile_skeleton is not None:
-                body_frame = profile_skeleton.apply(body_frame)
-            if body_estimator is not None:
-                body_frame = body_estimator.estimate(body_frame)
+            with (
+                profiler.measure("body_canonicalization_derived_estimation")
+                if profiler is not None
+                else nullcontext()
+            ):
+                body_frame = canonical_body_from_packet(
+                    tracking_sidecar.nearest_packet(target_time_ns),
+                    calibration=world_calibration,
+                )
+                if profile_skeleton is not None:
+                    body_frame = profile_skeleton.apply(body_frame)
+                if body_estimator is not None:
+                    body_frame = body_estimator.estimate(body_frame)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
             sample_time_ns > 0
@@ -817,44 +915,76 @@ def record_episode(
                 break
         if rerun is not None:
             # This is the same aligned, already-estimated frame written below.
-            rerun.log(cam_frames, sample, widths, body_frame=body_frame)
+            with (
+                profiler.measure("rerun_enqueue")
+                if profiler is not None
+                else nullcontext()
+            ):
+                rerun.log(cam_frames, sample, widths, body_frame=body_frame)
+            if profiler is not None:
+                profiler.queue_depth("rerun", int(getattr(rerun, "pending_frames", 0)))
         if robot_viewer is not None:
             try:
-                robot_viewer.submit(
-                    RecorderRobotFrame(
-                        sample_time_ns=sample_time_ns,
-                        left_tcp_pose=sample.left_tcp_pose,
-                        right_tcp_pose=sample.right_tcp_pose,
-                        left_tracked=sample.left_tracked,
-                        right_tracked=sample.right_tracked,
-                        left_gripper_opening=widths.left_normalized,
-                        right_gripper_opening=widths.right_normalized,
+                with (
+                    profiler.measure("viser_robot_ik_enqueue")
+                    if profiler is not None
+                    else nullcontext()
+                ):
+                    robot_viewer.submit(
+                        RecorderRobotFrame(
+                            sample_time_ns=sample_time_ns,
+                            left_tcp_pose=sample.left_tcp_pose,
+                            right_tcp_pose=sample.right_tcp_pose,
+                            left_tracked=sample.left_tracked,
+                            right_tracked=sample.right_tracked,
+                            left_gripper_opening=widths.left_normalized,
+                            right_gripper_opening=widths.right_normalized,
+                        )
                     )
-                )
-                viewer_status = robot_viewer.status()
+                status_reader = getattr(robot_viewer, "status", None)
+                viewer_status = status_reader() if callable(status_reader) else None
             except Exception as exc:  # noqa: BLE001 - viewer never owns capture.
                 log.exception("Recorder Viser sink failed; recording continues")
                 if rerun is not None:
-                    rerun.set_status(
-                        "RECORDING",
-                        f"Dataset capture continues; Viser sink failed: {exc}",
-                    )
+                    status_writer = getattr(rerun, "set_status", None)
+                    if callable(status_writer):
+                        status_writer(
+                            "RECORDING",
+                            f"Dataset capture continues; Viser sink failed: {exc}",
+                        )
             else:
-                if rerun is not None and viewer_status.failures:
-                    rerun.set_status(
-                        "RECORDING",
-                        "Dataset capture continues; Viser degraded: "
-                        f"{viewer_status.last_error}",
-                    )
-        dataset.add_frame(
-            {
-                **cam_frames,
-                **build_observation(sample, widths, body_frame=body_frame),
-                **gripper_frame.frame,
-                **capture_timing_frame(target_time_ns, tracking_now_ns),
-                "task": task,
-            }
-        )
+                if rerun is not None and bool(getattr(viewer_status, "failures", 0)):
+                    status_writer = getattr(rerun, "set_status", None)
+                    if callable(status_writer):
+                        status_writer(
+                            "RECORDING",
+                            "Dataset capture continues; Viser degraded: "
+                            f"{getattr(viewer_status, 'last_error', None)}",
+                        )
+        try:
+            with (
+                profiler.measure("dataset_serialization_writes")
+                if profiler is not None
+                else nullcontext()
+            ):
+                dataset.add_frame(
+                    {
+                        **cam_frames,
+                        **build_observation(sample, widths, body_frame=body_frame),
+                        **gripper_frame.frame,
+                        **capture_timing_frame(target_time_ns, tracking_now_ns),
+                        "task": task,
+                    }
+                )
+        except OSError as exc:
+            if exc.errno != errno.ENOSPC:
+                raise
+            status = "storage_failure"
+            dataset.clear_episode_buffer()
+            log.error(
+                "Storage exhausted while serializing the episode; it was rejected."
+            )
+            break
         n_frames += 1
 
         dt = time.perf_counter() - loop_start
@@ -866,6 +996,22 @@ def record_episode(
                 "Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6)
             )
 
+    measured_duration_s = max(0.0, elapsed)
+    if (
+        status == "recorded"
+        and timed
+        and measured_duration_s >= episode_time_s * 0.95
+        and n_frames < int(measured_duration_s * fps * 0.98)
+    ):
+        status = "profile_unmaintained"
+        dataset.clear_episode_buffer()
+        log.error(
+            "Requested %d Hz row profile was not maintained: %d rows in %.3fs; "
+            "episode rejected.",
+            fps,
+            n_frames,
+            measured_duration_s,
+        )
     return n_frames, status
 
 
@@ -907,6 +1053,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
+    p.add_argument(
+        "--minimum-free-gb",
+        type=float,
+        default=2.0,
+        help="Fail before and during capture if usable disk space falls below this value.",
+    )
+    p.add_argument("--disk-check-interval-s", type=float, default=5.0)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
@@ -1101,6 +1254,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--viser-port must be between 0 and 65535.")
     if getattr(args, "viser_queue_size", 2) <= 0:
         raise SystemExit("--viser-queue-size must be greater than zero.")
+    if getattr(args, "minimum_free_gb", 2.0) < 0:
+        raise SystemExit("--minimum-free-gb cannot be negative.")
+    if getattr(args, "disk_check_interval_s", 5.0) <= 0:
+        raise SystemExit("--disk-check-interval-s must be greater than zero.")
     if not str(getattr(args, "viser_host", "127.0.0.1")).strip():
         raise SystemExit("--viser-host must not be empty.")
 
@@ -1110,9 +1267,38 @@ def main() -> None:
     _validate_args(args)
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
+    minimum_free_bytes = int(args.minimum_free_gb * 1024**3)
+    check_disk_space(args.output_dir, minimum_free_bytes=minimum_free_bytes)
+    profiler = StageProfiler()
     play_sounds = not args.no_sounds
 
     camera_names = _selected_camera_names(args)
+    capture_profile = resolve_capture_profile(args.fps, args.cam_fps, len(camera_names))
+    if capture_profile.status != "supported":
+        log.warning(
+            "Capture profile %s is %s: %s",
+            capture_profile.name,
+            capture_profile.status,
+            capture_profile.evidence,
+        )
+    requested_output_dir = Path(args.output_dir)
+    recovered_sessions = recover_interrupted_sessions(requested_output_dir.parent)
+    for recovered_path in recovered_sessions:
+        log.warning(
+            "Preserved interrupted capture as incomplete forensic evidence: %s",
+            recovered_path.name,
+        )
+    capture_session = CaptureSession(
+        requested_output_dir,
+        capture_profile,
+        configuration_hashes=[hash_configuration("rig", args.rig_config)],
+        calibration_hashes=[
+            hash_configuration("controller_tcp", args.controller_tcp_calibration),
+            hash_configuration("session", args.session_calibration),
+            hash_configuration("body_profile", args.body_profile),
+        ],
+    )
+    args.output_dir = capture_session.staging_root
     robot_metadata = _robot_metadata(args.robot)
     calibration_metadata, calibration_source = _recording_tcp_calibration_metadata(
         robot_metadata=robot_metadata,
@@ -1472,6 +1658,10 @@ def main() -> None:
                     body_estimator=body_estimator,
                     rerun=rerun,
                     robot_viewer=robot_viewer,
+                    profiler=profiler,
+                    capture_session=capture_session,
+                    minimum_free_bytes=minimum_free_bytes,
+                    disk_check_interval_s=args.disk_check_interval_s,
                 )
             except BaseException:
                 tracking_sidecar.finish_episode(status="interrupted", provider=tracker)
@@ -1499,6 +1689,8 @@ def main() -> None:
                 "tracking_lost",
                 "sensor_unhealthy",
                 "interrupted",
+                "storage_failure",
+                "profile_unmaintained",
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
@@ -1529,7 +1721,15 @@ def main() -> None:
                 if status in {"finish", "interrupted"}:
                     break
                 continue
-            dataset.save_episode()
+            try:
+                with profiler.measure("video_encoding_dataset_episode_write"):
+                    dataset.save_episode()
+            except OSError as exc:
+                if exc.errno == errno.ENOSPC:
+                    raise CaptureStorageError(
+                        "storage exhausted while closing episode; partial data is not complete"
+                    ) from exc
+                raise
             tracking_sidecar.finish_episode(status="recorded", provider=tracker)
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
@@ -1558,7 +1758,8 @@ def main() -> None:
         log.info("--- Finalising ---")
         finalization_error: BaseException | None = None
         try:
-            dataset.finalize()
+            with profiler.measure("dataset_finalization"):
+                dataset.finalize()
             root = Path(dataset.root)
             body_metadata = canonical_body_metadata(
                 transforms=[world_calibration.metadata()]
@@ -1645,15 +1846,33 @@ def main() -> None:
             )
             _validate_finalized_lerobot_dataset(root)
             log.info("LeRobot v3 integrity validation passed.")
+            viewer_failures: list[str] = []
+            if robot_viewer is not None:
+                viewer_status = robot_viewer.status()
+                if viewer_status.last_error:
+                    viewer_failures.append(viewer_status.last_error)
+            capture_session.viewer_failures.extend(viewer_failures)
             if args.push_to_hub:
                 dataset.push_to_hub(
                     license=args.dataset_license,
                     tags=["HandUMI"],
                     **card_kwargs,  # pyright: ignore[reportArgumentType]
                 )
+            with profiler.measure("checksum_generation"):
+                capture_session.complete(profiler)
         except BaseException as exc:
             finalization_error = exc
             log.exception("Dataset finalization failed; do not upload this dataset.")
+            try:
+                capture_session.reject(
+                    profiler,
+                    reason=f"finalization_failed:{type(exc).__name__}",
+                )
+            except BaseException:
+                log.exception(
+                    "Could not promote the failed staging directory to rejected; "
+                    "its incomplete state remains preserved."
+                )
         finally:
             if robot_viewer is not None:
                 robot_viewer.close()
@@ -1668,7 +1887,11 @@ def main() -> None:
             tracker.stop()
         if finalization_error is not None:
             raise finalization_error
-        log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
+        log.info(
+            "Done. Recorded %d episode(s). Dataset at: %s",
+            recorded,
+            requested_output_dir,
+        )
         log_say("Exiting", play_sounds=play_sounds)
 
 
@@ -1728,7 +1951,7 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
 
 
 def _wait_for_clap(
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
     clap_detector: DoubleClapDetector,
     stop_event: threading.Event,
     *,
@@ -1747,7 +1970,7 @@ def _wait_for_clap(
 
 
 def _latest_gripper_widths(
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
 ) -> GripperWidths:
     if grippers is None:
         return zero_gripper_widths()

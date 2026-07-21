@@ -210,7 +210,7 @@ class _FakeTrackingSidecar:
     def nearest_packet(self, target_time_ns: int):
         return None
 
-    def consume_frame_epoch_change(self):
+    def consume_frame_epoch_change(self) -> object | None:
         return None
 
 
@@ -361,8 +361,14 @@ class RobotMetadataTest(unittest.TestCase):
             metadata = _robot_metadata("piper", config_dir)
 
         self.assertEqual(metadata["name"], "piper")
-        self.assertEqual(metadata["configuration"]["kind"], "piper")
-        self.assertEqual(len(metadata["sha256"]), 64)
+        configuration = metadata["configuration"]
+        self.assertIsInstance(configuration, dict)
+        assert isinstance(configuration, dict)
+        self.assertEqual(configuration["kind"], "piper")
+        sha256 = metadata["sha256"]
+        self.assertIsInstance(sha256, str)
+        assert isinstance(sha256, str)
+        self.assertEqual(len(sha256), 64)
 
     def test_robot_tool_tcp_setup_is_snapshotted_with_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -414,7 +420,9 @@ calibration:
         self.assertEqual(metadata["source_robot"], "piper")
         self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
         self.assertEqual(metadata["controller_mount"], "handumi_v1")
-        self.assertEqual(len(metadata["sha256"]), 64)
+        sha256 = metadata["sha256"]
+        assert isinstance(sha256, str)
+        self.assertEqual(len(sha256), 64)
         self.assertTrue(
             str(metadata["source_path"]).endswith("meta_controller_tcp.yaml")
         )
@@ -896,6 +904,7 @@ class BodyEstimatorConfigurationTest(unittest.TestCase):
             )
         )
         self.assertIsNotNone(estimator)
+        assert estimator is not None
         metadata = estimator.metadata()
         self.assertEqual(metadata["schema"], "handumi_kinematic_com_v1")
         self.assertEqual(metadata["profile"]["values"]["height_m"], 1.80)

@@ -112,7 +112,15 @@ class ControllerPairSample:
         }
 
 
-class TrackingProvider(Protocol):
+class TrackingSampleSource(Protocol):
+    device: str
+
+    def latest(self) -> ControllerPairSample:
+        """Return the latest normalized controller pair sample."""
+        ...
+
+
+class TrackingProvider(TrackingSampleSource, Protocol):
     device: str
 
     def start(self) -> None:
@@ -120,10 +128,6 @@ class TrackingProvider(Protocol):
 
     def stop(self) -> None:
         """Stop and release backend resources."""
-
-    def latest(self) -> ControllerPairSample:
-        """Return the latest normalized controller pair sample."""
-        ...
 
 
 class LegacyControllerProviderAdapter:
@@ -145,7 +149,10 @@ class LegacyControllerProviderAdapter:
     def sample_at(self, target_time_ns: int) -> ControllerPairSample:
         sampler = getattr(self.provider, "sample_at", None)
         if callable(sampler):
-            return sampler(target_time_ns)
+            sample = sampler(target_time_ns)
+            if not isinstance(sample, ControllerPairSample):
+                raise TypeError("tracking sample_at() returned an invalid sample")
+            return sample
         return self.provider.latest()
 
 

@@ -54,10 +54,13 @@ handumi-calibrate-spatial = "handumi.scripts.setup.calibrate_spatial:main"
 handumi-replay-in-sim = "handumi.scripts.replay.replay_in_sim:main"
 handumi-quest-probe = "handumi.tracking.quest_probe:main"
 handumi-preflight = "handumi.scripts.preflight:main"
+handumi-soak = "handumi.scripts.soak:main"
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "ruff==0.15.22",
+    "basedpyright==1.39.9",
 ]
 ik-source = [
     # PyRoki is not published on PyPI and its metadata declares an unpinned
@@ -126,6 +129,7 @@ include = [
     "bin",
     "configs",
     "docs",
+    "release",
     "README.md",
     "CONTRIBUTING.md",
     "CODE_OF_CONDUCT.md",
