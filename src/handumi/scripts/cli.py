@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -55,8 +56,15 @@ COMMANDS = {
 }
 
 
-def _print_help(prefix: tuple[str, ...] = ()) -> None:
-    label_prefix = f"handumi {' '.join(prefix)}" if prefix else "handumi"
+def _program_name() -> str:
+    name = Path(sys.argv[0]).name
+    return name if name in {"handumi", "hu"} else "handumi"
+
+
+def _print_help(
+    prefix: tuple[str, ...] = (), *, program: str = "handumi"
+) -> None:
+    label_prefix = f"{program} {' '.join(prefix)}" if prefix else program
     print(f"usage: {label_prefix} <command> [options]\n")
     print("Commands:")
     commands = {
@@ -67,21 +75,22 @@ def _print_help(prefix: tuple[str, ...] = ()) -> None:
     labels = [" ".join(path) for path in commands]
     width = max(len(label) for label in labels)
     for (path, command), label in zip(commands.items(), labels, strict=True):
-        print(f"  handumi {label:<{width}}  {command.description}")
-    print("\nRun 'handumi <command> --help' for command-specific options.")
+        print(f"  {program} {label:<{width}}  {command.description}")
+    print(f"\nRun '{program} <command> --help' for command-specific options.")
 
 
 def main(argv: list[str] | None = None) -> None:
+    program = _program_name()
     values = list(sys.argv[1:] if argv is None else argv)
     if not values or values[0] in {"-h", "--help"}:
-        _print_help()
+        _print_help(program=program)
         return
     group = (values[0],)
     group_exists = any(
         path[:1] == group and len(path) > 1 for path in COMMANDS
     ) and group not in COMMANDS
     if group_exists and (len(values) == 1 or values[1] in {"-h", "--help"}):
-        _print_help(group)
+        _print_help(group, program=program)
         return
     match = next(
         (
@@ -96,14 +105,14 @@ def main(argv: list[str] | None = None) -> None:
     if match is None:
         requested = " ".join(values[:2])
         raise SystemExit(
-            f"Unknown HandUMI command {requested!r}. Run 'handumi --help'."
+            f"Unknown HandUMI command {requested!r}. Run '{program} --help'."
         )
     path, command = match
     rest = values[len(path) :]
     module = importlib.import_module(command.module)
     previous_argv = sys.argv
     try:
-        sys.argv = [f"handumi {' '.join(path)}", *rest]
+        sys.argv = [f"{program} {' '.join(path)}", *rest]
         module.main()
     finally:
         sys.argv = previous_argv

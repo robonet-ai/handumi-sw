@@ -37,7 +37,8 @@ as `handumi doctor`; `handumi setup` runs the guided hardware setup. Existing
 workflows are grouped under the single `handumi` command; use `handumi --help`
 to see the final command tree. Bash, Zsh, and Fish completion is loaded when
 the virtual environment is activated, so `handumi re<Tab>` completes `record`
-and `replay`.
+and `replay`. The shorter `hu` executable is an equivalent alias, so commands
+such as `hu record` use the same interface and completion.
 
 ## Install from GitHub
 

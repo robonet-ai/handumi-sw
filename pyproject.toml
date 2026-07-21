@@ -52,6 +52,7 @@ cuda = [
 
 [project.scripts]
 handumi = "handumi.scripts.cli:main"
+hu = "handumi.scripts.cli:main"
 
 [dependency-groups]
 dev = [

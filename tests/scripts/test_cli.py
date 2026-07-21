@@ -44,6 +44,15 @@ def test_command_group_help_lists_only_its_subcommands(capsys):
     assert "handumi calibrate spatial" not in output
 
 
+def test_short_program_name_is_preserved_in_help(capsys):
+    with mock.patch.object(cli.sys, "argv", ["hu"]):
+        cli.main(["teleop", "--help"])
+
+    output = capsys.readouterr().out
+    assert "hu teleop sim" in output
+    assert "handumi teleop sim" not in output
+
+
 def test_unknown_command_fails_cleanly():
     with pytest.raises(SystemExit, match="Unknown HandUMI command"):
         cli.main(["unknown"])

@@ -33,4 +33,6 @@ def test_completes_command_options():
 
 def test_generated_scripts_call_dynamic_candidate_protocol():
     for script in completion.SHELL_COMPLETIONS.values():
-        assert "handumi completion __complete" in script
+        assert "completion __complete" in script
+        assert "handumi" in script
+        assert "hu" in script

@@ -15,16 +15,17 @@ from handumi.scripts.cli import COMMANDS
 BASH_COMPLETION = r'''_handumi_complete() {
   local -a request
   local candidate
+  local executable="${COMP_WORDS[0]}"
   request=("${COMP_WORDS[@]:1:COMP_CWORD}")
   COMPREPLY=()
   while IFS= read -r candidate; do
     [[ -n "$candidate" ]] && COMPREPLY+=("$candidate")
-  done < <(command handumi completion __complete -- "${request[@]}")
+  done < <(command "$executable" completion __complete -- "${request[@]}")
   if ((${#COMPREPLY[@]} == 0)); then
     compopt -o default 2>/dev/null || true
   fi
 }
-complete -o bashdefault -o default -F _handumi_complete handumi
+complete -o bashdefault -o default -F _handumi_complete handumi hu
 '''
 
 
@@ -35,24 +36,27 @@ fi
 
 _handumi_complete() {
   local -a request candidates
+  local executable="${words[1]}"
   request=("${words[2,-1]}")
-  candidates=("${(@f)$(command handumi completion __complete -- "${request[@]}")}")
+  candidates=("${(@f)$(command "$executable" completion __complete -- "${request[@]}")}")
   if (( ${#candidates[@]} )); then
     compadd -- "${candidates[@]}"
   else
     _files
   fi
 }
-compdef _handumi_complete handumi
+compdef _handumi_complete handumi hu
 '''
 
 
 FISH_COMPLETION = r'''function __handumi_complete
     set -l tokens (commandline -opc)
+    set -l executable $tokens[1]
     set -e tokens[1]
-    command handumi completion __complete -- $tokens (commandline -ct)
+    command $executable completion __complete -- $tokens (commandline -ct)
 end
 complete -c handumi -f -a '(__handumi_complete)'
+complete -c hu -f -a '(__handumi_complete)'
 '''
 
 

@@ -23,6 +23,8 @@ Meta Quest. It also creates the ignored machine-local `configs/rig.yaml` from
 `configs/rig.example.yaml` without overwriting an existing rig configuration.
 Activating the environment loads command and option completion for Bash, Zsh,
 or Fish; for example, `handumi re<Tab>` offers `record` and `replay`.
+`hu` is an equivalent short alias for the complete CLI, including help and
+completion, so `hu record` and `handumi record` behave identically.
 
 For installations that do not use `install.sh`, enable completion in the
 current shell with one of:
