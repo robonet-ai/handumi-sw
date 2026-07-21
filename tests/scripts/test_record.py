@@ -16,19 +16,28 @@ import pyarrow.parquet as pq
 from handumi.cameras.base import CameraSample
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
+    StreamingEncodingError,
+    _StrictStreamingEncoder,
     _capture_sources_metadata,
     _default_output_dir,
     _EscapeStopListener,
+    _recommended_encoder_threads,
     _recording_tcp_calibration_metadata,
+    _resolve_recording_args,
+    _resume_handumi_metadata,
     _robot_metadata,
+    _select_video_encoder,
     _selected_camera_names,
     _validate_args,
     _validate_finalized_lerobot_dataset,
+    _validate_resume_target,
     _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
     _write_dataset_readme,
+    build_features,
     build_observation,
+    parse_args,
     record_episode,
 )
 from handumi.tracking.base import ControllerPairSample
@@ -152,6 +161,94 @@ class DefaultOutputDirTest(unittest.TestCase):
         self.assertRegex(out.name, r"^\d{8}_\d{6}$")
 
 
+class RecordingConfigurationTest(unittest.TestCase):
+    @staticmethod
+    def _write_rig(root: Path, recording: str = "") -> Path:
+        path = root / "rig.yaml"
+        path.write_text(
+            "cameras:\n"
+            "  left_wrist: {index_or_path: 0}\n"
+            "  right_wrist: {index_or_path: 2}\n"
+            "  workspace: {index_or_path: 4}\n"
+            f"{recording}",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_rig_recording_defaults_drive_simple_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rig = self._write_rig(
+                root,
+                "recording:\n"
+                "  device: pico\n"
+                "  cameras: [workspace]\n"
+                "  fps: 20\n"
+                "  robot: openarmv1\n",
+            )
+            args = _resolve_recording_args(
+                parse_args([str(root / "capture"), "--rig-config", str(rig)])
+            )
+
+        self.assertEqual(args.output_dir, root / "capture")
+        self.assertEqual(args.device, "pico")
+        self.assertEqual(args.cameras, ["workspace"])
+        self.assertEqual(args.fps, 20)
+        self.assertEqual(args.robot, "openarmv1")
+
+    def test_resume_loads_capture_shape_and_sources_from_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rig = self._write_rig(root)
+            dataset = root / "capture"
+            (dataset / "meta").mkdir(parents=True)
+            info = {
+                "fps": 24,
+                "features": {
+                    "observation.images.workspace": {
+                        "dtype": "video",
+                        "shape": [720, 1280, 3],
+                    }
+                },
+                "handumi": {
+                    "recording_device": "meta",
+                    "cameras": [{"name": "workspace", "index_or_path": 7}],
+                    "sources": {"feetech": {"enabled": False}},
+                    "target_robot": {"name": "piper"},
+                    "sync_lag_s": 0.05,
+                    "max_sync_skew_s": 0.07,
+                    "camera_stale_timeout_s": 0.3,
+                    "gripper_stale_timeout_s": 0.2,
+                },
+            }
+            (dataset / "meta" / "info.json").write_text(json.dumps(info))
+            args = _resolve_recording_args(
+                parse_args(
+                    [str(dataset), "--resume", "--rig-config", str(rig)]
+                )
+            )
+
+        self.assertEqual(args.cameras, ["workspace"])
+        self.assertEqual(args.cam_ids, [7])
+        self.assertEqual((args.cam_width, args.cam_height), (1280, 720))
+        self.assertEqual(args.fps, 24)
+        self.assertTrue(args.skip_feetech)
+
+    def test_legacy_camera_flags_still_override_rig_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rig = self._write_rig(
+                root,
+                "recording:\n  cameras: [workspace]\n",
+            )
+            args = _resolve_recording_args(
+                parse_args(["--only-left-camera", "--rig-config", str(rig)])
+            )
+
+        self.assertIsNone(args.cameras)
+        self.assertEqual(_selected_camera_names(args), ["left_wrist"])
+
+
 class CameraSelectionTest(unittest.TestCase):
     @staticmethod
     def _args(**overrides):
@@ -226,6 +323,10 @@ class RecordArgumentValidationTest(unittest.TestCase):
             "gripper_stale_timeout_s": 0.10,
             "sensor_loss_timeout_s": 1.0,
             "feetech_sample_hz": 100.0,
+            "encoder": "auto",
+            "vcodec": None,
+            "encoder_threads": None,
+            "encoder_queue_size": None,
         }
         values.update(overrides)
         return argparse.Namespace(**values)
@@ -240,6 +341,185 @@ class RecordArgumentValidationTest(unittest.TestCase):
 
         with self.assertRaisesRegex(SystemExit, "--manual-control"):
             _validate_args(args)
+
+    def test_resume_requires_explicit_output_dir(self):
+        args = self._args(resume=True, output_dir=None)
+
+        with self.assertRaisesRegex(SystemExit, "--resume requires"):
+            _validate_args(args)
+
+    def test_resume_accepts_explicit_output_dir(self):
+        args = self._args(resume=True, output_dir=Path("outputs/existing"))
+
+        _validate_args(args)
+
+    def test_rejects_conflicting_encoder_and_codec_selection(self):
+        args = self._args(encoder="gpu", vcodec="h264")
+
+        with self.assertRaisesRegex(SystemExit, "either --encoder"):
+            _validate_args(args)
+
+    def test_rejects_invalid_encoder_thread_limit(self):
+        args = self._args(encoder_threads=0)
+
+        with self.assertRaisesRegex(SystemExit, "--encoder-threads"):
+            _validate_args(args)
+
+
+class VideoEncoderSelectionTest(unittest.TestCase):
+    @mock.patch(
+        "handumi.scripts.record._probe_video_encoder",
+        return_value=(True, None),
+    )
+    @mock.patch(
+        "handumi.scripts.record._available_hardware_vcodecs",
+        return_value=["h264_nvenc"],
+    )
+    def test_auto_prefers_working_hardware(self, _available, probe):
+        selected = _select_video_encoder(
+            policy="auto",
+            requested_vcodec=None,
+            width=640,
+            height=480,
+            fps=30,
+            camera_count=2,
+            requested_threads=None,
+        )
+
+        self.assertEqual(selected.vcodec, "h264_nvenc")
+        self.assertTrue(selected.hardware)
+        self.assertIsNone(selected.threads)
+        probe.assert_called_once_with(
+            "h264_nvenc",
+            width=640,
+            height=480,
+            fps=30,
+            encoder_threads=None,
+        )
+
+    @mock.patch("handumi.scripts.record.os.cpu_count", return_value=8)
+    @mock.patch(
+        "handumi.scripts.record._available_hardware_vcodecs",
+        return_value=["h264_nvenc"],
+    )
+    def test_auto_falls_back_to_limited_cpu(self, _available, _cpu_count):
+        def probe(vcodec, **_kwargs):
+            return (vcodec == "h264", None if vcodec == "h264" else "probe failed")
+
+        with mock.patch(
+            "handumi.scripts.record._probe_video_encoder",
+            side_effect=probe,
+        ):
+            selected = _select_video_encoder(
+                policy="auto",
+                requested_vcodec=None,
+                width=640,
+                height=480,
+                fps=30,
+                camera_count=2,
+                requested_threads=None,
+            )
+
+        self.assertEqual(selected.vcodec, "h264")
+        self.assertFalse(selected.hardware)
+        self.assertEqual(selected.threads, 3)
+
+    @mock.patch(
+        "handumi.scripts.record._available_hardware_vcodecs",
+        return_value=[],
+    )
+    def test_gpu_requires_an_available_hardware_encoder(self, _available):
+        with self.assertRaisesRegex(SystemExit, "no supported hardware encoder"):
+            _select_video_encoder(
+                policy="gpu",
+                requested_vcodec=None,
+                width=640,
+                height=480,
+                fps=30,
+                camera_count=2,
+                requested_threads=None,
+            )
+
+    @mock.patch(
+        "handumi.scripts.record._available_hardware_vcodecs",
+        return_value=["h264_nvenc"],
+    )
+    @mock.patch(
+        "handumi.scripts.record._probe_video_encoder",
+        return_value=(True, None),
+    )
+    def test_explicit_vcodec_remains_an_advanced_override(self, probe, _available):
+        selected = _select_video_encoder(
+            policy="auto",
+            requested_vcodec="libsvtav1",
+            width=640,
+            height=480,
+            fps=30,
+            camera_count=2,
+            requested_threads=2,
+        )
+
+        self.assertEqual(selected.vcodec, "libsvtav1")
+        self.assertFalse(selected.hardware)
+        self.assertEqual(selected.threads, 2)
+        probe.assert_called_once()
+
+    @mock.patch("handumi.scripts.record.os.cpu_count", return_value=64)
+    def test_cpu_threads_are_capped_per_camera(self, _cpu_count):
+        self.assertEqual(_recommended_encoder_threads(1), 4)
+        self.assertEqual(_recommended_encoder_threads(3), 4)
+
+
+class StrictStreamingEncoderTest(unittest.TestCase):
+    def test_prepares_video_before_dataset_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "video.mp4"
+            path.write_bytes(b"mp4")
+            underlying = mock.Mock()
+            underlying._dropped_frames = {}
+            underlying.finish_episode.return_value = {
+                "observation.images.left": (path, {"count": np.array([1])})
+            }
+            encoder = _StrictStreamingEncoder(underlying)
+            encoder.start_episode(["observation.images.left"], Path(tmp))
+            encoder.feed_frame(
+                "observation.images.left",
+                np.zeros((48, 64, 3), dtype=np.uint8),
+            )
+
+            encoder.prepare_episode(expected_frames=1)
+            results = encoder.finish_episode()
+
+            self.assertEqual(results["observation.images.left"][0], path)
+            underlying.finish_episode.assert_called_once_with()
+
+    def test_dropped_frame_rejects_episode_immediately(self):
+        underlying = mock.Mock()
+        underlying._dropped_frames = {}
+
+        def drop_frame(video_key, _image):
+            underlying._dropped_frames[video_key] = 1
+
+        underlying.feed_frame.side_effect = drop_frame
+        encoder = _StrictStreamingEncoder(underlying)
+        encoder.start_episode(["observation.images.left"], Path("outputs"))
+
+        with self.assertRaisesRegex(StreamingEncodingError, "dropped a frame"):
+            encoder.feed_frame(
+                "observation.images.left",
+                np.zeros((48, 64, 3), dtype=np.uint8),
+            )
+
+    def test_frame_count_mismatch_is_rejected_before_finish(self):
+        underlying = mock.Mock()
+        underlying._dropped_frames = {}
+        encoder = _StrictStreamingEncoder(underlying)
+        encoder.start_episode(["observation.images.left"], Path("outputs"))
+
+        with self.assertRaisesRegex(StreamingEncodingError, "frame counts"):
+            encoder.prepare_episode(expected_frames=1)
+
+        underlying.finish_episode.assert_not_called()
 
 
 class RobotMetadataTest(unittest.TestCase):
@@ -370,6 +650,98 @@ class FinalizedDatasetGuaranteesTest(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "Parquet files are incomplete"):
                 _validate_finalized_lerobot_dataset(root)
+
+
+class ResumeDatasetTest(unittest.TestCase):
+    @staticmethod
+    def _handumi_metadata() -> dict[str, object]:
+        args = argparse.Namespace(
+            device="meta",
+            sync_lag_s=0.04,
+            max_sync_skew_s=0.06,
+            camera_stale_timeout_s=0.25,
+            gripper_stale_timeout_s=0.10,
+            skip_feetech=False,
+        )
+        return _resume_handumi_metadata(
+            args=args,
+            camera_specs=[{"name": "left_wrist", "id": 5}],
+            calibration_metadata={
+                "schema_version": 2,
+                "sha256": "controller-hash",
+                "applied_to_state": False,
+                "source_robot": "piper",
+                "source_gripper": "piper_parallel_v1",
+                "tracking_device": "meta",
+                "controller_mount": "handumi_v1",
+            },
+            spatial_session_metadata=None,
+            robot_metadata={"name": "piper", "sha256": "robot-hash"},
+        )
+
+    @classmethod
+    def _valid_resume_dataset(cls, root: Path) -> tuple[dict, dict[str, object]]:
+        FinalizedDatasetGuaranteesTest._valid_dataset(root)
+        features = build_features(["left_wrist"], 64, 48, use_videos=False)
+        handumi = cls._handumi_metadata()
+        info_path = root / "meta" / "info.json"
+        info = json.loads(info_path.read_text())
+        info.update(
+            {
+                "fps": 30,
+                "robot_type": "handumi_raw",
+                "features": features,
+                "handumi": handumi,
+            }
+        )
+        info_path.write_text(json.dumps(info))
+        (root / "README.md").write_text("# Existing HandUMI dataset\n")
+        return features, handumi
+
+    def test_accepts_compatible_finalized_dataset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features, handumi = self._valid_resume_dataset(root)
+
+            _validate_resume_target(
+                root,
+                fps=30,
+                features=features,
+                handumi=handumi,
+            )
+
+    def test_rejects_feature_shape_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, handumi = self._valid_resume_dataset(root)
+            changed_features = build_features(
+                ["left_wrist"], 128, 48, use_videos=False
+            )
+
+            with self.assertRaisesRegex(SystemExit, "recording configuration is incompatible"):
+                _validate_resume_target(
+                    root,
+                    fps=30,
+                    features=changed_features,
+                    handumi=handumi,
+                )
+
+    def test_rejects_calibration_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features, handumi = self._valid_resume_dataset(root)
+            changed_handumi = dict(handumi)
+            calibration = dict(changed_handumi["controller_tcp_calibration"])
+            calibration["sha256"] = "different-controller-hash"
+            changed_handumi["controller_tcp_calibration"] = calibration
+
+            with self.assertRaisesRegex(SystemExit, "controller_tcp_calibration"):
+                _validate_resume_target(
+                    root,
+                    fps=30,
+                    features=features,
+                    handumi=changed_handumi,
+                )
 
 
 class WaitForClapTest(unittest.TestCase):

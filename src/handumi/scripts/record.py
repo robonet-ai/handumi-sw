@@ -21,11 +21,14 @@ import os
 import select
 import signal
 import sys
+import tempfile
 import termios
 import threading
 import time
 import tty
+from dataclasses import dataclass
 from datetime import datetime
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +40,7 @@ from handumi.calibration.control_tcp import (
     controller_tcp_calibration_metadata,
 )
 from handumi.calibration.spatial import (
+    pose7_from_dict,
     session_calibration_metadata,
     session_table_from_device,
 )
@@ -47,7 +51,7 @@ from handumi.cameras import (
     read_camera_samples,
     resolve_camera_ids,
 )
-from handumi.config import DEFAULT_RIG_CONFIG
+from handumi.config import DEFAULT_RIG_CONFIG, load_optional_rig_section
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
     HANDUMI_STATE_SEMANTICS,
@@ -101,6 +105,331 @@ log = logging.getLogger("handumi.record")
 ROBOT_CONFIG_DIR = Path("configs/robots")
 _RERUN_TRAIL_SECONDS = 10.0
 _RERUN_CHART_WINDOW_S = 20.0
+_SOFTWARE_VIDEO_CODEC = "h264"
+_HARDWARE_VIDEO_CODECS = (
+    "h264_videotoolbox",
+    "hevc_videotoolbox",
+    "h264_nvenc",
+    "hevc_nvenc",
+    "h264_vaapi",
+    "h264_qsv",
+)
+_VALID_VIDEO_CODECS = {
+    _SOFTWARE_VIDEO_CODEC,
+    "hevc",
+    "libsvtav1",
+    *_HARDWARE_VIDEO_CODECS,
+}
+_CAMERA_NAMES = ("left_wrist", "right_wrist", "workspace")
+_RECORDING_DEFAULTS: dict[str, object] = {
+    "device": "meta",
+    "cameras": ["left_wrist", "right_wrist"],
+    "cam_width": 640,
+    "cam_height": 480,
+    "cam_fps": 30,
+    "fps": 30,
+    "tracking_loss_timeout_s": 1.0,
+    "sync_lag_s": 0.04,
+    "max_sync_skew_s": 0.06,
+    "camera_stale_timeout_s": 0.25,
+    "gripper_stale_timeout_s": 0.10,
+    "sensor_loss_timeout_s": 1.0,
+    "feetech_sample_hz": 100.0,
+    "skip_feetech": False,
+    "no_video": False,
+    "robot": "piper",
+}
+
+
+class StreamingEncodingError(RuntimeError):
+    """The streaming encoder cannot produce a frame-aligned episode."""
+
+
+@dataclass(frozen=True)
+class _VideoEncoderSelection:
+    vcodec: str
+    hardware: bool
+    threads: int | None
+
+
+class _StrictStreamingEncoder:
+    """Make LeRobot streaming failures transactional at the episode boundary.
+
+    LeRobot normally finishes streaming after it starts writing episode data.
+    HandUMI prepares the videos first and stages the results so a failed encoder
+    can discard the episode without appending partial rows to Parquet.
+    """
+
+    def __init__(self, encoder: object) -> None:
+        self._encoder = encoder
+        self._video_keys: tuple[str, ...] = ()
+        self._frame_counts: dict[str, int] = {}
+        self._prepared_results: dict[str, tuple[Path, dict | None]] | None = None
+
+    def start_episode(self, video_keys: list[str], temp_dir: Path) -> None:
+        self._prepared_results = None
+        self._video_keys = tuple(video_keys)
+        self._frame_counts = dict.fromkeys(video_keys, 0)
+        self._encoder.start_episode(video_keys=video_keys, temp_dir=temp_dir)
+
+    def feed_frame(self, video_key: str, image: np.ndarray) -> None:
+        before = self._drop_count(video_key)
+        try:
+            self._encoder.feed_frame(video_key, image)
+        except RuntimeError as exc:
+            raise StreamingEncodingError(str(exc)) from exc
+        after = self._drop_count(video_key)
+        if after > before:
+            raise StreamingEncodingError(
+                f"encoder queue dropped a frame for {video_key}"
+            )
+        self._frame_counts[video_key] = self._frame_counts.get(video_key, 0) + 1
+
+    def prepare_episode(self, expected_frames: int) -> None:
+        if self._prepared_results is not None:
+            return
+        dropped = {
+            key: self._drop_count(key)
+            for key in self._video_keys
+            if self._drop_count(key) > 0
+        }
+        if dropped:
+            raise StreamingEncodingError(f"encoder dropped video frames: {dropped}")
+        mismatched = {
+            key: count
+            for key, count in self._frame_counts.items()
+            if count != expected_frames
+        }
+        if mismatched:
+            raise StreamingEncodingError(
+                f"streamed frame counts do not match {expected_frames}: {mismatched}"
+            )
+
+        try:
+            results = self._encoder.finish_episode()
+        except Exception as exc:
+            raise StreamingEncodingError(f"encoder failed while finishing: {exc}") from exc
+
+        try:
+            for key in self._video_keys:
+                if key not in results:
+                    raise StreamingEncodingError(f"encoder returned no video for {key}")
+                path, stats = results[key]
+                path = Path(path)
+                if not path.is_file() or path.stat().st_size <= 0:
+                    raise StreamingEncodingError(f"encoder produced an empty video for {key}")
+                if expected_frames >= 2 and stats is None:
+                    raise StreamingEncodingError(f"encoder returned no statistics for {key}")
+            self._prepared_results = results
+        except Exception:
+            self._remove_results(results)
+            raise
+
+    def finish_episode(self) -> dict[str, tuple[Path, dict | None]]:
+        if self._prepared_results is None:
+            raise StreamingEncodingError(
+                "streaming video was not prepared before saving the episode"
+            )
+        results = self._prepared_results
+        self._prepared_results = None
+        return results
+
+    def cancel_episode(self) -> None:
+        if self._prepared_results is not None:
+            self._remove_results(self._prepared_results)
+            self._prepared_results = None
+        self._encoder.cancel_episode()
+        self._video_keys = ()
+        self._frame_counts.clear()
+
+    def close(self) -> None:
+        if self._prepared_results is not None:
+            self._remove_results(self._prepared_results)
+            self._prepared_results = None
+        self._encoder.close()
+
+    def _drop_count(self, video_key: str) -> int:
+        dropped = getattr(self._encoder, "_dropped_frames", {})
+        return int(dropped.get(video_key, 0)) if isinstance(dropped, dict) else 0
+
+    @staticmethod
+    def _remove_results(results: dict[str, tuple[Path, dict | None]]) -> None:
+        for path, _ in results.values():
+            video_path = Path(path)
+            try:
+                video_path.unlink(missing_ok=True)
+                video_path.parent.rmdir()
+            except OSError:
+                pass
+
+
+def _recommended_encoder_threads(camera_count: int) -> int:
+    """Reserve one logical CPU and avoid every camera claiming every core."""
+    usable_cpus = max(1, (os.cpu_count() or 1) - 1)
+    return max(1, min(4, usable_cpus // max(1, camera_count)))
+
+
+def _available_hardware_vcodecs() -> list[str]:
+    import av
+
+    available: list[str] = []
+    for vcodec in _HARDWARE_VIDEO_CODECS:
+        try:
+            av.codec.Codec(vcodec, "w")
+        except Exception:
+            continue
+        available.append(vcodec)
+    return available
+
+
+def _probe_codec_options(vcodec: str, encoder_threads: int | None) -> dict[str, str]:
+    options: dict[str, str] = {}
+    if vcodec in ("h264", "hevc"):
+        options.update({"g": "2", "crf": "30"})
+    elif vcodec == "libsvtav1":
+        options.update({"g": "2", "crf": "30", "preset": "12"})
+    elif vcodec in ("h264_videotoolbox", "hevc_videotoolbox"):
+        options.update({"g": "2", "q:v": "40"})
+    elif vcodec in ("h264_nvenc", "hevc_nvenc"):
+        options.update({"rc": "constqp", "qp": "30"})
+    elif vcodec == "h264_vaapi":
+        options["qp"] = "30"
+    elif vcodec == "h264_qsv":
+        options["global_quality"] = "30"
+
+    if encoder_threads is not None:
+        if vcodec == "libsvtav1":
+            options["svtav1-params"] = f"lp={encoder_threads}"
+        elif vcodec not in _HARDWARE_VIDEO_CODECS:
+            options["threads"] = str(encoder_threads)
+    return options
+
+
+def _probe_video_encoder(
+    vcodec: str,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    encoder_threads: int | None,
+) -> tuple[bool, str | None]:
+    """Encode real frames through the same PyAV/FFmpeg backend as LeRobot."""
+    import av
+
+    container = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="handumi-encoder-probe-") as tmp:
+            path = Path(tmp) / "probe.mp4"
+            container = av.open(str(path), "w")
+            stream = container.add_stream(
+                vcodec,
+                fps,
+                options=_probe_codec_options(vcodec, encoder_threads),
+            )
+            stream.pix_fmt = "yuv420p"
+            stream.width = width
+            stream.height = height
+            stream.time_base = Fraction(1, fps)
+            for value in (0, 64, 128):
+                frame = np.full((height, width, 3), value, dtype=np.uint8)
+                video_frame = av.VideoFrame.from_ndarray(frame, format="rgb24")
+                video_frame.pts = value // 64
+                video_frame.time_base = Fraction(1, fps)
+                for packet in stream.encode(video_frame):
+                    container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+            container.close()
+            container = None
+            if not path.is_file() or path.stat().st_size <= 0:
+                raise RuntimeError("probe produced an empty MP4")
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass
+
+
+def _select_video_encoder(
+    *,
+    policy: str,
+    requested_vcodec: str | None,
+    width: int,
+    height: int,
+    fps: int,
+    camera_count: int,
+    requested_threads: int | None,
+) -> _VideoEncoderSelection:
+    """Resolve auto/cpu/gpu to a codec that passes a real encode probe."""
+    hardware_codecs = _available_hardware_vcodecs()
+    explicit_codec = requested_vcodec not in (None, "auto")
+    if explicit_codec:
+        if requested_vcodec not in _VALID_VIDEO_CODECS:
+            choices = ", ".join(sorted(_VALID_VIDEO_CODECS))
+            raise SystemExit(
+                f"Unsupported --vcodec {requested_vcodec!r}; choose one of: {choices}"
+            )
+        candidates = [str(requested_vcodec)]
+    elif policy == "cpu":
+        candidates = [_SOFTWARE_VIDEO_CODEC]
+    elif policy == "gpu":
+        candidates = hardware_codecs
+    else:
+        candidates = [*hardware_codecs, _SOFTWARE_VIDEO_CODEC]
+
+    if not candidates:
+        raise SystemExit(
+            "--encoder gpu requested, but PyAV/FFmpeg exposes no supported hardware encoder."
+        )
+
+    failures: list[str] = []
+    for candidate in candidates:
+        hardware = candidate in _HARDWARE_VIDEO_CODECS
+        threads = (
+            requested_threads
+            if requested_threads is not None
+            else None if hardware else _recommended_encoder_threads(camera_count)
+        )
+        ok, error = _probe_video_encoder(
+            candidate,
+            width=width,
+            height=height,
+            fps=fps,
+            encoder_threads=threads,
+        )
+        if ok:
+            return _VideoEncoderSelection(
+                vcodec=candidate,
+                hardware=hardware,
+                threads=threads,
+            )
+        failures.append(f"{candidate}: {error or 'unknown error'}")
+        if hardware:
+            log.warning("Hardware encoder %s failed its startup probe: %s", candidate, error)
+
+    requested = requested_vcodec if explicit_codec else policy
+    details = "; ".join(failures)
+    raise SystemExit(f"No usable video encoder for {requested!r}: {details}")
+
+
+def _install_strict_streaming_encoder(dataset: object) -> None:
+    writer = getattr(dataset, "writer", None)
+    encoder = getattr(writer, "_streaming_encoder", None)
+    if writer is None or encoder is None:
+        raise RuntimeError("LeRobot did not create the requested streaming encoder.")
+    writer._streaming_encoder = _StrictStreamingEncoder(encoder)
+
+
+def _prepare_streaming_episode(dataset: object, expected_frames: int) -> None:
+    writer = getattr(dataset, "writer", None)
+    encoder = getattr(writer, "_streaming_encoder", None)
+    if not isinstance(encoder, _StrictStreamingEncoder):
+        raise RuntimeError("HandUMI strict streaming encoder is not installed.")
+    encoder.prepare_episode(expected_frames)
 
 
 class _EscapeStopListener:
@@ -541,15 +870,20 @@ def record_episode(
                 break
         if rerun is not None:
             rerun.log(cam_frames, sample, widths)
-        dataset.add_frame(
-            {
-                **cam_frames,
-                **build_observation(sample, widths),
-                **gripper_frame.frame,
-                **capture_timing_frame(target_time_ns, tracking_now_ns),
-                "task": task,
-            }
-        )
+        try:
+            dataset.add_frame(
+                {
+                    **cam_frames,
+                    **build_observation(sample, widths),
+                    **gripper_frame.frame,
+                    **capture_timing_frame(target_time_ns, tracking_now_ns),
+                    "task": task,
+                }
+            )
+        except StreamingEncodingError as exc:
+            status = "encoder_unhealthy"
+            log.error("Streaming encoder failed; discarding episode: %s", exc)
+            break
         n_frames += 1
 
         dt = time.perf_counter() - loop_start
@@ -562,25 +896,52 @@ def record_episode(
     return n_frames, status
 
 
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Record HandUMI data with PICO or Meta Quest.")
-    p.add_argument("--device", choices=("pico", "meta"), required=True)
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
+
+    p = argparse.ArgumentParser(
+        description="Record HandUMI data with PICO or Meta Quest.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=(
+            "Device, cameras, FPS, and robot resolve from CLI, a resumed dataset, "
+            "configs/rig.yaml, then safe defaults."
+        ),
+    )
+    p.add_argument("--help-advanced", action="store_true", help="Show every expert option.")
+    p.add_argument("--device", choices=("pico", "meta"), default=None)
+    p.add_argument(
+        "--cameras",
+        type=_camera_list_arg,
+        default=None,
+        help="Comma-separated logical cameras (left_wrist,right_wrist,workspace).",
+    )
     p.add_argument(
         "--rig-config",
         type=Path,
         default=DEFAULT_RIG_CONFIG,
-        help="Machine-local cameras, Feetech, and Meta Quest configuration.",
+        help=advanced("Machine-local cameras, Feetech, and Meta Quest configuration."),
     )
-    p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
+    p.add_argument(
+        "--cam-ids",
+        nargs="+",
+        type=_camera_arg,
+        default=None,
+        help=advanced("Override physical camera IDs in logical camera order."),
+    )
     p.add_argument(
         "--wrist-cameras",
         action="store_true",
-        help="Record both wrist cameras. This is the default when no camera-selection flag is used.",
+        help=advanced("Legacy alias selecting both wrist cameras."),
     )
     p.add_argument(
         "--workspace-camera",
         action="store_true",
-        help="Record the workspace camera; combine with --wrist-cameras for all three.",
+        help=advanced("Legacy flag adding the workspace camera."),
     )
     only_camera = p.add_mutually_exclusive_group()
     only_camera.add_argument(
@@ -588,69 +949,116 @@ def parse_args() -> argparse.Namespace:
         "--only-left-cameras",
         dest="only_left_camera",
         action="store_true",
+        help=advanced("Legacy single-camera selection."),
     )
     only_camera.add_argument(
         "--only-right-camera",
         "--only-right-cameras",
         dest="only_right_camera",
         action="store_true",
+        help=advanced("Legacy single-camera selection."),
     )
-    p.add_argument("--cam-width", type=int, default=640)
-    p.add_argument("--cam-height", type=int, default=480)
-    p.add_argument("--cam-fps", type=int, default=30)
-    p.add_argument("--feetech-port", type=str, default=None)
-    p.add_argument("--skip-feetech", action="store_true")
-    p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
+    p.add_argument("--cam-width", type=int, default=None, help=advanced("Camera width."))
+    p.add_argument("--cam-height", type=int, default=None, help=advanced("Camera height."))
+    p.add_argument("--cam-fps", type=int, default=None, help=advanced("Camera capture FPS."))
+    p.add_argument("--feetech-port", type=str, default=None, help=advanced("Legacy shared Feetech port."))
     p.add_argument(
+        "--skip-feetech",
+        action="store_true",
+        default=None,
+        help="Record without gripper sensors and zero-fill their values.",
+    )
+    p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
+    p.add_argument("output", nargs="?", type=Path, help="Dataset output directory.")
+    p.add_argument(
+        "--output",
         "--output-dir",
+        dest="output_dir",
         type=Path,
         default=None,
         help="Dataset folder. Defaults to a fresh outputs/<YYYYMMDD_HHMMSS>/ "
         "named after when recording started (outputs/ is gitignored).",
     )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Append episodes to the finalized dataset at OUTPUT. "
+            "--num-episodes is the number of additional episodes to record."
+        ),
+    )
     p.add_argument("--task", type=str, default="HandUMI recording")
     p.add_argument("--num-episodes", type=int, default=10)
     p.add_argument("--episode-time-s", type=float, default=60.0)
-    p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--fps", type=int, default=None, help=advanced("Dataset row rate."))
     p.add_argument(
         "--tracking-loss-timeout-s",
         type=float,
-        default=1.0,
-        help="Discard an episode when either controller remains untracked for this long.",
+        default=None,
+        help=advanced("Discard after sustained controller tracking loss."),
     )
     p.add_argument(
         "--sync-lag-s",
         type=float,
-        default=0.04,
-        help="Capture rows this far behind real time so native sensor buffers can align.",
+        default=None,
+        help=advanced("Capture rows behind real time for sensor alignment."),
     )
     p.add_argument(
         "--max-sync-skew-s",
         type=float,
-        default=0.06,
-        help="Maximum source-to-row timestamp difference considered healthy.",
+        default=None,
+        help=advanced("Maximum source-to-row synchronization skew."),
     )
-    p.add_argument("--camera-stale-timeout-s", type=float, default=0.25)
-    p.add_argument("--gripper-stale-timeout-s", type=float, default=0.10)
+    p.add_argument("--camera-stale-timeout-s", type=float, default=None, help=advanced("Camera freshness timeout."))
+    p.add_argument("--gripper-stale-timeout-s", type=float, default=None, help=advanced("Gripper freshness timeout."))
     p.add_argument(
         "--sensor-loss-timeout-s",
         type=float,
-        default=1.0,
-        help="Discard after a camera or encoder remains unhealthy for this long.",
+        default=None,
+        help=advanced("Discard after a sensor remains unhealthy."),
     )
-    p.add_argument("--feetech-sample-hz", type=float, default=100.0)
-    p.add_argument("--no-video", action="store_true")
+    p.add_argument("--feetech-sample-hz", type=float, default=None, help=advanced("Feetech sampler frequency."))
+    p.add_argument("--no-video", action="store_true", default=None, help=advanced("Store individual images instead of MP4."))
     p.add_argument(
         "--rerun",
         action="store_true",
         help="Open a live Rerun view with recorded cameras, controller/TCP trails, and gripper widths.",
     )
-    p.add_argument("--vcodec", type=str, default="h264")
-    p.add_argument("--push-to-hub", action="store_true")
+    p.add_argument(
+        "--encoder",
+        choices=("auto", "cpu", "gpu"),
+        default="auto",
+        help=(
+            "Video encoder policy. 'auto' probes hardware first and falls back "
+            "to H.264 on CPU; 'gpu' requires a working hardware encoder."
+        ),
+    )
+    p.add_argument(
+        "--vcodec",
+        type=str,
+        default=None,
+        help=advanced(
+            "Advanced codec override (for example h264, h264_nvenc, or "
+            "libsvtav1). Overrides automatic codec selection."
+        ),
+    )
+    p.add_argument(
+        "--encoder-threads",
+        type=int,
+        default=None,
+        help=advanced("Per-camera CPU encoder thread override."),
+    )
+    p.add_argument(
+        "--encoder-queue-size",
+        type=int,
+        default=None,
+        help=advanced("Streaming queue capacity per camera."),
+    )
+    p.add_argument("--push-to-hub", action="store_true", help=advanced("Upload after finalization."))
     p.add_argument(
         "--dataset-license",
         default="other",
-        help="Hugging Face dataset-card license identifier. Defaults to 'other' so data is not relicensed as software.",
+        help=advanced("Hugging Face dataset-card license identifier."),
     )
     p.add_argument(
         "--controller-tcp-calibration",
@@ -673,27 +1081,27 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--robot",
-        default="piper",
+        default=None,
         help=(
             "Intended robot embodiment. Snapshots configs/robots/<robot>.yaml in "
             "metadata; raw recordings remain robot-agnostic."
         ),
     )
 
-    p.add_argument("--quest-ip", type=str, default=None)
-    p.add_argument("--tcp-port", type=int, default=None)
-    p.add_argument("--sync-port", type=int, default=None)
+    p.add_argument("--quest-ip", type=str, default=None, help=advanced("Quest IP override."))
+    p.add_argument("--tcp-port", type=int, default=None, help=advanced("Quest TCP port override."))
+    p.add_argument("--sync-port", type=int, default=None, help=advanced("Quest sync port override."))
 
-    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
+    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos", help=advanced("PICO tracking mode."))
     pico_transport = p.add_mutually_exclusive_group()
-    pico_transport.add_argument("--pico-adb", action="store_true")
-    pico_transport.add_argument("--pico-wifi", action="store_true")
-    p.add_argument("--skip-adb-check", action="store_true")
-    p.add_argument("--start-button", choices=START_BUTTON_CHOICES, default="enter")
-    p.add_argument("--start-threshold", type=float, default=0.75)
-    p.add_argument("--manual-control", action="store_true")
-    p.add_argument("--repeat-button", choices=START_BUTTON_CHOICES, default="B")
-    p.add_argument("--finish-button", choices=START_BUTTON_CHOICES, default="Y")
+    pico_transport.add_argument("--pico-adb", action="store_true", help=advanced("Use PICO over ADB."))
+    pico_transport.add_argument("--pico-wifi", action="store_true", help=advanced("Use PICO over Wi-Fi."))
+    p.add_argument("--skip-adb-check", action="store_true", help=advanced("Skip PICO ADB validation."))
+    p.add_argument("--start-button", choices=START_BUTTON_CHOICES, default="enter", help=advanced("Episode start button."))
+    p.add_argument("--start-threshold", type=float, default=0.75, help=advanced("Controller button threshold."))
+    p.add_argument("--manual-control", action="store_true", help=advanced("Use PICO controller buttons."))
+    p.add_argument("--repeat-button", choices=START_BUTTON_CHOICES, default="B", help=advanced("Repeat button."))
+    p.add_argument("--finish-button", choices=START_BUTTON_CHOICES, default="Y", help=advanced("Finish button."))
     p.add_argument(
         "--clap-control",
         action="store_true",
@@ -706,10 +1114,182 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable spoken episode-status announcements (start/save/discard/stop).",
     )
-    return p.parse_args()
+    p.add_argument(
+        "--dry-run",
+        "--print-config",
+        dest="dry_run",
+        action="store_true",
+        help="Resolve and print the recording plan without opening hardware.",
+    )
+    if show_advanced:
+        p.print_help()
+        raise SystemExit(0)
+    return p.parse_args(raw_argv)
+
+
+def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
+    """Apply CLI > resumed dataset > rig.yaml > built-in defaults."""
+    positional_output = getattr(args, "output", None)
+    option_output = getattr(args, "output_dir", None)
+    if positional_output is not None and option_output is not None:
+        if Path(positional_output) != Path(option_output):
+            raise SystemExit("Use either positional OUTPUT or --output-dir, not both.")
+    args.output_dir = option_output or positional_output
+
+    explicit = {
+        name: getattr(args, name, None) is not None
+        for name in (
+            "device",
+            "cameras",
+            "cam_ids",
+            "cam_width",
+            "cam_height",
+            "cam_fps",
+            "fps",
+            "skip_feetech",
+            "no_video",
+            "robot",
+            "session_calibration",
+            "controller_tcp_calibration",
+        )
+    }
+    legacy_camera_selection = any(
+        bool(getattr(args, name, False))
+        for name in (
+            "wrist_cameras",
+            "workspace_camera",
+            "only_left_camera",
+            "only_right_camera",
+        )
+    )
+    args._explicit_recording = explicit
+    args._resume_info = None
+    args._resume_handumi = None
+
+    resume_values: dict[str, object] = {}
+    if bool(getattr(args, "resume", False)):
+        if args.output_dir is None:
+            raise SystemExit("--resume requires an explicit dataset OUTPUT.")
+        info_path = Path(args.output_dir) / "meta" / "info.json"
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Cannot resume: invalid {info_path}: {exc}") from exc
+        handumi = info.get("handumi")
+        if not isinstance(handumi, dict):
+            raise SystemExit(f"Cannot resume: {info_path} has no HandUMI metadata.")
+        args._resume_info = info
+        args._resume_handumi = handumi
+        resume_values = _recording_values_from_dataset(info, handumi)
+        if (
+            not explicit["cam_ids"]
+            and not legacy_camera_selection
+            and resume_values.get("cam_ids") is not None
+        ):
+            args.cam_ids = list(resume_values["cam_ids"])
+
+    rig = load_optional_rig_section(args.rig_config, "recording")
+    aliases = {
+        "width": "cam_width",
+        "height": "cam_height",
+        "camera_fps": "cam_fps",
+        "sample_fps": "fps",
+    }
+    rig_values = {aliases.get(key, key): value for key, value in rig.items()}
+
+    for name, fallback in _RECORDING_DEFAULTS.items():
+        if getattr(args, name, None) is not None:
+            continue
+        if name == "cameras" and legacy_camera_selection:
+            continue
+        value = resume_values.get(name, rig_values.get(name, fallback))
+        if name == "cameras":
+            value = _normalize_camera_list(value)
+        setattr(args, name, value)
+
+    for name in (
+        "tracking_loss_timeout_s",
+        "sync_lag_s",
+        "max_sync_skew_s",
+        "camera_stale_timeout_s",
+        "gripper_stale_timeout_s",
+        "sensor_loss_timeout_s",
+        "feetech_sample_hz",
+    ):
+        if getattr(args, name, None) is None:
+            setattr(
+                args,
+                name,
+                resume_values.get(name, rig_values.get(name, _RECORDING_DEFAULTS[name])),
+            )
+
+    if args.session_calibration is None and not args.resume:
+        configured_session = rig_values.get("session_calibration")
+        if configured_session:
+            args.session_calibration = Path(str(configured_session))
+
+    if args.output_dir is None:
+        args.output_dir = _default_output_dir()
+    return args
+
+
+def _recording_values_from_dataset(
+    info: dict[str, object], handumi: dict[str, object]
+) -> dict[str, object]:
+    values: dict[str, object] = {
+        "device": handumi.get("recording_device"),
+        "fps": info.get("fps"),
+        "cam_fps": handumi.get("camera_fps", info.get("fps")),
+        "tracking_loss_timeout_s": handumi.get("tracking_loss_timeout_s"),
+        "sync_lag_s": handumi.get("sync_lag_s"),
+        "max_sync_skew_s": handumi.get("max_sync_skew_s"),
+        "camera_stale_timeout_s": handumi.get("camera_stale_timeout_s"),
+        "gripper_stale_timeout_s": handumi.get("gripper_stale_timeout_s"),
+        "sensor_loss_timeout_s": handumi.get("sensor_loss_timeout_s"),
+        "feetech_sample_hz": handumi.get("feetech_sample_hz"),
+    }
+    camera_metadata = handumi.get("cameras")
+    if isinstance(camera_metadata, list) and camera_metadata:
+        valid = [item for item in camera_metadata if isinstance(item, dict)]
+        values["cameras"] = [item.get("name") for item in valid]
+        values["cam_ids"] = [item.get("index_or_path") for item in valid]
+
+    features = info.get("features")
+    if isinstance(features, dict):
+        image_features = [
+            feature
+            for key, feature in features.items()
+            if str(key).startswith("observation.images.") and isinstance(feature, dict)
+        ]
+        if image_features:
+            shape = image_features[0].get("shape")
+            if isinstance(shape, (list, tuple)) and len(shape) >= 2:
+                values["cam_height"], values["cam_width"] = int(shape[0]), int(shape[1])
+            values["no_video"] = image_features[0].get("dtype") != "video"
+
+    sources = handumi.get("sources")
+    if isinstance(sources, dict):
+        feetech = sources.get("feetech")
+        if isinstance(feetech, dict) and "enabled" in feetech:
+            values["skip_feetech"] = not bool(feetech["enabled"])
+    robot = handumi.get("target_robot")
+    if isinstance(robot, dict):
+        values["robot"] = robot.get("name")
+    return {key: value for key, value in values.items() if value is not None}
 
 
 def _validate_args(args: argparse.Namespace) -> None:
+    if bool(getattr(args, "resume", False)) and getattr(args, "output_dir", None) is None:
+        raise SystemExit("--resume requires an explicit --output-dir.")
+    if (
+        getattr(args, "vcodec", None) not in (None, "auto")
+        and getattr(args, "encoder", "auto") != "auto"
+    ):
+        raise SystemExit("Use either --encoder cpu/gpu or an explicit --vcodec, not both.")
+    if getattr(args, "encoder_threads", None) is not None and args.encoder_threads <= 0:
+        raise SystemExit("--encoder-threads must be greater than zero.")
+    if getattr(args, "encoder_queue_size", None) is not None and args.encoder_queue_size <= 0:
+        raise SystemExit("--encoder-queue-size must be greater than zero.")
     if args.manual_control and args.device != "pico":
         raise SystemExit("--manual-control currently requires --device pico.")
     if args.manual_control and args.start_button == "enter":
@@ -733,46 +1313,96 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
 
 
+def _resolve_spatial_session_metadata(
+    args: argparse.Namespace,
+) -> dict[str, object] | None:
+    explicit = getattr(args, "_explicit_recording", {})
+    resume_handumi = getattr(args, "_resume_handumi", None)
+    embedded = (
+        resume_handumi.get("spatial_session_calibration")
+        if isinstance(resume_handumi, dict)
+        else None
+    )
+    if args.resume and not explicit.get("session_calibration"):
+        if embedded is None or isinstance(embedded, dict):
+            return embedded
+        raise SystemExit("Resumed dataset has invalid spatial calibration metadata.")
+    try:
+        return session_calibration_metadata(args.session_calibration)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"Invalid session calibration: {exc}") from exc
+
+
+def _print_recording_plan(
+    args: argparse.Namespace,
+    *,
+    camera_specs: list[dict[str, object]],
+    encoder: _VideoEncoderSelection | None,
+    calibration_source: str,
+    spatial_session_metadata: dict[str, object] | None,
+) -> None:
+    if encoder is None:
+        encoder_label = "disabled (individual images)"
+    else:
+        kind = "hardware" if encoder.hardware else "CPU"
+        thread_label = "codec-managed" if encoder.threads is None else str(encoder.threads)
+        encoder_label = f"{encoder.vcodec} ({kind}, threads/camera={thread_label})"
+    camera_label = ", ".join(
+        f"{spec['name']}={spec['id']}" for spec in camera_specs
+    )
+    mode = "resume" if args.resume else "new dataset"
+    workspace = "table-calibrated" if spatial_session_metadata else "HMD-recentered"
+    episodes = "until stopped" if args.num_episodes <= 0 else str(args.num_episodes)
+    print("\nRecording plan")
+    print(f"  Dataset:  {args.output_dir} ({mode})")
+    print(f"  Device:   {args.device}; robot profile: {args.robot}")
+    print(f"  Cameras:  {camera_label} @ {args.cam_width}x{args.cam_height}/{args.cam_fps} fps")
+    print(f"  Rows:     {args.fps} fps; {episodes} episode(s)")
+    print(f"  Feetech:  {'disabled' if args.skip_feetech else 'enabled'}")
+    print(f"  Encoder:  {encoder_label}")
+    print(f"  Workspace: {workspace}; Controller->TCP: {calibration_source}")
+    if args.dry_run:
+        print("  Result:   plan resolved; hardware was not opened")
+
+
 def main() -> None:
-    args = parse_args()
+    args = _resolve_recording_args(parse_args())
     _validate_args(args)
-    if args.output_dir is None:
-        args.output_dir = _default_output_dir()
     play_sounds = not args.no_sounds
 
     camera_names = _selected_camera_names(args)
-    robot_metadata = _robot_metadata(args.robot)
-    calibration_metadata, calibration_source = _recording_tcp_calibration_metadata(
-        robot_metadata=robot_metadata,
-        device=args.device,
-        explicit_path=args.controller_tcp_calibration,
+    resume_handumi = getattr(args, "_resume_handumi", None)
+    explicit = getattr(args, "_explicit_recording", {})
+    embedded_robot = (
+        resume_handumi.get("target_robot") if isinstance(resume_handumi, dict) else None
     )
-    log.info("Controller->TCP setup: %s", calibration_source)
-    try:
-        spatial_session_metadata = session_calibration_metadata(args.session_calibration)
-    except (OSError, KeyError, TypeError, ValueError) as exc:
-        raise SystemExit(f"Invalid session calibration: {exc}") from exc
-    log.info("--- Tracking setup ---")
-    calibration = ControllerTcpCalibration(
-        left=IDENTITY_POSE7.astype(np.float32).copy(),
-        right=IDENTITY_POSE7.astype(np.float32).copy(),
-        source=None,
-    )
-    tracker = build_tracker(args, calibration)
-    if args.session_calibration is not None:
-        session_device = str(spatial_session_metadata.get("tracking_device") or "")
-        if session_device and session_device != args.device:
-            raise SystemExit(
-                f"Session calibration is for {session_device}, "
-                f"but --device {args.device} was selected."
-            )
-        set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
-        if set_workspace is None:
-            raise SystemExit("Selected tracking backend cannot apply a table calibration.")
-        set_workspace(session_table_from_device(args.session_calibration), locked=True)
-    tracker.start()
+    if args.resume and not explicit.get("robot") and isinstance(embedded_robot, dict):
+        robot_metadata = embedded_robot
+    else:
+        robot_metadata = _robot_metadata(args.robot)
 
-    log.info("--- Camera setup ---")
+    embedded_tcp = (
+        resume_handumi.get("controller_tcp_calibration")
+        if isinstance(resume_handumi, dict)
+        else None
+    )
+    if (
+        args.resume
+        and not explicit.get("robot")
+        and not explicit.get("controller_tcp_calibration")
+        and isinstance(embedded_tcp, dict)
+    ):
+        calibration_metadata = embedded_tcp
+        calibration_source = "embedded dataset snapshot"
+    else:
+        calibration_metadata, calibration_source = _recording_tcp_calibration_metadata(
+            robot_metadata=robot_metadata,
+            device=args.device,
+            explicit_path=args.controller_tcp_calibration,
+        )
+    log.info("Controller->TCP setup: %s", calibration_source)
+    spatial_session_metadata = _resolve_spatial_session_metadata(args)
+
     cam_ids = resolve_camera_ids(
         args.cam_ids,
         args.rig_config,
@@ -787,6 +1417,91 @@ def main() -> None:
         laptop_cam_name="laptop",
     )
     cam_names = [spec["name"] for spec in camera_specs]
+    use_videos = not args.no_video
+    features = build_features(cam_names, args.cam_width, args.cam_height, use_videos)
+    encoder_selection: _VideoEncoderSelection | None = None
+    dataset_vcodec = _SOFTWARE_VIDEO_CODEC
+    encoder_queue_size = args.encoder_queue_size or max(1, args.fps)
+    if use_videos:
+        encoder_selection = _select_video_encoder(
+            policy=args.encoder,
+            requested_vcodec=args.vcodec,
+            width=args.cam_width,
+            height=args.cam_height,
+            fps=args.fps,
+            camera_count=len(cam_names),
+            requested_threads=args.encoder_threads,
+        )
+        dataset_vcodec = encoder_selection.vcodec
+        encoder_kind = "hardware" if encoder_selection.hardware else "CPU"
+        thread_detail = (
+            "codec-managed threads"
+            if encoder_selection.threads is None
+            else f"{encoder_selection.threads} thread(s) per camera"
+        )
+        log.info(
+            "Encoder: %s (%s, streaming, %s).",
+            dataset_vcodec,
+            encoder_kind,
+            thread_detail,
+        )
+    else:
+        log.info("Encoder: disabled (--no-video stores individual images).")
+    if args.resume:
+        _validate_resume_target(
+            args.output_dir,
+            fps=args.fps,
+            features=features,
+            vcodec=dataset_vcodec,
+            handumi=_resume_handumi_metadata(
+                args=args,
+                camera_specs=camera_specs,
+                calibration_metadata=calibration_metadata,
+                spatial_session_metadata=spatial_session_metadata,
+                robot_metadata=robot_metadata,
+            ),
+        )
+
+    _print_recording_plan(
+        args,
+        camera_specs=camera_specs,
+        encoder=encoder_selection,
+        calibration_source=calibration_source,
+        spatial_session_metadata=spatial_session_metadata,
+    )
+    if args.dry_run:
+        return
+
+    log.info("--- Tracking setup ---")
+    calibration = ControllerTcpCalibration(
+        left=IDENTITY_POSE7.astype(np.float32).copy(),
+        right=IDENTITY_POSE7.astype(np.float32).copy(),
+        source=None,
+    )
+    tracker = build_tracker(args, calibration)
+    if spatial_session_metadata is not None:
+        session_device = str(spatial_session_metadata.get("tracking_device") or "")
+        if session_device and session_device != args.device:
+            raise SystemExit(
+                f"Session calibration is for {session_device}, "
+                f"but --device {args.device} was selected."
+            )
+        set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
+        if set_workspace is None:
+            raise SystemExit("Selected tracking backend cannot apply a table calibration.")
+        if args.session_calibration is not None:
+            table_from_device = session_table_from_device(args.session_calibration)
+        else:
+            embedded_pose = spatial_session_metadata.get("table_from_device")
+            if not isinstance(embedded_pose, dict):
+                raise SystemExit(
+                    "Resumed spatial calibration has no embedded table_from_device pose."
+                )
+            table_from_device = pose7_from_dict(embedded_pose)
+        set_workspace(table_from_device, locked=True)
+    tracker.start()
+
+    log.info("--- Camera setup ---")
     cameras = connect_cameras(
         camera_specs,
         fps=args.cam_fps,
@@ -809,20 +1524,37 @@ def main() -> None:
     log.info("--- Dataset setup ---")
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
-    use_videos = not args.no_video
-    features = build_features(cam_names, args.cam_width, args.cam_height, use_videos)
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        fps=args.fps,
-        root=args.output_dir,
-        robot_type="handumi_raw",
-        features=features,
-        use_videos=use_videos,
-        image_writer_processes=0,
-        image_writer_threads=max(1, 4 * len(cam_names)),
-        vcodec=args.vcodec,
-    )
-    log.info("Dataset created at: %s", dataset.root)
+    dataset_kwargs = {
+        "repo_id": args.repo_id,
+        "root": args.output_dir,
+        "image_writer_processes": 0,
+        "image_writer_threads": 0 if use_videos else max(1, 4 * len(cam_names)),
+        "vcodec": dataset_vcodec,
+        "streaming_encoding": use_videos,
+        "encoder_queue_maxsize": encoder_queue_size,
+        "encoder_threads": (
+            encoder_selection.threads if encoder_selection is not None else None
+        ),
+    }
+    if args.resume:
+        dataset = LeRobotDataset.resume(**dataset_kwargs)
+        log.info(
+            "Dataset resumed at: %s (%d existing episode(s); recording %s additional).",
+            dataset.root,
+            dataset.num_episodes,
+            "until stopped" if args.num_episodes <= 0 else args.num_episodes,
+        )
+    else:
+        dataset = LeRobotDataset.create(
+            **dataset_kwargs,
+            fps=args.fps,
+            robot_type="handumi_raw",
+            features=features,
+            use_videos=use_videos,
+        )
+        log.info("Dataset created at: %s", dataset.root)
+    if use_videos:
+        _install_strict_streaming_encoder(dataset)
 
     stop_event = threading.Event()
 
@@ -932,6 +1664,7 @@ def main() -> None:
             if n_frames == 0 or status in {
                 "tracking_lost",
                 "sensor_unhealthy",
+                "encoder_unhealthy",
                 "interrupted",
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
@@ -945,6 +1678,16 @@ def main() -> None:
                 if status in {"finish", "interrupted"}:
                     break
                 continue
+            if use_videos:
+                try:
+                    _prepare_streaming_episode(dataset, n_frames)
+                except StreamingEncodingError as exc:
+                    log.error("Episode discarded before commit: %s", exc)
+                    log_say("Episode discarded", play_sounds=play_sounds)
+                    dataset.clear_episode_buffer()
+                    if status == "finish":
+                        break
+                    continue
             dataset.save_episode()
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
@@ -965,31 +1708,19 @@ def main() -> None:
         try:
             dataset.finalize()
             root = Path(dataset.root)
+            handumi_metadata = _resume_handumi_metadata(
+                args=args,
+                camera_specs=camera_specs,
+                calibration_metadata=calibration_metadata,
+                spatial_session_metadata=spatial_session_metadata,
+                robot_metadata=robot_metadata,
+            )
+            handumi_metadata["sources"] = _capture_sources_metadata(
+                camera_specs, cameras, grippers
+            )
             updated_info = _update_info_json(
                 root,
-                {
-                    "recording_device": args.device,
-                    "tracking_schema": HANDUMI_TRACKING_SCHEMA,
-                    "tracking_workspace": (
-                        "table" if spatial_session_metadata is not None else "hmd_recentered"
-                    ),
-                    "state_semantics": HANDUMI_STATE_SEMANTICS,
-                    "capture_schema": HANDUMI_CAPTURE_SCHEMA,
-                    "sync_lag_s": args.sync_lag_s,
-                    "max_sync_skew_s": args.max_sync_skew_s,
-                    "camera_stale_timeout_s": args.camera_stale_timeout_s,
-                    "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
-                    "cameras": [
-                        {"name": spec["name"], "index_or_path": spec["id"]}
-                        for spec in camera_specs
-                    ],
-                    "sources": _capture_sources_metadata(
-                        camera_specs, cameras, grippers
-                    ),
-                    "controller_tcp_calibration": calibration_metadata,
-                    "spatial_session_calibration": spatial_session_metadata,
-                    "target_robot": robot_metadata,
-                },
+                handumi_metadata,
             )
             if updated_info is not None:
                 dataset.meta.info = updated_info
@@ -1109,10 +1840,15 @@ def _default_output_dir() -> Path:
 
 
 def _selected_camera_names(args: argparse.Namespace) -> list[str]:
+    selected = getattr(args, "cameras", None)
     only_left = bool(getattr(args, "only_left_camera", False))
     only_right = bool(getattr(args, "only_right_camera", False))
     wrist = bool(getattr(args, "wrist_cameras", False))
     workspace = bool(getattr(args, "workspace_camera", False))
+    if selected is not None and (only_left or only_right or wrist or workspace):
+        raise SystemExit("--cameras cannot be combined with legacy camera-selection flags.")
+    if selected is not None:
+        return list(selected)
     if (only_left or only_right) and (wrist or workspace):
         raise SystemExit(
             "--only-left-camera/--only-right-camera cannot be combined with "
@@ -1240,6 +1976,233 @@ def _validate_unique_camera_ids(
         )
 
 
+_LEROBOT_DEFAULT_FEATURE_KEYS = {
+    "timestamp",
+    "frame_index",
+    "episode_index",
+    "index",
+    "task_index",
+}
+
+
+def _resume_handumi_metadata(
+    *,
+    args: argparse.Namespace,
+    camera_specs: list[dict[str, object]],
+    calibration_metadata: dict[str, object],
+    spatial_session_metadata: dict[str, object] | None,
+    robot_metadata: dict[str, object],
+) -> dict[str, object]:
+    """Build the session-wide metadata that must remain stable when appending."""
+    embedded = getattr(args, "_resume_handumi", None)
+    embedded_sources = embedded.get("sources") if isinstance(embedded, dict) else None
+    sources = (
+        embedded_sources
+        if bool(getattr(args, "resume", False)) and isinstance(embedded_sources, dict)
+        else {
+            "tracking": {"enabled": True},
+            "feetech": {"enabled": not args.skip_feetech},
+            "cameras": {
+                str(spec["name"]): {"enabled": True} for spec in camera_specs
+            },
+        }
+    )
+    is_legacy_resume = bool(getattr(args, "resume", False)) and isinstance(embedded, dict)
+
+    def stable_value(key: str, current: object) -> object:
+        if is_legacy_resume and key not in embedded:
+            return None
+        return current
+
+    return {
+        "recording_device": args.device,
+        "camera_fps": stable_value("camera_fps", getattr(args, "cam_fps", None)),
+        "camera_resolution": stable_value(
+            "camera_resolution",
+            [getattr(args, "cam_height", None), getattr(args, "cam_width", None)],
+        ),
+        "tracking_loss_timeout_s": stable_value(
+            "tracking_loss_timeout_s", getattr(args, "tracking_loss_timeout_s", None)
+        ),
+        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+        "tracking_workspace": (
+            "table" if spatial_session_metadata is not None else "hmd_recentered"
+        ),
+        "state_semantics": HANDUMI_STATE_SEMANTICS,
+        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+        "sync_lag_s": args.sync_lag_s,
+        "max_sync_skew_s": args.max_sync_skew_s,
+        "camera_stale_timeout_s": args.camera_stale_timeout_s,
+        "gripper_stale_timeout_s": args.gripper_stale_timeout_s,
+        "sensor_loss_timeout_s": stable_value(
+            "sensor_loss_timeout_s", getattr(args, "sensor_loss_timeout_s", None)
+        ),
+        "feetech_sample_hz": stable_value(
+            "feetech_sample_hz", getattr(args, "feetech_sample_hz", None)
+        ),
+        "cameras": [
+            {"name": spec["name"], "index_or_path": spec["id"]}
+            for spec in camera_specs
+        ],
+        "sources": sources,
+        "controller_tcp_calibration": calibration_metadata,
+        "spatial_session_calibration": spatial_session_metadata,
+        "target_robot": robot_metadata,
+    }
+
+
+def _canonical_feature(feature: object) -> tuple[object, tuple[object, ...], object]:
+    if not isinstance(feature, dict):
+        return None, (), None
+    shape = feature.get("shape")
+    names = feature.get("names")
+    return (
+        feature.get("dtype"),
+        tuple(shape) if isinstance(shape, (list, tuple)) else (),
+        tuple(names) if isinstance(names, (list, tuple)) else names,
+    )
+
+
+def _canonical_video_codec(vcodec: str) -> str:
+    if vcodec == "libsvtav1":
+        return "av1"
+    if "h264" in vcodec:
+        return "h264"
+    if "hevc" in vcodec:
+        return "hevc"
+    return vcodec
+
+
+def _metadata_fingerprint(value: object, keys: tuple[str, ...]) -> object:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return value
+    return {key: value.get(key) for key in keys}
+
+
+def _validate_resume_target(
+    root: Path,
+    *,
+    fps: int,
+    features: dict[str, dict],
+    vcodec: str | None = None,
+    handumi: dict[str, object],
+) -> None:
+    """Reject incomplete or session-incompatible datasets before hardware starts."""
+    root = Path(root)
+    if not root.is_dir():
+        raise SystemExit(f"Cannot resume: dataset directory does not exist: {root}")
+    try:
+        _validate_finalized_lerobot_dataset(root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise SystemExit(f"Cannot resume incomplete dataset at {root}: {exc}") from exc
+
+    try:
+        info = json.loads((root / "meta" / "info.json").read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Cannot resume: invalid meta/info.json in {root}: {exc}") from exc
+
+    mismatches: list[str] = []
+    if int(info.get("fps", 0)) != int(fps):
+        mismatches.append(f"fps: dataset={info.get('fps')!r}, requested={fps!r}")
+    if info.get("robot_type") != "handumi_raw":
+        mismatches.append(
+            f"robot_type: dataset={info.get('robot_type')!r}, requested='handumi_raw'"
+        )
+
+    actual_features = info.get("features") or {}
+    if not isinstance(actual_features, dict):
+        mismatches.append("features: dataset metadata is not a mapping")
+        actual_features = {}
+    actual_custom_keys = set(actual_features) - _LEROBOT_DEFAULT_FEATURE_KEYS
+    expected_keys = set(features)
+    missing = sorted(expected_keys - actual_custom_keys)
+    extra = sorted(actual_custom_keys - expected_keys)
+    if missing:
+        mismatches.append(f"features missing from dataset: {', '.join(missing)}")
+    if extra:
+        mismatches.append(f"unexpected dataset features: {', '.join(extra)}")
+    for key in sorted(expected_keys & actual_custom_keys):
+        actual = _canonical_feature(actual_features[key])
+        expected = _canonical_feature(features[key])
+        if actual != expected:
+            mismatches.append(f"feature {key}: dataset={actual!r}, requested={expected!r}")
+        feature = actual_features[key]
+        if (
+            vcodec not in (None, "auto")
+            and isinstance(feature, dict)
+            and feature.get("dtype") == "video"
+        ):
+            video_info = feature.get("info") or {}
+            actual_codec = video_info.get("video.codec") if isinstance(video_info, dict) else None
+            requested_codec = _canonical_video_codec(vcodec)
+            if actual_codec is not None and actual_codec != requested_codec:
+                mismatches.append(
+                    f"feature {key} codec: dataset={actual_codec!r}, "
+                    f"requested={requested_codec!r}"
+                )
+
+    actual_handumi = info.get("handumi")
+    if not isinstance(actual_handumi, dict):
+        mismatches.append("handumi metadata is missing")
+        actual_handumi = {}
+    simple_keys = (
+        "recording_device",
+        "camera_fps",
+        "camera_resolution",
+        "tracking_loss_timeout_s",
+        "tracking_schema",
+        "tracking_workspace",
+        "state_semantics",
+        "capture_schema",
+        "sync_lag_s",
+        "max_sync_skew_s",
+        "camera_stale_timeout_s",
+        "gripper_stale_timeout_s",
+        "sensor_loss_timeout_s",
+        "feetech_sample_hz",
+        "cameras",
+        "sources",
+    )
+    for key in simple_keys:
+        if actual_handumi.get(key) != handumi.get(key):
+            mismatches.append(
+                f"handumi.{key}: dataset={actual_handumi.get(key)!r}, "
+                f"requested={handumi.get(key)!r}"
+            )
+
+    fingerprint_fields = {
+        "controller_tcp_calibration": (
+            "schema_version",
+            "sha256",
+            "applied_to_state",
+            "source_robot",
+            "source_gripper",
+            "tracking_device",
+            "controller_mount",
+        ),
+        "spatial_session_calibration": (
+            "sha256",
+            "spatial_calibration_sha256",
+            "tracking_device",
+            "workspace_frame",
+        ),
+        "target_robot": ("name", "sha256"),
+    }
+    for key, fields in fingerprint_fields.items():
+        actual = _metadata_fingerprint(actual_handumi.get(key), fields)
+        expected = _metadata_fingerprint(handumi.get(key), fields)
+        if actual != expected:
+            mismatches.append(f"handumi.{key}: dataset={actual!r}, requested={expected!r}")
+
+    if mismatches:
+        details = "\n  - ".join(mismatches)
+        raise SystemExit(
+            f"Cannot resume {root}: recording configuration is incompatible:\n  - {details}"
+        )
+
+
 def _update_info_json(
     root: Path, handumi: dict[str, object]
 ) -> dict[str, object] | None:
@@ -1354,6 +2317,29 @@ def _validate_finalized_lerobot_dataset(root: Path) -> None:
 
 def _camera_arg(value: str) -> int | str:
     return int(value) if value.isdigit() else value
+
+
+def _normalize_camera_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        names = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple)):
+        names = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise SystemExit("Recording cameras must be a list or comma-separated string.")
+    invalid = sorted(set(names) - set(_CAMERA_NAMES))
+    if invalid:
+        raise SystemExit(
+            f"Unknown camera(s): {', '.join(invalid)}. Choose from: {', '.join(_CAMERA_NAMES)}."
+        )
+    if not names:
+        raise SystemExit("At least one recording camera is required.")
+    if len(names) != len(set(names)):
+        raise SystemExit("Recording camera names must not be repeated.")
+    return names
+
+
+def _camera_list_arg(value: str) -> list[str]:
+    return _normalize_camera_list(value)
 
 
 if __name__ == "__main__":

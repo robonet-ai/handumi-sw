@@ -9,6 +9,17 @@ cameras:
   workspace:
     index_or_path: 4
 
+# Optional operator defaults. CLI values override these; --resume loads the
+# dataset snapshot before consulting this section.
+recording:
+  device: meta
+  cameras: [left_wrist, right_wrist]
+  width: 640
+  height: 480
+  camera_fps: 30
+  fps: 30
+  robot: piper
+
 feetech:
   baudrate: 1000000
   protocol_version: 0
