@@ -28,6 +28,7 @@ import argparse
 import logging
 import os
 import time
+import numpy as np
 from pathlib import Path
 
 from handumi.calibration.control_tcp import (
