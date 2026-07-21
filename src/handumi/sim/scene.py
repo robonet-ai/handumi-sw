@@ -43,7 +43,13 @@ def _rgba4(text: str) -> tuple[float, float, float, float]:
     return (r, g, b, a)
 
 
-SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+SCENES_DIR = (
+    SOURCE_ROOT / "assets" / "scenes"
+    if (SOURCE_ROOT / "assets" / "scenes").exists()
+    else PACKAGE_ROOT / "assets" / "scenes"
+)
 
 # Scene origin in the robot world: midpoint between arm bases, at base height.
 DEFAULT_SCENE_POSITION = (0.30, 0.0, 0.0)

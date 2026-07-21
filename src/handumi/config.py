@@ -8,7 +8,12 @@ from typing import Any
 import yaml
 
 DEFAULT_RIG_CONFIG = Path("configs/rig.yaml")
-EXAMPLE_RIG_CONFIG = Path("configs/rig.example.yaml")
+_PACKAGE_ROOT = Path(__file__).resolve().parent
+EXAMPLE_RIG_CONFIG = (
+    Path("configs/rig.example.yaml")
+    if Path("configs/rig.example.yaml").exists()
+    else _PACKAGE_ROOT / "configs" / "rig.example.yaml"
+)
 
 
 def load_rig_section(path: Path, section: str) -> dict[str, Any]:

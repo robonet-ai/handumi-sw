@@ -14,6 +14,10 @@
 
 [HandUMI](https://github.com/BrikHMP18/HandUMI) is a hand-worn interface for collecting robot-free bimanual demonstrations. This repository contains its synchronized data collection, calibration, validation, replay, teleoperation, and robot-retargeting software.
 
+<p align="center">
+  <img src="docs/images/demo-handumi-compressed.gif" alt="HandUMI demonstration and robot retargeting preview">
+</p>
+
 > **Collect once, retarget to many robots.** Record demonstrations with HandUMI
 > once, then retarget and reuse the same data across different bimanual arms
 > with parallel grippers, without recollecting demonstrations for each robot.
@@ -45,6 +49,28 @@ handumi-record --help
 ```
 
 PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.
+
+## Install from GitHub
+
+HandUMI can also be installed directly from this repository:
+
+```bash
+pip install "handumi @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+Optional robot and simulation backends can be selected with extras:
+
+```bash
+pip install "handumi[sim,piper,openarm] @ git+https://github.com/robonet-ai/handumi-sw.git"
+```
+
+For reproducible environments, pin a branch, tag, or commit:
+
+```toml
+dependencies = [
+    "handumi @ git+https://github.com/robonet-ai/handumi-sw.git@main",
+]
+```
 
 ## Core Workflow
 
