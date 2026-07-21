@@ -57,13 +57,9 @@ class TrackingPacketContractTest(unittest.TestCase):
             packet.body.joints[0].tracking_state, JointTrackingState.TRACKED
         )
         self.assertEqual(packet.body.joints[1].location_flags, 3)
-        self.assertEqual(
-            packet.body.joints[1].tracking_state, JointTrackingState.VALID
-        )
+        self.assertEqual(packet.body.joints[1].tracking_state, JointTrackingState.VALID)
         self.assertTrue(np.isnan(packet.body.joints[0].pose[0]))
-        self.assertEqual(
-            packet.body.provenance, SourceProvenance.PLATFORM_ESTIMATED
-        )
+        self.assertEqual(packet.body.provenance, SourceProvenance.PLATFORM_ESTIMATED)
 
     def test_verbose_70_joint_and_inactive_packets_are_supported(self):
         verbose = mock.make_tracking_packet_fixture(70, seq=1)
@@ -80,16 +76,12 @@ class TrackingPacketContractTest(unittest.TestCase):
         ]
         body.pop("jointPoses")
         body.pop("jointLocationFlags")
-        packet = parse_tracking_packet(
-            verbose, pc_monotonic_ns=1, receive_sequence=1
-        )
+        packet = parse_tracking_packet(verbose, pc_monotonic_ns=1, receive_sequence=1)
         assert packet.body is not None
         self.assertEqual(len(packet.body.joints), 70)
 
         inactive = mock.make_tracking_packet_fixture(84, seq=2, active=False)
-        packet = parse_tracking_packet(
-            inactive, pc_monotonic_ns=2, receive_sequence=2
-        )
+        packet = parse_tracking_packet(inactive, pc_monotonic_ns=2, receive_sequence=2)
         assert packet.body is not None
         self.assertFalse(packet.body.active)
         self.assertEqual(packet.body.joint_count, 0)
@@ -97,9 +89,7 @@ class TrackingPacketContractTest(unittest.TestCase):
 
     def test_legacy_packet_normalizes_as_source_version_one(self):
         raw = mock._make_frame(0, time.monotonic(), 0)
-        packet = parse_tracking_packet(
-            raw, pc_monotonic_ns=1, receive_sequence=3
-        )
+        packet = parse_tracking_packet(raw, pc_monotonic_ns=1, receive_sequence=3)
         self.assertEqual(packet.source_schema_version, 1)
         self.assertIsNone(packet.sequence)
         self.assertIsNone(packet.body)
@@ -121,7 +111,9 @@ class PacketStreamTest(unittest.TestCase):
         self.assertEqual(stats.accepted, 10_000)
         self.assertEqual(stats.queued, 3)
         self.assertEqual(stats.dropped[PacketLossReason.QUEUE_OVERFLOW.value], 9_997)
-        self.assertEqual([packet.sequence for packet in stream.drain()], [9_997, 9_998, 9_999])
+        self.assertEqual(
+            [packet.sequence for packet in stream.drain()], [9_997, 9_998, 9_999]
+        )
 
     def test_jsonl_writer_drains_fifo_once_and_preserves_unknown_fields(self):
         stream = TrackingPacketStream(max_packets=4)
@@ -205,14 +197,16 @@ class PicoNormalizationTest(unittest.TestCase):
             "observation.pico.motion_tracker_pose": np.array(
                 [[0.5, 1, 0, 0, 0, 0, 1]], dtype=np.float32
             ),
-            "observation.pico.motion_tracker_velocity": np.ones((1, 6), dtype=np.float32),
+            "observation.pico.motion_tracker_velocity": np.ones(
+                (1, 6), dtype=np.float32
+            ),
             "observation.pico.motion_tracker_accel": np.ones((1, 6), dtype=np.float32),
             "observation.pico.motion_tracker_count": np.array([1], dtype=np.int64),
-            "observation.pico.motion_tracker_serial_hash": np.array([99], dtype=np.int64),
+            "observation.pico.motion_tracker_serial_hash": np.array(
+                [99], dtype=np.int64
+            ),
         }
-        packet = tracking_packet_from_pico_frame(
-            frame, sequence=7, receive_time_ns=456
-        )
+        packet = tracking_packet_from_pico_frame(frame, sequence=7, receive_time_ns=456)
         assert packet.body is not None
         self.assertEqual(packet.body.joint_count, 24)
         assert packet.hmd is not None

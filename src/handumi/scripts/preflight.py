@@ -418,8 +418,7 @@ def _collect_cameras(
                 float(
                     np.mean(
                         np.abs(
-                            latest_image.astype(np.int16)
-                            - first_image.astype(np.int16)
+                            latest_image.astype(np.int16) - first_image.astype(np.int16)
                         )
                     )
                 )

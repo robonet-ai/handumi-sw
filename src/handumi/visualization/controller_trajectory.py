@@ -208,13 +208,21 @@ def static_controller_ops() -> tuple[RenderOp, ...]:
         RenderOp(
             LEFT_WIDTH_PATH,
             "series_lines",
-            kwargs={"colors": [[*LEFT_COLOR, 255]], "widths": [2.5], "names": ["left_width_mm"]},
+            kwargs={
+                "colors": [[*LEFT_COLOR, 255]],
+                "widths": [2.5],
+                "names": ["left_width_mm"],
+            },
             static=True,
         ),
         RenderOp(
             RIGHT_WIDTH_PATH,
             "series_lines",
-            kwargs={"colors": [[*RIGHT_COLOR, 255]], "widths": [2.5], "names": ["right_width_mm"]},
+            kwargs={
+                "colors": [[*RIGHT_COLOR, 255]],
+                "widths": [2.5],
+                "names": ["right_width_mm"],
+            },
             static=True,
         ),
         RenderOp(
@@ -405,7 +413,9 @@ class LiveRerunStream:
             operations: list[RenderOp] = []
             for key, image in cam_frames.items():
                 if key.startswith("observation.images."):
-                    operations.append(RenderOp(key, "image", image, {"jpeg_quality": 75}))
+                    operations.append(
+                        RenderOp(key, "image", image, {"jpeg_quality": 75})
+                    )
             operations.extend(
                 [
                     RenderOp(LEFT_WIDTH_PATH, "scalars", float(widths.left_mm)),
@@ -413,8 +423,20 @@ class LiveRerunStream:
                 ]
             )
             for side, tcp, raw, color, tracked in (
-                ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR, sample.left_tracked),
-                ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR, sample.right_tracked),
+                (
+                    "left",
+                    sample.left_tcp_pose,
+                    sample.left_controller_pose,
+                    LEFT_COLOR,
+                    sample.left_tracked,
+                ),
+                (
+                    "right",
+                    sample.right_tcp_pose,
+                    sample.right_controller_pose,
+                    RIGHT_COLOR,
+                    sample.right_tracked,
+                ),
             ):
                 operations.extend(
                     controller_render_plan(

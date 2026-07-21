@@ -96,6 +96,4 @@ def test_openarm_setup_calibrates_only_selected_physical_side():
         )
         _setup_openarm(options)
 
-    calibrate.assert_called_once_with(
-        "right_arm", "can0", executable=executable
-    )
+    calibrate.assert_called_once_with("right_arm", "can0", executable=executable)

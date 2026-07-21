@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -177,7 +178,9 @@ class PiperSdkArm:
         gripper_effort: int,
     ) -> None:
         try:
-            from piper_sdk import C_PiperInterface_V2
+            # Source-only hardware dependency; runtime validation below keeps
+            # the untyped package confined to this adapter.
+            from piper_sdk import C_PiperInterface_V2  # pyright: ignore[reportMissingImports]
         except ModuleNotFoundError as exc:
             raise RuntimeError(
                 "Missing piper_sdk. From the source release run: "
@@ -302,7 +305,7 @@ class PiperJointStreamer:
                         :ARM_JOINT_COUNT
                     ].copy()
 
-    def set_gripper_targets_microm(self, targets: dict[str, int | None]) -> None:
+    def set_gripper_targets_microm(self, targets: Mapping[str, int | None]) -> None:
         self.raise_if_failed()
         with self._lock:
             for side, target in targets.items():

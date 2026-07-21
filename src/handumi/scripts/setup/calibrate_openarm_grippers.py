@@ -60,7 +60,9 @@ def main() -> None:
     if args.automatic:
         print("Only J8 will be enabled; J1-J7 are not registered or commanded.")
     else:
-        print("J8 will remain disabled while its position is read; move the jaws by hand.")
+        print(
+            "J8 will remain disabled while its position is read; move the jaws by hand."
+        )
     print("Remove objects from the jaws and keep the emergency stop reachable.")
     expected = f"CALIBRATE {args.side.upper()} J8"
     answer = input(f"Type {expected}: ").strip()
@@ -296,9 +298,7 @@ def _move_to(
     duration = max(0.25, abs(target - start) / speed_rad_s)
     steps = max(2, int(math.ceil(duration / 0.01)))
     for value in np.linspace(start, target, steps):
-        gripper.mit_control_one(
-            0, sdk.MITParam(10.0, 0.9, float(value), 0.0, 0.0)
-        )
+        gripper.mit_control_one(0, sdk.MITParam(10.0, 0.9, float(value), 0.0, 0.0))
         arm.recv_all(2_000)
         time.sleep(duration / steps)
 

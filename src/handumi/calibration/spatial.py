@@ -172,16 +172,25 @@ def detect_charuco(
     board = board_spec.create()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     detector = cv2.aruco.CharucoDetector(board)
-    charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(gray)
+    charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(
+        gray
+    )
     if charuco_ids is None or charuco_corners is None or len(charuco_ids) < min_corners:
         return None
-    object_points, image_points = board.matchImagePoints(charuco_corners, charuco_ids)
+    # OpenCV's generated stubs do not model the ndarray overload exposed by
+    # CharucoBoard.matchImagePoints in the Python binding.
+    object_points, image_points = board.matchImagePoints(  # pyright: ignore[reportCallIssue, reportArgumentType]
+        charuco_corners,  # pyright: ignore[reportArgumentType]
+        charuco_ids,
+    )
     return CharucoDetection(
         object_points=np.asarray(object_points, dtype=np.float64).reshape(-1, 1, 3),
         image_points=np.asarray(image_points, dtype=np.float64).reshape(-1, 1, 2),
         ids=np.asarray(charuco_ids, dtype=np.int32).reshape(-1),
         marker_corners=tuple(marker_corners or ()),
-        marker_ids=None if marker_ids is None else np.asarray(marker_ids, dtype=np.int32),
+        marker_ids=None
+        if marker_ids is None
+        else np.asarray(marker_ids, dtype=np.int32),
     )
 
 
@@ -190,7 +199,9 @@ def draw_detection(image: np.ndarray, detection: CharucoDetection | None) -> np.
     if detection is None:
         return preview
     if detection.marker_corners:
-        cv2.aruco.drawDetectedMarkers(preview, list(detection.marker_corners), detection.marker_ids)
+        cv2.aruco.drawDetectedMarkers(
+            preview, list(detection.marker_corners), detection.marker_ids
+        )
     corners = detection.image_points.astype(np.float32)
     cv2.aruco.drawDetectedCornersCharuco(preview, corners, detection.ids.reshape(-1, 1))
     return preview
@@ -232,7 +243,9 @@ def calibrate_fisheye(
             detection.object_points, rvec, tvec, matrix, distortion
         )
         errors.extend(
-            np.linalg.norm(projected.reshape(-1, 2) - detection.image_points.reshape(-1, 2), axis=1)
+            np.linalg.norm(
+                projected.reshape(-1, 2) - detection.image_points.reshape(-1, 2), axis=1
+            )
         )
     return CameraIntrinsics(
         camera=camera,
@@ -253,14 +266,20 @@ def calibrate_pinhole(
 ) -> CameraIntrinsics:
     if len(detections) < 10:
         raise ValueError("At least 10 accepted ChArUco views are required.")
-    object_points = [d.object_points.reshape(-1, 3).astype(np.float32) for d in detections]
-    image_points = [d.image_points.reshape(-1, 2).astype(np.float32) for d in detections]
-    rms, matrix, distortion, rvecs, tvecs = cv2.calibrateCamera(
+    object_points = [
+        d.object_points.reshape(-1, 3).astype(np.float32) for d in detections
+    ]
+    image_points = [
+        d.image_points.reshape(-1, 2).astype(np.float32) for d in detections
+    ]
+    # OpenCV accepts None to request intrinsic initialization, but its generated
+    # stubs currently require concrete MatLike values for these two arguments.
+    rms, matrix, distortion, rvecs, tvecs = cv2.calibrateCamera(  # pyright: ignore[reportCallIssue, reportArgumentType]
         object_points,
         image_points,
         image_size,
-        None,
-        None,
+        None,  # pyright: ignore[reportArgumentType]
+        None,  # pyright: ignore[reportArgumentType]
     )
     errors: list[float] = []
     for detection, rvec, tvec in zip(detections, rvecs, tvecs, strict=True):
@@ -368,7 +387,9 @@ def _transform_residual(error: np.ndarray) -> np.ndarray:
     )
 
 
-def transform_errors(transforms: Sequence[np.ndarray]) -> tuple[float, float, float, float]:
+def transform_errors(
+    transforms: Sequence[np.ndarray],
+) -> tuple[float, float, float, float]:
     """Translation/rotation RMS and max about a robust mean transform."""
     mean = mean_transform(transforms)
     translation: list[float] = []
@@ -376,7 +397,9 @@ def transform_errors(transforms: Sequence[np.ndarray]) -> tuple[float, float, fl
     for transform in transforms:
         delta = np.linalg.inv(mean) @ transform
         translation.append(float(np.linalg.norm(delta[:3, 3])))
-        rotation.append(float(np.linalg.norm(Rotation.from_matrix(delta[:3, :3]).as_rotvec())))
+        rotation.append(
+            float(np.linalg.norm(Rotation.from_matrix(delta[:3, :3]).as_rotvec()))
+        )
     return (
         float(np.sqrt(np.mean(np.square(translation)))) * 1000.0,
         float(np.max(translation)) * 1000.0,
@@ -418,7 +441,7 @@ def solve_controller_camera(
     )
     for method in methods:
         try:
-            rotation, translation = cv2.calibrateHandEye(
+            rotation_result, translation_result = cv2.calibrateHandEye(
                 [g[:3, :3] for g in gripper],
                 [g[:3, 3] for g in gripper],
                 [t[:3, :3] for t in target],
@@ -427,23 +450,23 @@ def solve_controller_camera(
             )
         except cv2.error:
             continue
-        rotation = np.asarray(rotation, dtype=np.float64)
-        translation = np.asarray(translation, dtype=np.float64).reshape(3)
+        rotation_matrix = np.asarray(rotation_result, dtype=np.float64)
+        translation_vector = np.asarray(translation_result, dtype=np.float64).reshape(3)
         if (
-            not np.all(np.isfinite(rotation))
-            or not np.all(np.isfinite(translation))
-            or np.linalg.det(rotation) <= 0.0
+            not np.all(np.isfinite(rotation_matrix))
+            or not np.all(np.isfinite(translation_vector))
+            or np.linalg.det(rotation_matrix) <= 0.0
         ):
             continue
         x = np.eye(4, dtype=np.float64)
-        x[:3, :3] = Rotation.from_matrix(rotation).as_matrix()
-        x[:3, 3] = translation
+        x[:3, :3] = Rotation.from_matrix(rotation_matrix).as_matrix()
+        x[:3, 3] = translation_vector
         fixed_board = [g @ x @ c for g, c in zip(gripper, target, strict=True)]
         y = mean_transform(fixed_board)
-        residual = np.concatenate(
+        candidate_residual = np.concatenate(
             [_transform_residual(np.linalg.inv(y) @ value) for value in fixed_board]
         )
-        candidates.append((float(np.mean(np.square(residual))), x, y))
+        candidates.append((float(np.mean(np.square(candidate_residual))), x, y))
     if not candidates:
         raise ValueError(
             "Hand-eye calibration produced no valid right-handed solution; "
@@ -457,10 +480,15 @@ def solve_controller_camera(
         x = _parameters_to_matrix(parameters[:6])
         y = _parameters_to_matrix(parameters[6:])
         return np.concatenate(
-            [_transform_residual(np.linalg.inv(y) @ g @ x @ c) for g, c in zip(gripper, target, strict=True)]
+            [
+                _transform_residual(np.linalg.inv(y) @ g @ x @ c)
+                for g, c in zip(gripper, target, strict=True)
+            ]
         )
 
-    result = least_squares(residual, initial, loss="huber", f_scale=0.002, max_nfev=1000)
+    result = least_squares(
+        residual, initial, loss="huber", f_scale=0.002, max_nfev=1000
+    )
     x = _parameters_to_matrix(result.x[:6])
     fixed_board = [g @ x @ c for g, c in zip(gripper, target, strict=True)]
     rms_mm, max_mm, rms_deg, max_deg = transform_errors(fixed_board)
@@ -585,11 +613,15 @@ def session_calibration_metadata(path: Path | None) -> dict[str, Any] | None:
         raise ValueError(f"Not a HandUMI session calibration: {path}")
     spatial_path = Path(str(data.get("spatial_calibration_path", "")))
     if not spatial_path.exists():
-        raise ValueError(f"Missing spatial calibration referenced by session: {spatial_path}")
+        raise ValueError(
+            f"Missing spatial calibration referenced by session: {spatial_path}"
+        )
     spatial = load_yaml(spatial_path)
     spatial_sha256 = calibration_hash(spatial)
     if spatial_sha256 != data.get("spatial_calibration_sha256"):
-        raise ValueError("Session calibration does not match its spatial calibration file.")
+        raise ValueError(
+            "Session calibration does not match its spatial calibration file."
+        )
     table_from_device = data.get("table_from_device") or data.get("table_from_quest")
     if not isinstance(table_from_device, dict):
         raise ValueError("Session calibration is missing table_from_device.")

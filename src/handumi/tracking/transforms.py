@@ -219,8 +219,10 @@ class MountingOffsets:
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "MountingOffsets":
         data = data or {}
-        return cls(left=_pose_from_dict(data.get("left")),
-                   right=_pose_from_dict(data.get("right")))
+        return cls(
+            left=_pose_from_dict(data.get("left")),
+            right=_pose_from_dict(data.get("right")),
+        )
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MountingOffsets":
@@ -388,7 +390,9 @@ class FrameTransformGraph:
     def __init__(self) -> None:
         self._edges: dict[str, list[NamedFrameTransform]] = {}
 
-    def add(self, transform: NamedFrameTransform, *, bidirectional: bool = True) -> None:
+    def add(
+        self, transform: NamedFrameTransform, *, bidirectional: bool = True
+    ) -> None:
         self._edges.setdefault(transform.source, []).append(transform)
         if bidirectional:
             self._edges.setdefault(transform.target, []).append(
@@ -452,8 +456,9 @@ def _pose_from_dict(data: dict[str, Any] | None) -> Pose:
         return Pose.identity()
     position = data.get("position", [0.0, 0.0, 0.0])
     quaternion = data.get("quaternion", [0.0, 0.0, 0.0, 1.0])
-    return Pose(np.asarray(position, dtype=np.float64),
-                np.asarray(quaternion, dtype=np.float64))
+    return Pose(
+        np.asarray(position, dtype=np.float64), np.asarray(quaternion, dtype=np.float64)
+    )
 
 
 __all__ = [

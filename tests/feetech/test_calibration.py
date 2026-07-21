@@ -147,7 +147,9 @@ class PortsCalibrationSplitTest(unittest.TestCase):
 class AssertCalibratedTest(unittest.TestCase):
     def _config(self, *, right_complete: bool) -> FeetechConfig:
         right = (
-            GripperCalibration(1, 900, 1900, 75.0) if right_complete else GripperCalibration(1)
+            GripperCalibration(1, 900, 1900, 75.0)
+            if right_complete
+            else GripperCalibration(1)
         )
         return FeetechConfig(
             port=None,
@@ -162,7 +164,9 @@ class AssertCalibratedTest(unittest.TestCase):
 
     def test_raises_and_names_missing_side(self):
         with self.assertRaises(SystemExit) as ctx:
-            assert_calibrated(self._config(right_complete=False), source=Path("/x/calibration.yaml"))
+            assert_calibrated(
+                self._config(right_complete=False), source=Path("/x/calibration.yaml")
+            )
         msg = str(ctx.exception)
         self.assertIn("right", msg)
         self.assertIn("/x/calibration.yaml", msg)

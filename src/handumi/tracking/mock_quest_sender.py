@@ -119,7 +119,9 @@ def make_tracking_packet_fixture(
         }
     )
     names = [f"Joint_{index}" for index in range(joint_count)] if active else []
-    flags = [15 if index % 2 == 0 else 3 for index in range(joint_count)] if active else []
+    flags = (
+        [15 if index % 2 == 0 else 3 for index in range(joint_count)] if active else []
+    )
     poses: list[float] = []
     if active:
         for index in range(joint_count):
@@ -127,7 +129,11 @@ def make_tracking_packet_fixture(
     frame["body"] = {
         "active": active,
         "requestedJointSet": "FullBody",
-        "activeJointSet": "FullBody" if joint_count == 84 and active else "UpperBody" if active else "None",
+        "activeJointSet": "FullBody"
+        if joint_count == 84 and active
+        else "UpperBody"
+        if active
+        else "None",
         "jointCount": joint_count if active else 0,
         "confidence": 0.9 if active else 0.0,
         "calibrationState": calibration_state,
@@ -145,7 +151,9 @@ def make_tracking_packet_fixture(
     return frame
 
 
-def _udp_sync_server(host: str, sync_port: int, skew_ns: int, stop: threading.Event) -> None:
+def _udp_sync_server(
+    host: str, sync_port: int, skew_ns: int, stop: threading.Event
+) -> None:
     """Echo every ping with the device clock (the Quest end of time-sync)."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -170,8 +178,9 @@ def _udp_sync_server(host: str, sync_port: int, skew_ns: int, stop: threading.Ev
         sock.close()
 
 
-def _serve_client(conn: socket.socket, addr, fps: float, skew_ns: int,
-                  stop: threading.Event) -> None:
+def _serve_client(
+    conn: socket.socket, addr, fps: float, skew_ns: int, stop: threading.Event
+) -> None:
     log.info("Client connected: %s", addr)
     seq = 0
     t0 = time.monotonic()
@@ -195,13 +204,19 @@ def _serve_client(conn: socket.socket, addr, fps: float, skew_ns: int,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Mock Quest app (TCP/JSON + UDP sync).")
+    parser = argparse.ArgumentParser(
+        description="Mock Quest app (TCP/JSON + UDP sync)."
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--tcp-port", type=int, default=65432)
     parser.add_argument("--sync-port", type=int, default=42000)
     parser.add_argument("--fps", type=float, default=72.0)
-    parser.add_argument("--skew-s", type=float, default=5.0,
-                        help="Fake device-clock skew vs PC clock (verifies sync).")
+    parser.add_argument(
+        "--skew-s",
+        type=float,
+        default=5.0,
+        help="Fake device-clock skew vs PC clock (verifies sync).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -225,8 +240,13 @@ def main() -> None:
     server.bind((args.host, args.tcp_port))
     server.listen(1)
     server.settimeout(0.5)
-    log.info("TCP pose server on %s:%d (fps=%.0f, skew=%.1fs). Ctrl+C to stop.",
-             args.host, args.tcp_port, args.fps, args.skew_s)
+    log.info(
+        "TCP pose server on %s:%d (fps=%.0f, skew=%.1fs). Ctrl+C to stop.",
+        args.host,
+        args.tcp_port,
+        args.fps,
+        args.skew_s,
+    )
 
     try:
         while True:

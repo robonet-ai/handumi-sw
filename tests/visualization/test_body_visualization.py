@@ -54,7 +54,11 @@ def synthetic_body_frame() -> CanonicalBodyFrame:
         frame.tracking_state[joint.index] = int(CanonicalTrackingState.TRACKED)
         frame.confidence[joint.index] = 0.9
         frame.provenance[joint.index] = int(CanonicalProvenance.PLATFORM_ESTIMATED)
-        frame.segment_com[joint.index] = frame.joint_pose[joint.index, :3] + [0, 0, 0.01]
+        frame.segment_com[joint.index] = frame.joint_pose[joint.index, :3] + [
+            0,
+            0,
+            0.01,
+        ]
         frame.segment_com_valid[joint.index] = 1
         frame.segment_com_confidence[joint.index] = 0.8
         frame.segment_com_provenance[joint.index] = int(
@@ -71,13 +75,13 @@ def synthetic_body_frame() -> CanonicalBodyFrame:
     for contact_index, joint_name in enumerate(
         ("left_heel", "left_foot_ball", "right_heel", "right_foot_ball")
     ):
-        joint_index = next(j.index for j in CANONICAL_JOINTS if j.identifier == joint_name)
+        joint_index = next(
+            j.index for j in CANONICAL_JOINTS if j.identifier == joint_name
+        )
         frame.joint_pose[joint_index, 2] = 0.0
         frame.contact_probability[contact_index] = 0.9
         frame.contact_valid[contact_index] = 1
-        frame.contact_provenance[contact_index] = int(
-            ComProvenance.KINEMATIC_INFERRED
-        )
+        frame.contact_provenance[contact_index] = int(ComProvenance.KINEMATIC_INFERRED)
     frame.support_polygon[:4] = [
         [-0.1, -0.1, 0.0],
         [0.1, -0.1, 0.0],
@@ -160,15 +164,25 @@ def test_nan_values_never_reach_render_archetypes():
     frame.whole_com[:] = np.nan
     for operation in body_render_plan(frame):
         if operation.archetype in {"points3d", "line_strips3d", "mesh3d", "scalars"}:
-            arrays = operation.data if isinstance(operation.data, list) else [operation.data]
+            arrays = (
+                operation.data if isinstance(operation.data, list) else [operation.data]
+            )
             for array in arrays:
                 assert np.all(np.isfinite(np.asarray(array, dtype=np.float64)))
 
 
 def test_provenance_to_style_mapping_and_future_fallbacks():
-    assert provenance_style(CanonicalProvenance.PLATFORM_ESTIMATED, 1.0).color[:3] == PLATFORM_COLOR
-    assert provenance_style(CanonicalProvenance.INFERRED, 1.0).color[:3] == KINEMATIC_COLOR
-    assert provenance_style(ComProvenance.FUSED_ESTIMATED, 1.0, com=True).color[:3] == FUSED_COLOR
+    assert (
+        provenance_style(CanonicalProvenance.PLATFORM_ESTIMATED, 1.0).color[:3]
+        == PLATFORM_COLOR
+    )
+    assert (
+        provenance_style(CanonicalProvenance.INFERRED, 1.0).color[:3] == KINEMATIC_COLOR
+    )
+    assert (
+        provenance_style(ComProvenance.FUSED_ESTIMATED, 1.0, com=True).color[:3]
+        == FUSED_COLOR
+    )
     assert provenance_style(999, 1.0).color[:3] == UNKNOWN_COLOR
 
     class FutureLearned:
@@ -248,7 +262,9 @@ def test_long_trajectory_is_planned_once_and_chunked_linearly():
     points = np.stack(
         [np.arange(count, dtype=np.float32), np.zeros(count), np.zeros(count)], axis=1
     )
-    chunks = chunk_trajectory(decimate_trajectory(points, temporal_step=3), point_cap=128, duration_frames=200)
+    chunks = chunk_trajectory(
+        decimate_trajectory(points, temporal_step=3), point_cap=128, duration_frames=200
+    )
     assert chunks
     assert all(2 <= len(chunk.points) <= 128 for chunk in chunks)
     assert sum(len(chunk.points) for chunk in chunks) <= count + len(chunks)

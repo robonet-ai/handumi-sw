@@ -43,9 +43,7 @@ def _nearest_encoder_delta(value: int, reference: int) -> int:
     mistaken for motion through most of a revolution.
     """
     return int(
-        (int(value) - int(reference) + _HALF_TURN)
-        % _ENCODER_RESOLUTION
-        - _HALF_TURN
+        (int(value) - int(reference) + _HALF_TURN) % _ENCODER_RESOLUTION - _HALF_TURN
     )
 
 
@@ -127,7 +125,9 @@ def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> N
     Call this at startup (before the record/monitor loop) so an uncalibrated rig
     is reported clearly instead of crashing mid-run inside width computation.
     """
-    missing = [side for side in ("left", "right") if not getattr(config, side).is_complete]
+    missing = [
+        side for side in ("left", "right") if not getattr(config, side).is_complete
+    ]
     if not missing:
         return
     where = f" in {source}" if source else ""
@@ -212,7 +212,9 @@ def save_calibration(config: FeetechConfig, path: Path | None = None) -> Path:
     return path
 
 
-def _port_only_calibration(data: dict[str, Any], *, default_servo_id: int) -> GripperCalibration:
+def _port_only_calibration(
+    data: dict[str, Any], *, default_servo_id: int
+) -> GripperCalibration:
     return GripperCalibration(
         servo_id=int(data.get("servo_id", default_servo_id)),
         port=_optional_str(data.get("port")),

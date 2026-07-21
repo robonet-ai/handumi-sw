@@ -60,7 +60,9 @@ class _Archetype:
 
 
 class _FailingRerun:
-    Clear = Points3D = LineStrips3D = Scalars = Image = Mesh3D = TextDocument = _Archetype
+    Clear = Points3D = LineStrips3D = Scalars = Image = Mesh3D = TextDocument = (
+        _Archetype
+    )
 
     def log(self, *args, **kwargs):
         raise RuntimeError("viewer broke")

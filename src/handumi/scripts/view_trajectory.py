@@ -71,7 +71,9 @@ class EpisodeRenderStats:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-id", required=True, help="LeRobot dataset repository id.")
+    parser.add_argument(
+        "--repo-id", required=True, help="LeRobot dataset repository id."
+    )
     parser.add_argument(
         "--root",
         type=Path,
@@ -86,7 +88,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=True,
         help="Spawn the Rerun viewer; use --no-spawn for headless export.",
     )
-    parser.add_argument("--rrd", type=Path, default=None, help="Optional .rrd output path.")
+    parser.add_argument(
+        "--rrd", type=Path, default=None, help="Optional .rrd output path."
+    )
     parser.add_argument(
         "--video",
         action=argparse.BooleanOptionalAction,
@@ -120,7 +124,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _frame_signal(signals: dict[str, np.ndarray], key: str, count: int) -> np.ndarray | None:
+def _frame_signal(
+    signals: dict[str, np.ndarray], key: str, count: int
+) -> np.ndarray | None:
     value = signals.get(key)
     if value is None:
         return None
@@ -165,7 +171,13 @@ def _controller_trajectories(
     if not isinstance(snapshot, dict):
         return raw_left, raw_right, None, None, None
     if snapshot.get("applied_to_state") is True:
-        return raw_left, raw_right, raw_left.copy(), raw_right.copy(), "state already stores TCP"
+        return (
+            raw_left,
+            raw_right,
+            raw_left.copy(),
+            raw_right.copy(),
+            "state already stores TCP",
+        )
     try:
         calibration = controller_tcp_calibration_from_metadata(snapshot)
         left_tcp, right_tcp = apply_controller_tcp_calibration(
@@ -251,8 +263,8 @@ def _full_trajectory_ops(
         )
     if episode.body is not None:
         signals = episode.body.signals
-        whole = signals.get(f"observation.body.whole_com")
-        valid = signals.get(f"observation.body.whole_com_valid")
+        whole = signals.get("observation.body.whole_com")
+        valid = signals.get("observation.body.whole_com_valid")
         if whole is not None:
             operations.extend(
                 full_trajectory_plan(
@@ -318,7 +330,11 @@ def log_episode(
                         HMD_ROOT,
                         "points3d",
                         np.asarray([point]),
-                        {"colors": [[120, 170, 255, 230]], "radii": 0.014, "labels": ["HMD"]},
+                        {
+                            "colors": [[120, 170, 255, 230]],
+                            "radii": 0.014,
+                            "labels": ["HMD"],
+                        },
                     )
                 )
             else:

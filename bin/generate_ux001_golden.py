@@ -44,7 +44,9 @@ def _body_frame(frame_index: int) -> CanonicalBodyFrame:
         frame.segment_com[joint.index] = frame.joint_pose[joint.index, :3]
         frame.segment_com_valid[joint.index] = 1
         frame.segment_com_confidence[joint.index] = 0.8
-        frame.segment_com_provenance[joint.index] = int(ComProvenance.KINEMATIC_INFERRED)
+        frame.segment_com_provenance[joint.index] = int(
+            ComProvenance.KINEMATIC_INFERRED
+        )
     frame.whole_com[:] = [0.2 + 0.01 * frame_index, 0.0, 0.9]
     frame.whole_com_valid[0] = 1
     frame.whole_com_confidence[0] = 0.82

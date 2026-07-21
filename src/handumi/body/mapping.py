@@ -112,12 +112,16 @@ def _meta_source_name(name: str) -> str:
 
 
 def _pico_source_name(joint: JointSample) -> str:
-    if joint.name.startswith("PicoBody_") and 0 <= joint.index < len(PICO_BODY_24_SOURCE_NAMES):
+    if joint.name.startswith("PicoBody_") and 0 <= joint.index < len(
+        PICO_BODY_24_SOURCE_NAMES
+    ):
         return PICO_BODY_24_SOURCE_NAMES[joint.index]
     return joint.name
 
 
-def _source_name_and_target(packet: TrackingPacket, joint: JointSample) -> tuple[str, str | None]:
+def _source_name_and_target(
+    packet: TrackingPacket, joint: JointSample
+) -> tuple[str, str | None]:
     if packet.source == "pico":
         source_name = _pico_source_name(joint)
         return source_name, PICO_TO_CANONICAL.get(source_name)
@@ -132,7 +136,9 @@ def _converted_components(
 ) -> tuple[np.ndarray, np.ndarray, bool, bool]:
     pose = np.asarray(joint.pose, dtype=np.float64)
     position_valid = bool(joint.location_flags & 0x2) and np.all(np.isfinite(pose[:3]))
-    orientation_valid = bool(joint.location_flags & 0x1) and np.all(np.isfinite(pose[3:7]))
+    orientation_valid = bool(joint.location_flags & 0x1) and np.all(
+        np.isfinite(pose[3:7])
+    )
     position = np.full(3, np.nan, dtype=np.float64)
     quaternion = np.full(4, np.nan, dtype=np.float64)
     if position_valid:
@@ -153,7 +159,7 @@ def _converted_components(
             orientation_valid = False
         else:
             quaternion = calibration.apply_orientation(source_quaternion / norm)
-    return position, quaternion, position_valid, orientation_valid
+    return position, quaternion, bool(position_valid), bool(orientation_valid)
 
 
 def _write_joint(
@@ -170,7 +176,9 @@ def _write_joint(
     frame.joint_pose[target_index, 3:7] = quaternion
     frame.position_valid[target_index] = int(position_valid)
     frame.orientation_valid[target_index] = int(orientation_valid)
-    frame.tracking_state[target_index] = int(_TRACKING_STATE[source_joint.tracking_state])
+    frame.tracking_state[target_index] = int(
+        _TRACKING_STATE[source_joint.tracking_state]
+    )
     frame.confidence[target_index] = np.float32(source_joint.confidence)
     frame.provenance[target_index] = int(
         _PROVENANCE.get(source_joint.provenance, CanonicalProvenance.UNKNOWN)
@@ -219,8 +227,8 @@ def canonical_body_from_packet(
     for joint in body.joints:
         source_name, target = _source_name_and_target(packet, joint)
         if source_name == "Root" and packet.source == "meta_quest":
-            position, quaternion, position_valid, orientation_valid = _converted_components(
-                packet, joint, calibration
+            position, quaternion, position_valid, orientation_valid = (
+                _converted_components(packet, joint, calibration)
             )
             frame.platform_root_pose[:3] = position
             frame.platform_root_pose[3:7] = quaternion

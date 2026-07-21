@@ -7,6 +7,7 @@ import logging
 import socket
 import subprocess
 import time
+from importlib import import_module
 
 import numpy as np
 
@@ -218,7 +219,7 @@ def launch_xrt_service() -> None:
 def init_xrt():
     """Import and initialise xrobotoolkit_sdk. Returns the module."""
     try:
-        import xrobotoolkit_sdk as xrt
+        xrt = import_module("xrobotoolkit_sdk")
     except ImportError as exc:
         raise SystemExit(
             f"ERROR: could not import xrobotoolkit_sdk: {exc}\n"
@@ -274,7 +275,9 @@ def safe_array(value, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
         return np.zeros(shape, dtype=dtype)
     if arr.shape != shape:
         out = np.zeros(shape, dtype=dtype)
-        slices = tuple(slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=False))
+        slices = tuple(
+            slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=False)
+        )
         try:
             out[slices] = arr[slices]
         except Exception:  # noqa: BLE001
@@ -341,10 +344,7 @@ def wait_for_button_release(
     threshold: float,
     stop_event,
 ) -> None:
-    while (
-        read_start_button_value(xrt, button) >= threshold
-        and not stop_event.is_set()
-    ):
+    while read_start_button_value(xrt, button) >= threshold and not stop_event.is_set():
         time.sleep(0.02)
 
 
@@ -497,8 +497,12 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
         )
     else:
         frame["observation.pico.body_joints_pose"] = np.zeros((24, 7), dtype=np.float32)
-        frame["observation.pico.body_joints_velocity"] = np.zeros((24, 6), dtype=np.float32)
-        frame["observation.pico.body_joints_accel"] = np.zeros((24, 6), dtype=np.float32)
+        frame["observation.pico.body_joints_velocity"] = np.zeros(
+            (24, 6), dtype=np.float32
+        )
+        frame["observation.pico.body_joints_accel"] = np.zeros(
+            (24, 6), dtype=np.float32
+        )
 
     lh = (
         np.array(xrt.get_left_hand_tracking_state(), dtype=np.float32)
@@ -514,7 +518,9 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     frame["observation.pico.right_hand_pose"] = rh
 
     tracker_pose, tracker_vel, tracker_accel, tracker_count, tracker_serial_hashes = (
-        read_motion_trackers(xrt) if mode == "object" else (
+        read_motion_trackers(xrt)
+        if mode == "object"
+        else (
             np.zeros((MAX_MOTION_TRACKERS, 7), dtype=np.float32),
             np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
             np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
@@ -582,9 +588,7 @@ def _pico_joint_samples(
                 pose=tuple(float(item) for item in pose),  # type: ignore[arg-type]
                 location_flags=flags,
                 tracking_state=(
-                    JointTrackingState.TRACKED
-                    if valid
-                    else JointTrackingState.INVALID
+                    JointTrackingState.TRACKED if valid else JointTrackingState.INVALID
                 ),
                 confidence=1.0 if valid else 0.0,
                 provenance=provenance,
@@ -656,7 +660,9 @@ def tracking_packet_from_pico_frame(
         dtype=np.int64,
     ).reshape(-1)
     count = int(
-        np.asarray(frame.get("observation.pico.motion_tracker_count", [0])).reshape(-1)[0]
+        np.asarray(frame.get("observation.pico.motion_tracker_count", [0])).reshape(-1)[
+            0
+        ]
     )
     trackers = tuple(
         ExternalTrackerChannel(
@@ -743,7 +749,7 @@ class PicoTrackingProvider:
         self.mode = mode
         self.transport = transport
         self.skip_adb_check = skip_adb_check
-        self.xrt = None
+        self.xrt: object | None = None
         self._packet_sequence = 0
         self._packet_stream = TrackingPacketStream(2048)
         self.workspace_from_device_pose = IDENTITY_POSE7.astype(np.float32).copy()
@@ -765,15 +771,23 @@ class PicoTrackingProvider:
                     PICO_SERVICE_PORT,
                 )
             else:
-                log.info("PICO WiFi mode: set PC-service IP to this computer and port %d.", PICO_SERVICE_PORT)
+                log.info(
+                    "PICO WiFi mode: set PC-service IP to this computer and port %d.",
+                    PICO_SERVICE_PORT,
+                )
         else:
-            log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
+            log.info(
+                "ADB check skipped. Assuming XRoboToolkit can reach the PC service."
+            )
 
         stop_xrt_service()
         launch_xrt_service()
         self.xrt = init_xrt()
         if not wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=15.0):
-            log.warning("PICO %r data not available after 15 s; poses may be zero-filled.", self.mode)
+            log.warning(
+                "PICO %r data not available after 15 s; poses may be zero-filled.",
+                self.mode,
+            )
 
     def recover(self) -> bool:
         """Best-effort reconnect after PICO tracking drops during teleop."""
@@ -785,7 +799,11 @@ class PicoTrackingProvider:
             elif self.transport == "wifi":
                 lan_ip = guess_lan_ip()
                 if lan_ip:
-                    log.info("PICO WiFi mode: PC-service IP should be %s:%d.", lan_ip, PICO_SERVICE_PORT)
+                    log.info(
+                        "PICO WiFi mode: PC-service IP should be %s:%d.",
+                        lan_ip,
+                        PICO_SERVICE_PORT,
+                    )
             stop_xrt_service()
             launch_xrt_service()
             self.xrt = init_xrt()
@@ -799,7 +817,9 @@ class PicoTrackingProvider:
     def stop(self) -> None:
         if self.xrt is not None:
             try:
-                self.xrt.close()
+                close = getattr(self.xrt, "close", None)
+                if callable(close):
+                    close()
             except Exception:
                 pass
             self.xrt = None

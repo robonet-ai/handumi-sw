@@ -644,7 +644,11 @@ def main() -> None:
             sample = tracker.latest()
             side_tracked = {"left": sample.left_tracked, "right": sample.right_tracked}
 
-            widths = zero_gripper_widths() if grippers is None else grippers.read_normalized_widths()
+            widths = (
+                zero_gripper_widths()
+                if grippers is None
+                else grippers.read_normalized_widths()
+            )
             cam_frames = {}
             if rr is not None and cameras:
                 cam_frames = read_camera_frames(

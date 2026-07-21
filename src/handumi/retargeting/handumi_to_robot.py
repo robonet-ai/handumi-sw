@@ -284,9 +284,10 @@ def _retarget_side_pose7(
             delta = delta * (max_reach / max(norm, 1e-8))
 
     robot_home_rot = quaternion_xyzw_to_matrix(robot_home_pose7[3:7])
-    rel_rot = np.asarray(raw_rotation, dtype=np.float32) @ np.asarray(
-        raw_home_rotation, dtype=np.float32
-    ).T
+    rel_rot = (
+        np.asarray(raw_rotation, dtype=np.float32)
+        @ np.asarray(raw_home_rotation, dtype=np.float32).T
+    )
     target_rot = robot_home_rot @ rel_rot
 
     out = np.zeros(7, dtype=np.float32)

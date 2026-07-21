@@ -63,7 +63,9 @@ class PicoAdbTest(unittest.TestCase):
         def runner(cmd, **kwargs):
             calls.append(cmd)
             if cmd == ["adb", "devices"]:
-                return _completed(cmd, stdout="List of devices attached\nPICO123\tdevice\n")
+                return _completed(
+                    cmd, stdout="List of devices attached\nPICO123\tdevice\n"
+                )
             return _completed(cmd)
 
         self.assertTrue(prepare_pico_adb_session(runner=runner))

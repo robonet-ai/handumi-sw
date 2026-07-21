@@ -114,7 +114,7 @@ def provenance_style(
         rgb = LEARNED_COLOR
     else:
         rgb = colors.get(name, UNKNOWN_COLOR)
-    return VisualStyle((*rgb, alpha), low, name)
+    return VisualStyle((int(rgb[0]), int(rgb[1]), int(rgb[2]), alpha), low, name)
 
 
 def _valid_point(value: Any, valid: Any = True) -> np.ndarray | None:
@@ -269,23 +269,67 @@ def _quality_ops(frame: CanonicalBodyFrame) -> list[RenderOp]:
         f"low_confidence_joints={low_count}"
     )
     return [
-        RenderOp(f"{BODY_QUALITY_ROOT}/joints/confidence", "scalars", finite(frame.confidence)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/joints/tracking_state", "scalars", finite(frame.tracking_state)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/joints/provenance", "scalars", finite(frame.provenance)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/segments/confidence", "scalars", finite(frame.segment_com_confidence)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/segments/provenance", "scalars", finite(frame.segment_com_provenance)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/whole_com/confidence", "scalars", finite(frame.whole_com_confidence)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/whole_com/provenance", "scalars", finite(frame.whole_com_provenance)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/whole_com/diagnostic", "scalars", finite(frame.whole_com_diagnostic)),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/joints/confidence",
+            "scalars",
+            finite(frame.confidence),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/joints/tracking_state",
+            "scalars",
+            finite(frame.tracking_state),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/joints/provenance",
+            "scalars",
+            finite(frame.provenance),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/segments/confidence",
+            "scalars",
+            finite(frame.segment_com_confidence),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/segments/provenance",
+            "scalars",
+            finite(frame.segment_com_provenance),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/whole_com/confidence",
+            "scalars",
+            finite(frame.whole_com_confidence),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/whole_com/provenance",
+            "scalars",
+            finite(frame.whole_com_provenance),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/whole_com/diagnostic",
+            "scalars",
+            finite(frame.whole_com_diagnostic),
+        ),
         RenderOp(
             f"{BODY_QUALITY_ROOT}/whole_com/unresolved_mass_fraction",
             "scalars",
             finite(frame.whole_com_unresolved_mass_fraction),
         ),
-        RenderOp(f"{BODY_QUALITY_ROOT}/contacts/probability", "scalars", finite(frame.contact_probability)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/contacts/provenance", "scalars", finite(frame.contact_provenance)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/clock_quality", "scalars", finite(frame.clock_quality)),
-        RenderOp(f"{BODY_QUALITY_ROOT}/low_confidence_joint_count", "scalars", low_count),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/contacts/probability",
+            "scalars",
+            finite(frame.contact_probability),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/contacts/provenance",
+            "scalars",
+            finite(frame.contact_provenance),
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/clock_quality", "scalars", finite(frame.clock_quality)
+        ),
+        RenderOp(
+            f"{BODY_QUALITY_ROOT}/low_confidence_joint_count", "scalars", low_count
+        ),
         RenderOp(f"{BODY_QUALITY_ROOT}/state", "text_document", summary),
     ]
 
@@ -357,7 +401,9 @@ def body_render_plan(
     segment_points: list[np.ndarray] = []
     segment_colors: list[tuple[int, int, int, int]] = []
     for joint in CANONICAL_JOINTS:
-        point = _valid_point(frame.segment_com[joint.index], frame.segment_com_valid[joint.index])
+        point = _valid_point(
+            frame.segment_com[joint.index], frame.segment_com_valid[joint.index]
+        )
         if point is None:
             continue
         style = provenance_style(
@@ -446,7 +492,9 @@ def body_render_plan(
     else:
         ops.append(_clear(COM_VERTICAL_PATH))
 
-    ground = ground_plane_geometry(frame.ground_plane, half_extent_m=ground_half_extent_m)
+    ground = ground_plane_geometry(
+        frame.ground_plane, half_extent_m=ground_half_extent_m
+    )
     if ground is None:
         ops.append(_clear(GROUND_PATH))
     else:
@@ -574,7 +622,10 @@ def decimate_trajectory(
         candidates.append(indices[-1])
         selected = [candidates[0]]
         for candidate in candidates[1:-1]:
-            if np.linalg.norm(positions[candidate] - positions[selected[-1]]) >= distance:
+            if (
+                np.linalg.norm(positions[candidate] - positions[selected[-1]])
+                >= distance
+            ):
                 selected.append(candidate)
         if candidates[-1] != selected[-1]:
             selected.append(candidates[-1])

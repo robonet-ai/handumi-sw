@@ -140,13 +140,18 @@ class FeetechBus:
             ok = False
         try:
             self._write_1_byte(
-                servo_id, _TORQUE_ENABLE_ADDR, _MIDDLE_CALIBRATION, "Torque_Enable(middle)"
+                servo_id,
+                _TORQUE_ENABLE_ADDR,
+                _MIDDLE_CALIBRATION,
+                "Torque_Enable(middle)",
             )
         except RuntimeError:
             ok = False
         time.sleep(0.2)  # let the EEPROM write commit before re-locking / reading back
         try:
-            self._write_1_byte(servo_id, _LOCK_ADDR, 1, "Lock(relock)")  # re-lock EEPROM
+            self._write_1_byte(
+                servo_id, _LOCK_ADDR, 1, "Lock(relock)"
+            )  # re-lock EEPROM
         except RuntimeError:
             ok = False
         return ok

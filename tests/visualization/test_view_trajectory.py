@@ -25,7 +25,9 @@ class _Archetype:
 
 
 class _FakeRerun:
-    Clear = Points3D = LineStrips3D = Scalars = Image = Mesh3D = TextDocument = _Archetype
+    Clear = Points3D = LineStrips3D = Scalars = Image = Mesh3D = TextDocument = (
+        _Archetype
+    )
 
     def __init__(self):
         self.frame = None
@@ -112,7 +114,9 @@ def test_offline_frame_and_time_are_set_before_synchronized_values():
     assert len(rr.time_calls) == 8
     current = [entry for entry in rr.logs if not entry[3]]
     assert current
-    assert all(frame is not None and time == frame / 10.0 for _, frame, time, _, _ in current)
+    assert all(
+        frame is not None and time == frame / 10.0 for _, frame, time, _, _ in current
+    )
     frame_two_paths = {
         path for path, frame, time, static, _ in current if frame == 2 and time == 0.2
     }

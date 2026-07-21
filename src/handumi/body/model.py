@@ -55,7 +55,9 @@ _JOINT_PARENT_IDS: tuple[tuple[str, str | None], ...] = (
     ("right_foot_ball", "right_ankle"),
 )
 
-_INDEX_BY_ID = {identifier: index for index, (identifier, _) in enumerate(_JOINT_PARENT_IDS)}
+_INDEX_BY_ID = {
+    identifier: index for index, (identifier, _) in enumerate(_JOINT_PARENT_IDS)
+}
 CANONICAL_JOINTS: tuple[CanonicalJoint, ...] = tuple(
     CanonicalJoint(
         index=index,
@@ -227,12 +229,8 @@ class CanonicalBodyFrame:
             segment_com_covariance=np.full(
                 (CANONICAL_JOINT_COUNT, 3, 3), nan, dtype=np.float32
             ),
-            segment_com_provenance=np.zeros(
-                CANONICAL_JOINT_COUNT, dtype=np.int64
-            ),
-            segment_mass_fraction=np.zeros(
-                CANONICAL_JOINT_COUNT, dtype=np.float32
-            ),
+            segment_com_provenance=np.zeros(CANONICAL_JOINT_COUNT, dtype=np.int64),
+            segment_mass_fraction=np.zeros(CANONICAL_JOINT_COUNT, dtype=np.float32),
             ground_plane=np.full(4, nan, dtype=np.float32),
             contact_probability=np.full(4, nan, dtype=np.float32),
             contact_valid=np.zeros(4, dtype=np.int64),
@@ -312,7 +310,9 @@ class CanonicalBodyFrame:
         }
 
 
-def _feature(dtype: str, shape: tuple[int, ...], names: list[str] | None = None) -> dict[str, Any]:
+def _feature(
+    dtype: str, shape: tuple[int, ...], names: list[str] | None = None
+) -> dict[str, Any]:
     return {"dtype": dtype, "shape": shape, "names": names}
 
 
@@ -320,13 +320,21 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
     joint_names = [joint.identifier for joint in CANONICAL_JOINTS]
     features = {
         f"{BODY_PREFIX}.joint_pose": _feature("float32", (CANONICAL_JOINT_COUNT, 7)),
-        f"{BODY_PREFIX}.position_valid": _feature("int64", (CANONICAL_JOINT_COUNT,), joint_names),
+        f"{BODY_PREFIX}.position_valid": _feature(
+            "int64", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
         f"{BODY_PREFIX}.orientation_valid": _feature(
             "int64", (CANONICAL_JOINT_COUNT,), joint_names
         ),
-        f"{BODY_PREFIX}.tracking_state": _feature("int64", (CANONICAL_JOINT_COUNT,), joint_names),
-        f"{BODY_PREFIX}.confidence": _feature("float32", (CANONICAL_JOINT_COUNT,), joint_names),
-        f"{BODY_PREFIX}.provenance": _feature("int64", (CANONICAL_JOINT_COUNT,), joint_names),
+        f"{BODY_PREFIX}.tracking_state": _feature(
+            "int64", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
+        f"{BODY_PREFIX}.confidence": _feature(
+            "float32", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
+        f"{BODY_PREFIX}.provenance": _feature(
+            "int64", (CANONICAL_JOINT_COUNT,), joint_names
+        ),
         f"{BODY_PREFIX}.platform_root_pose": _feature("float32", (7,)),
         f"{BODY_PREFIX}.platform_root_position_valid": _feature("int64", (1,)),
         f"{BODY_PREFIX}.platform_root_orientation_valid": _feature("int64", (1,)),
@@ -336,15 +344,11 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
         f"{BODY_PREFIX}.whole_com_covariance": _feature("float32", (3, 3)),
         f"{BODY_PREFIX}.whole_com_provenance": _feature("int64", (1,)),
         f"{BODY_PREFIX}.whole_com_diagnostic": _feature("int64", (1,)),
-        f"{BODY_PREFIX}.whole_com_unresolved_mass_fraction": _feature(
-            "float32", (1,)
-        ),
+        f"{BODY_PREFIX}.whole_com_unresolved_mass_fraction": _feature("float32", (1,)),
         f"{BODY_PREFIX}.whole_com_ground_projection": _feature(
             "float32", (3,), ["x", "y", "z"]
         ),
-        f"{BODY_PREFIX}.whole_com_ground_projection_valid": _feature(
-            "int64", (1,)
-        ),
+        f"{BODY_PREFIX}.whole_com_ground_projection_valid": _feature("int64", (1,)),
         f"{BODY_PREFIX}.whole_com_ground_projection_covariance": _feature(
             "float32", (3, 3)
         ),
@@ -373,7 +377,9 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
         f"{BODY_PREFIX}.segment_mass_fraction": _feature(
             "float32", (CANONICAL_JOINT_COUNT,), joint_names
         ),
-        f"{BODY_PREFIX}.ground_plane": _feature("float32", (4,), ["nx", "ny", "nz", "d"]),
+        f"{BODY_PREFIX}.ground_plane": _feature(
+            "float32", (4,), ["nx", "ny", "nz", "d"]
+        ),
         f"{BODY_PREFIX}.contact_probability": _feature(
             "float32", (4,), ["left_heel", "left_ball", "right_heel", "right_ball"]
         ),
@@ -389,9 +395,7 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
         f"{BODY_PREFIX}.support_polygon_valid": _feature(
             "int64", (MAX_SUPPORT_POLYGON_VERTICES,)
         ),
-        f"{BODY_PREFIX}.center_of_pressure": _feature(
-            "float32", (3,), ["x", "y", "z"]
-        ),
+        f"{BODY_PREFIX}.center_of_pressure": _feature("float32", (3,), ["x", "y", "z"]),
         f"{BODY_PREFIX}.center_of_pressure_valid": _feature("int64", (1,)),
     }
     for key in (
@@ -408,7 +412,9 @@ def canonical_body_features() -> dict[str, dict[str, Any]]:
     return features
 
 
-def canonical_body_metadata(*, transforms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def canonical_body_metadata(
+    *, transforms: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     from handumi.body.mapping import META_TO_CANONICAL, PICO_TO_CANONICAL
 
     transform_table = transforms or []
@@ -440,8 +446,7 @@ def canonical_body_metadata(*, transforms: list[dict[str, Any]] | None = None) -
                 "mapping": PICO_TO_CANONICAL,
                 "source_pose_convention": "PICO_SDK_right_handed_source_space",
                 "hierarchy_reference": (
-                    "XR-Robotics/XRoboToolkit-Unity-Client "
-                    "PXR_Plugin.BodyTrackerRole"
+                    "XR-Robotics/XRoboToolkit-Unity-Client PXR_Plugin.BodyTrackerRole"
                 ),
                 "platform_root_preserved_separately": False,
             },

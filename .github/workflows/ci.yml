@@ -55,8 +55,17 @@ jobs:
           uv run --locked python -m compileall -q src tests
           git diff --check
 
+      - name: Check maintained Python formatting, lint, and types
+        run: |
+          uv run --locked ruff format --check src tests bin
+          uv run --locked ruff check src tests bin
+          uv run --locked basedpyright src tests bin
+
       - name: Run software tests
         run: uv run --locked pytest -q
+
+      - name: Verify source dependency and robot asset inventories
+        run: uv run --locked python bin/verify_release_inventory.py
 
       - name: Run critical recording and body suites
         run: |
@@ -96,7 +105,7 @@ jobs:
             handumi-calibrate-grippers handumi-calibrate-openarm-grippers \
             handumi-print-controller-pose handumi-calibrate-tcp-offset \
             handumi-calibrate-spatial handumi-replay-in-sim \
-            handumi-quest-probe handumi-preflight; do
+            handumi-quest-probe handumi-preflight handumi-soak; do
             "/tmp/handumi-wheel-smoke/bin/$cli" --help >/dev/null
           done
 
@@ -129,4 +138,6 @@ jobs:
             dist/pip-audit.json
             dist/handumi-wheel.cdx.json
             dist/gitleaks.json
+            release/asset-manifest.json
+            release/dependency-source-inventory.json
           if-no-files-found: error

@@ -174,9 +174,7 @@ def test_transform_graph_keeps_world_workspace_camera_and_mocap_explicit():
         )
     )
     graph.add(
-        NamedFrameTransform(
-            "handumi_world", "mocap", Pose([0, 0, 3], [0, 0, 0, 1])
-        )
+        NamedFrameTransform("handumi_world", "mocap", Pose([0, 0, 3], [0, 0, 0, 1]))
     )
     camera_from_world = graph.resolve("handumi_world", "left_wrist_camera")
     np.testing.assert_allclose(camera_from_world.position, [1, 2, 0])

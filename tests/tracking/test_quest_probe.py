@@ -10,7 +10,9 @@ from handumi.tracking.quest_probe import (
 )
 
 
-def _record(seq: int, receive_ns: int, device_ns: int, *, offset: int = 10, rtt: int = 4):
+def _record(
+    seq: int, receive_ns: int, device_ns: int, *, offset: int = 10, rtt: int = 4
+):
     return {
         "probe_schema": PROBE_SCHEMA,
         "pc_receive_time_ns": receive_ns,

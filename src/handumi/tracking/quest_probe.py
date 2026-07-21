@@ -46,7 +46,9 @@ def _percentile(values: list[float], percentile: float) -> float | None:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def _nested_int(packet: Mapping[str, Any], paths: tuple[tuple[str, ...], ...]) -> int | None:
+def _nested_int(
+    packet: Mapping[str, Any], paths: tuple[tuple[str, ...], ...]
+) -> int | None:
     for path in paths:
         value: object = packet
         for key in path:
@@ -249,9 +251,13 @@ def iter_probe_records(path: str | Path) -> Iterator[dict[str, Any]]:
             try:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(f"Malformed probe JSON at {path}:{line_number}: {exc}") from exc
+                raise ValueError(
+                    f"Malformed probe JSON at {path}:{line_number}: {exc}"
+                ) from exc
             if not isinstance(record, dict):
-                raise ValueError(f"Probe record at {path}:{line_number} is not an object")
+                raise ValueError(
+                    f"Probe record at {path}:{line_number} is not an object"
+                )
             yield record
 
 
@@ -300,8 +306,10 @@ def analyze_probe_records(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
         if device_time is not None and device_time > 0:
             device_times.append(device_time)
         body_time = _body_sample_time_ns(packet)
-        if body_time is not None and body_time > 0 and (
-            not body_times or body_time != body_times[-1]
+        if (
+            body_time is not None
+            and body_time > 0
+            and (not body_times or body_time != body_times[-1])
         ):
             body_times.append(body_time)
         if "seq" in packet:
@@ -416,9 +424,7 @@ def analyze_probe_records(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
             name = raw_name if isinstance(raw_name, str) else f"Joint_{index}"
             stats = joint_stats.setdefault((index, name), Counter())
             stats["samples"] += 1
-            flags = _finite_number(
-                joint.get("locationFlags", joint.get("flags"))
-            )
+            flags = _finite_number(joint.get("locationFlags", joint.get("flags")))
             if flags is None:
                 continue
             flag_bits = int(flags)
@@ -513,7 +519,9 @@ def analyze_probe_records(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
         "clock_offset_ns": {
             "sample_count": len(offsets),
             "median": statistics.median(offsets) if offsets else None,
-            "standard_deviation": statistics.pstdev(offsets) if len(offsets) > 1 else None,
+            "standard_deviation": statistics.pstdev(offsets)
+            if len(offsets) > 1
+            else None,
             "minimum": min(offsets) if offsets else None,
             "maximum": max(offsets) if offsets else None,
         },
@@ -532,9 +540,7 @@ def analyze_probe_records(records: Iterable[Mapping[str, Any]]) -> dict[str, Any
         },
         "mapped_body_sample_age_ns": {
             "sample_count": len(body_sample_ages),
-            "median": statistics.median(body_sample_ages)
-            if body_sample_ages
-            else None,
+            "median": statistics.median(body_sample_ages) if body_sample_ages else None,
             "p95": _percentile(body_sample_ages, 0.95),
             "minimum": min(body_sample_ages) if body_sample_ages else None,
             "maximum": max(body_sample_ages) if body_sample_ages else None,

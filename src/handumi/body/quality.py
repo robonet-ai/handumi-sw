@@ -66,7 +66,10 @@ class SmoothedComTrajectory:
             if dt_s <= 0 or dt_s > self.config.max_gap_s:
                 self.reset()
                 diagnostic = ComDiagnostic.TIMING_INVALID
-            elif np.linalg.norm(point - previous_point) / dt_s > self.config.max_speed_m_s:
+            elif (
+                np.linalg.norm(point - previous_point) / dt_s
+                > self.config.max_speed_m_s
+            ):
                 self.reset()
                 diagnostic = ComDiagnostic.RELOCALIZATION
 

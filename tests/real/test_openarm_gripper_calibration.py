@@ -1,5 +1,7 @@
 import tempfile
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 from unittest import mock
 
 import numpy as np
@@ -118,18 +120,17 @@ class _Sdk:
 
 
 def test_calibrator_measures_both_stops_using_only_j8():
-    with mock.patch(
-        "handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"
-    ):
+    with mock.patch("handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"):
         limits = calibrate_side(
             port="can0",
-            sdk=_Sdk,
+            sdk=cast(ModuleType, _Sdk),
             step_rad=0.1,
             max_travel_rad=1.5,
         )
 
     assert np.isclose(limits.closed_position_rad, 0.0)
     assert np.isclose(limits.open_position_rad, -1.1)
+    assert _Arm.last is not None
     assert _Arm.last.init_args == ("DM4310", 0x08, 0x18, "MIT")
     assert _Arm.last.disabled
 
@@ -138,18 +139,21 @@ def test_default_manual_calibration_reads_user_placed_endpoints_without_enabling
     positions = iter((-0.01, -1.06))
 
     def place_gripper(_prompt):
+        assert _Arm.last is not None
         _Arm.last.motor.position = next(positions)
         return ""
 
-    with mock.patch(
-        "handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"
-    ):
+    with mock.patch("handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"):
         limits = calibrate_side_manually(
-            port="can0", sdk=_Sdk, side="right", input_fn=place_gripper
+            port="can0",
+            sdk=cast(ModuleType, _Sdk),
+            side="right",
+            input_fn=place_gripper,
         )
 
     assert np.isclose(limits.closed_position_rad, -0.01)
     assert np.isclose(limits.open_position_rad, -1.06)
+    assert _Arm.last is not None
     assert _Arm.last.disabled
 
 
@@ -182,9 +186,7 @@ def test_manual_capture_discards_feedback_from_previous_endpoint():
         def get_gripper(self):
             return Gripper()
 
-    with mock.patch(
-        "handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"
-    ):
+    with mock.patch("handumi.scripts.setup.calibrate_openarm_grippers.time.sleep"):
         captured = _read_stable_position(Arm())
 
     assert np.isclose(captured, -0.20)
@@ -209,9 +211,7 @@ def test_runtime_loads_per_side_gripper_endpoints():
         save_openarm_gripper_limits(
             "right", OpenArmGripperLimits(0.03, -1.00), calibration
         )
-        settings = load_openarm_settings(
-            root / "missing-rig.yaml", {}, calibration
-        )
+        settings = load_openarm_settings(root / "missing-rig.yaml", {}, calibration)
 
     assert settings.right_gripper_closed_position_rad == 0.03
     assert settings.right_gripper_open_position_rad == -1.0

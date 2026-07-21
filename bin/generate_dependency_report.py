@@ -75,9 +75,7 @@ def build_report() -> dict[str, Any]:
                 "name": name,
                 "version": distribution.version,
                 "license_expression": package_metadata.get("License-Expression"),
-                "license_metadata": _summarize_license(
-                    package_metadata.get("License")
-                ),
+                "license_metadata": _summarize_license(package_metadata.get("License")),
                 "license_classifiers": [
                     value
                     for value in _metadata_values(package_metadata, "Classifier")

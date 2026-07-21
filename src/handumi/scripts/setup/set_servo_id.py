@@ -7,12 +7,25 @@ bus unless you are certain there is no ID conflict.
 from __future__ import annotations
 
 import argparse
+from contextlib import AbstractContextManager
+from typing import Callable, Protocol
 
 from handumi.feetech.bus import FeetechBus
 from handumi.feetech.calibration import default_config
 
 MIN_SERVO_ID = 0
 MAX_SERVO_ID = 253
+
+
+class ServoIdBus(Protocol):
+    def scan(self, ids: range) -> list[int]: ...
+
+    def ping(self, servo_id: int) -> bool: ...
+
+    def write_servo_id(self, old_id: int, new_id: int) -> None: ...
+
+
+BusFactory = Callable[..., AbstractContextManager[ServoIdBus]]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,18 +44,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Current servo ID. Omit to auto-detect when exactly one servo is connected.",
     )
-    parser.add_argument("--new-id", type=int, required=True, help="New servo ID to write.")
+    parser.add_argument(
+        "--new-id", type=int, required=True, help="New servo ID to write."
+    )
     parser.add_argument("--baudrate", type=int, default=defaults.baudrate)
-    parser.add_argument("--protocol-version", type=int, default=defaults.protocol_version)
+    parser.add_argument(
+        "--protocol-version", type=int, default=defaults.protocol_version
+    )
     parser.add_argument("--scan-start-id", type=int, default=MIN_SERVO_ID)
     parser.add_argument("--scan-end-id", type=int, default=MAX_SERVO_ID)
-    parser.add_argument("--yes", action="store_true", help="Do not prompt for confirmation.")
+    parser.add_argument(
+        "--yes", action="store_true", help="Do not prompt for confirmation."
+    )
     return parser
 
 
 def _validate_id(value: int, *, name: str) -> None:
     if not MIN_SERVO_ID <= value <= MAX_SERVO_ID:
-        raise SystemExit(f"{name} must be in [{MIN_SERVO_ID}, {MAX_SERVO_ID}], got {value}.")
+        raise SystemExit(
+            f"{name} must be in [{MIN_SERVO_ID}, {MAX_SERVO_ID}], got {value}."
+        )
 
 
 def _confirm(args: argparse.Namespace, *, old_id: int) -> None:
@@ -60,7 +81,7 @@ def _confirm(args: argparse.Namespace, *, old_id: int) -> None:
         raise SystemExit("Aborted; servo ID was not changed.")
 
 
-def _resolve_old_id(args: argparse.Namespace, bus) -> int:
+def _resolve_old_id(args: argparse.Namespace, bus: ServoIdBus) -> int:
     if args.old_id is not None:
         _validate_id(args.old_id, name="--old-id")
         return int(args.old_id)
@@ -85,7 +106,7 @@ def _resolve_old_id(args: argparse.Namespace, bus) -> int:
     )
 
 
-def set_servo_id(args: argparse.Namespace, *, bus_cls=FeetechBus) -> None:
+def set_servo_id(args: argparse.Namespace, *, bus_cls: BusFactory = FeetechBus) -> None:
     _validate_id(args.new_id, name="--new-id")
 
     with bus_cls(
@@ -95,7 +116,9 @@ def set_servo_id(args: argparse.Namespace, *, bus_cls=FeetechBus) -> None:
     ) as bus:
         old_id = _resolve_old_id(args, bus)
         if old_id == args.new_id:
-            print(f"Servo on {args.port} is already ID {args.new_id}; nothing to change.")
+            print(
+                f"Servo on {args.port} is already ID {args.new_id}; nothing to change."
+            )
             return
 
         if not bus.ping(old_id):

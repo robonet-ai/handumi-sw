@@ -70,7 +70,9 @@ class HandumiToRobotTest(unittest.TestCase):
         )
 
         np.testing.assert_allclose(mapped[:3], source[:3], atol=1e-6)
-        self.assertAlmostEqual(abs(float(np.dot(mapped[3:], target[3:]))), 1.0, places=6)
+        self.assertAlmostEqual(
+            abs(float(np.dot(mapped[3:], target[3:]))), 1.0, places=6
+        )
 
     def test_absolute_table_retarget_preserves_bimanual_geometry(self):
         state = np.zeros(16, dtype=np.float32)
@@ -101,7 +103,9 @@ class HandumiToRobotTest(unittest.TestCase):
         np.testing.assert_allclose(left, right, atol=1e-6)
 
     def test_quaternion_identity(self):
-        rot = quaternion_xyzw_to_matrix(np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32))
+        rot = quaternion_xyzw_to_matrix(
+            np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        )
         np.testing.assert_allclose(rot, np.eye(3), atol=1e-6)
 
     def test_split_raw_state(self):

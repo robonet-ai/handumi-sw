@@ -58,11 +58,15 @@ def _load_input_poses(args: argparse.Namespace, side: str) -> np.ndarray:
     return load_episode_poses(args.parquet, args.episode, side, column=args.column)
 
 
-def _existing_or_seeded(args: argparse.Namespace, output: Path) -> tuple[np.ndarray, np.ndarray]:
+def _existing_or_seeded(
+    args: argparse.Namespace, output: Path
+) -> tuple[np.ndarray, np.ndarray]:
     return existing_or_identity(output)
 
 
-def _save_side_pose(args: argparse.Namespace, side_pose: np.ndarray, *, update_rotation: bool) -> Path:
+def _save_side_pose(
+    args: argparse.Namespace, side_pose: np.ndarray, *, update_rotation: bool
+) -> Path:
     output = _output_path(args)
     left, right = _existing_or_seeded(args, output)
     target = left if args.side == "left" else right
@@ -91,7 +95,9 @@ def _print_pivot_report(device: str, side: str, result, output: Path) -> None:
     if result.rms_error > 0.02 or result.max_error > 0.04:
         print(f"[{device}-tcp] WARNING: high residual; the tip probably slipped.")
     if result.condition > 500:
-        print(f"[{device}-tcp] WARNING: weak rotation diversity; rotate through more poses.")
+        print(
+            f"[{device}-tcp] WARNING: weak rotation diversity; rotate through more poses."
+        )
     print(f"[{device}-tcp] wrote: {output}")
 
 
@@ -125,8 +131,14 @@ def inspect_main(args: argparse.Namespace) -> None:
     for side, pose in (("left", calibration.left), ("right", calibration.right)):
         inv_pose = pose_inv(pose)
         print(f"  {side}:")
-        print("    controller->tcp:", np.array2string(pose, precision=5, suppress_small=True))
-        print("    tcp->controller:", np.array2string(inv_pose, precision=5, suppress_small=True))
+        print(
+            "    controller->tcp:",
+            np.array2string(pose, precision=5, suppress_small=True),
+        )
+        print(
+            "    tcp->controller:",
+            np.array2string(inv_pose, precision=5, suppress_small=True),
+        )
 
 
 def solve_pivot(
@@ -143,13 +155,17 @@ def solve_pivot(
 
 
 def add_device_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--device", choices=SUPPORTED_DEVICES, default=None, dest="device_local")
+    parser.add_argument(
+        "--device", choices=SUPPORTED_DEVICES, default=None, dest="device_local"
+    )
 
 
 def add_common_input_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--parquet", type=Path, default=DEFAULT_PARQUET)
     parser.add_argument("-e", "--episode", type=int)
-    parser.add_argument("--csv", type=Path, help="CSV with x,y,z,qx,qy,qz,qw and optional side")
+    parser.add_argument(
+        "--csv", type=Path, help="CSV with x,y,z,qx,qy,qz,qw and optional side"
+    )
     parser.add_argument("--column", help="Override parquet pose column")
     parser.add_argument("--side", choices=SIDES, required=True)
     parser.add_argument("-o", "--output", type=Path, default=None)

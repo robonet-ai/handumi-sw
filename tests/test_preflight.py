@@ -185,9 +185,7 @@ def test_duplicate_camera_serial_with_distinct_topology_warns_while_busy_fails()
     )
     assert duplicate.status is CheckStatus.WARN
     assert "pinned by USB by-path" in duplicate.action
-    assert "CAMERA-RIGHT_WRIST-ACCESS" in {
-        check.code for check in report.failures
-    }
+    assert "CAMERA-RIGHT_WRIST-ACCESS" in {check.code for check in report.failures}
 
 
 def test_duplicate_usb_topology_fails_even_when_camera_serials_differ():
