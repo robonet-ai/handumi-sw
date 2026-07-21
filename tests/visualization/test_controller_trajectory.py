@@ -86,3 +86,16 @@ def test_live_visualization_failure_is_nonfatal_and_disables_future_logs():
     stream.log_frame({}, sample, widths, body_frame=CanonicalBodyFrame.empty())
     assert stream.healthy is False
     assert len(errors) == 1
+
+
+def test_live_visualization_close_disconnects_spawned_viewer():
+    class _ClosableRerun:
+        disconnected = False
+
+        def disconnect(self):
+            self.disconnected = True
+
+    rerun = _ClosableRerun()
+    stream = LiveRerunStream(rerun, fps=30)
+    stream.close()
+    assert rerun.disconnected is True

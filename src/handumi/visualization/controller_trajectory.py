@@ -8,6 +8,10 @@ the SDK and prevents a viewer failure from interrupting capture or teleop.
 
 from __future__ import annotations
 
+import os
+import shutil
+import signal
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -358,6 +362,7 @@ class LiveRerunStream:
         fps: int,
         trail_seconds: float = 10.0,
         on_error: Callable[[BaseException], None] | None = None,
+        viewer_process: subprocess.Popen[bytes] | None = None,
     ) -> None:
         from handumi.visualization.body import BodyTrailBuffer
 
@@ -376,6 +381,7 @@ class LiveRerunStream:
         self.body_trail = BodyTrailBuffer(max_points)
         self.healthy = True
         self.on_error = on_error
+        self.viewer_process = viewer_process
 
     def _guard(self, callback: Callable[[], None]) -> None:
         if not self.healthy:
@@ -462,6 +468,31 @@ class LiveRerunStream:
 
         self._guard(log_all)
 
+    def close(self) -> None:
+        """Flush and close the SDK connection, including a spawned viewer."""
+        try:
+            self.rr.disconnect()
+        except Exception as exc:
+            if self.on_error is not None:
+                self.on_error(exc)
+        if self.viewer_process is not None:
+            _terminate_viewer(self.viewer_process)
+            self.viewer_process = None
+
+
+def _terminate_viewer(process: subprocess.Popen[bytes], timeout_s: float = 2.0) -> None:
+    """Stop only the process group created for this Rerun viewer."""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=max(0.0, timeout_s))
+    except ProcessLookupError:
+        return
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=1.0)
+
 
 def initialize_rerun(
     application_id: str,
@@ -477,12 +508,32 @@ def initialize_rerun(
     on_error: Callable[[BaseException], None] | None = None,
 ) -> LiveRerunStream | None:
     """Initialize one guarded stream; return ``None`` on any viewer failure."""
+    viewer_process: subprocess.Popen[bytes] | None = None
     try:
         import rerun as rr
         import rerun.blueprint as rrb
         import rerun.datatypes as rdt
 
-        rr.init(application_id, recording_id=recording_id, spawn=spawn)
+        rr.init(application_id, recording_id=recording_id, spawn=False)
+        if spawn:
+            executable = shutil.which("rerun")
+            if executable is None:
+                raise RuntimeError("Rerun viewer executable is not installed")
+            # Use a dedicated process group so recorder cleanup owns the exact
+            # viewer it launched. Bind to loopback unless the caller explicitly
+            # implements a separate trusted-LAN transport.
+            viewer_process = subprocess.Popen(
+                [
+                    executable,
+                    "--bind=127.0.0.1",
+                    "--port=9876",
+                    "--memory-limit=75%",
+                    "--server-memory-limit=0B",
+                    "--expect-data-soon",
+                ],
+                start_new_session=True,
+            )
+            rr.connect_grpc("rerun+http://127.0.0.1:9876/proxy")
         if save_path is not None:
             rr.save(Path(save_path))
         sink = RerunSink(rr)
@@ -496,8 +547,15 @@ def initialize_rerun(
             timeline=timeline,
         )
         rr.send_blueprint(blueprint, make_active=True, make_default=True)
-        return LiveRerunStream(rr, fps=fps, on_error=on_error)
+        return LiveRerunStream(
+            rr,
+            fps=fps,
+            on_error=on_error,
+            viewer_process=viewer_process,
+        )
     except Exception as exc:
+        if viewer_process is not None:
+            _terminate_viewer(viewer_process)
         if on_error is not None:
             on_error(exc)
         return None

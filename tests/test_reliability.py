@@ -96,6 +96,36 @@ def test_atomic_manifest_and_complete_promotion_are_recoverable(tmp_path: Path):
     assert manifest["produced_files"][0]["path"] == "data.bin"
 
 
+def test_deferred_session_allows_dataset_to_create_reserved_root(tmp_path: Path):
+    destination = tmp_path / "episode"
+    session = CaptureSession(
+        destination,
+        resolve_capture_profile(10, 30, 3),
+        defer_initialization=True,
+    )
+    assert not session.staging_root.exists()
+
+    # LeRobotDataset.create requires a non-existent root and creates it itself.
+    session.staging_root.mkdir()
+    (session.staging_root / "dataset-marker").write_text("created by dataset\n")
+    session.initialize()
+    session.checkpoint(StageProfiler(), reason="dataset_initialized")
+
+    manifest = json.loads(session.manifest_path.read_text())
+    assert manifest["completion_status"] == "incomplete"
+    assert manifest["reason"] == "dataset_initialized"
+
+
+def test_deferred_session_cannot_finalize_before_initialization(tmp_path: Path):
+    session = CaptureSession(
+        tmp_path / "episode",
+        resolve_capture_profile(10, 30, 3),
+        defer_initialization=True,
+    )
+    with pytest.raises(CaptureStorageError, match="not been initialized"):
+        session.reject(StageProfiler(), reason="setup_failed")
+
+
 def test_reject_and_crash_recovery_never_present_partial_as_complete(tmp_path: Path):
     rejected = CaptureSession(tmp_path / "bad", resolve_capture_profile(30, 30, 3))
     rejected_path = rejected.reject(StageProfiler(), reason="encoder_failure")

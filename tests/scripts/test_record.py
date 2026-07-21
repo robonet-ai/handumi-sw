@@ -145,12 +145,17 @@ class AsyncRecordingRerunTest(unittest.TestCase):
         release = threading.Event()
 
         class _SlowStream:
+            closed = False
+
             def set_status(self, state, detail):
                 pass
 
             def log_frame(self, *args, **kwargs):
                 started.set()
                 release.wait(timeout=2.0)
+
+            def close(self):
+                self.closed = True
 
         stream = _SlowStream()
         with mock.patch(
@@ -170,6 +175,8 @@ class AsyncRecordingRerunTest(unittest.TestCase):
         self.assertGreater(viewer.dropped_frames, 0)
         release.set()
         viewer.close()
+        self.assertTrue(stream.closed)
+        self.assertIsNone(viewer.stream)
 
 
 class _HealthyTracker:

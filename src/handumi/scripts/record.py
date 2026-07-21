@@ -60,6 +60,7 @@ from handumi.calibration.spatial import (
     session_table_from_device,
 )
 from handumi.cameras import (
+    CameraDevice,
     build_camera_specs,
     connect_cameras,
     disconnect_cameras,
@@ -611,6 +612,11 @@ class _RecordingRerun:
             if worker.is_alive():
                 log.warning("Rerun worker did not flush before shutdown.")
         self._worker = None
+        if self.stream is not None:
+            close_stream = getattr(self.stream, "close", None)
+            if callable(close_stream):
+                close_stream()
+            self.stream = None
         if self._dropped_frames:
             log.info(
                 "Rerun dropped %d stale live frames to keep recording responsive.",
@@ -1299,6 +1305,7 @@ def main() -> None:
             hash_configuration("session", args.session_calibration),
             hash_configuration("body_profile", args.body_profile),
         ],
+        defer_initialization=True,
     )
     args.output_dir = capture_session.staging_root
     robot_metadata = _robot_metadata(args.robot)
@@ -1346,79 +1353,125 @@ def main() -> None:
                 "Selected tracking backend cannot apply a table calibration."
             )
         set_workspace(session_table_from_device(args.session_calibration), locked=True)
-    tracker.start()
-
-    log.info("--- Camera setup ---")
-    cam_ids = resolve_camera_ids(
-        args.cam_ids,
-        args.rig_config,
-        camera_names=camera_names,
-    )
-    _validate_unique_camera_ids(camera_names, cam_ids)
-    camera_specs, _ = build_camera_specs(
-        cam_ids,
-        camera_names=camera_names,
-        laptop_camera=False,
-        laptop_cam_id=0,
-        laptop_cam_name="laptop",
-    )
-    cam_names = [spec["name"] for spec in camera_specs]
-    # Rerun may launch an external viewer process. Spawn it before OpenCV opens
-    # V4L descriptors so that viewer lifetime cannot keep cameras busy after
-    # the recorder exits.
-    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
-    cameras = connect_cameras(
-        camera_specs,
-        fps=args.cam_fps,
-        width=args.cam_width,
-        height=args.cam_height,
-        zero_non_laptop=False,
-    )
-
-    log.info("--- Feetech setup ---")
-    gripper_pair = connect_feetech(args)
-    grippers = None
-    if gripper_pair is not None:
-        grippers = FeetechGripperSampler(
-            gripper_pair,
-            sample_hz=args.feetech_sample_hz,
-        )
-        grippers.start()
-
-    log.info("--- Dataset setup ---")
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-    use_videos = not args.no_video
-    features = build_features(cam_names, args.cam_width, args.cam_height, use_videos)
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        fps=args.fps,
-        root=args.output_dir,
-        robot_type="handumi_raw",
-        features=features,
-        use_videos=use_videos,
-        image_writer_processes=0,
-        image_writer_threads=max(1, 4 * len(cam_names)),
-        vcodec=args.vcodec,
-    )
-    log.info("Dataset created at: %s", dataset.root)
-    tracking_sidecar = TrackingSidecarWriter(dataset.root)
+    rerun: _RecordingRerun | None = None
+    cameras: list[CameraDevice | None] = []
+    gripper_pair: FeetechGripperPair | None = None
+    grippers: FeetechGripperSampler | None = None
+    dataset = None
+    tracking_sidecar: TrackingSidecarWriter | None = None
     robot_viewer: RecorderRobotSink | None = None
-    if args.viser:
-        robot_viewer = QueuedRecorderRobotViewer(
-            RecorderRobotViewerConfig(
-                robot=args.robot,
-                device=args.device,
-                host=args.viser_host,
-                port=args.viser_port,
-                rig_config=args.rig_config,
-                home_pose=args.viser_home_pose,
-                scene=args.viser_scene,
-                anchor_mode=args.viser_anchor,
-                anchor_z=args.viser_anchor_z,
-                queue_size=args.viser_queue_size,
-            )
+    tracker_started = False
+    try:
+        tracker.start()
+        tracker_started = True
+
+        log.info("--- Camera setup ---")
+        cam_ids = resolve_camera_ids(
+            args.cam_ids,
+            args.rig_config,
+            camera_names=camera_names,
         )
+        _validate_unique_camera_ids(camera_names, cam_ids)
+        camera_specs, _ = build_camera_specs(
+            cam_ids,
+            camera_names=camera_names,
+            laptop_camera=False,
+            laptop_cam_id=0,
+            laptop_cam_name="laptop",
+        )
+        cam_names = [spec["name"] for spec in camera_specs]
+        # Rerun may launch an external viewer process. Spawn it before OpenCV opens
+        # V4L descriptors so that viewer lifetime cannot keep cameras busy after
+        # the recorder exits.
+        rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
+        cameras = connect_cameras(
+            camera_specs,
+            fps=args.cam_fps,
+            width=args.cam_width,
+            height=args.cam_height,
+            zero_non_laptop=False,
+        )
+
+        log.info("--- Feetech setup ---")
+        gripper_pair = connect_feetech(args)
+        if gripper_pair is not None:
+            grippers = FeetechGripperSampler(
+                gripper_pair,
+                sample_hz=args.feetech_sample_hz,
+            )
+            grippers.start()
+
+        log.info("--- Dataset setup ---")
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        use_videos = not args.no_video
+        features = build_features(
+            cam_names, args.cam_width, args.cam_height, use_videos
+        )
+        dataset = LeRobotDataset.create(
+            repo_id=args.repo_id,
+            fps=args.fps,
+            root=args.output_dir,
+            robot_type="handumi_raw",
+            features=features,
+            use_videos=use_videos,
+            image_writer_processes=0,
+            image_writer_threads=max(1, 4 * len(cam_names)),
+            vcodec=args.vcodec,
+        )
+        capture_session.initialize()
+        log.info("Dataset created at: %s", dataset.root)
+        tracking_sidecar = TrackingSidecarWriter(dataset.root)
+        if args.viser:
+            robot_viewer = QueuedRecorderRobotViewer(
+                RecorderRobotViewerConfig(
+                    robot=args.robot,
+                    device=args.device,
+                    host=args.viser_host,
+                    port=args.viser_port,
+                    rig_config=args.rig_config,
+                    home_pose=args.viser_home_pose,
+                    scene=args.viser_scene,
+                    anchor_mode=args.viser_anchor,
+                    anchor_z=args.viser_anchor_z,
+                    queue_size=args.viser_queue_size,
+                )
+            )
+    except BaseException as exc:
+        log.exception("Recorder setup failed; preserving a rejected session.")
+        if dataset is not None:
+            try:
+                dataset.finalize()
+            except BaseException:
+                log.exception("Dataset writer cleanup failed during setup rollback.")
+        if robot_viewer is not None:
+            robot_viewer.close()
+        if rerun is not None:
+            rerun.close()
+        disconnect_cameras(cameras)
+        if grippers is not None:
+            grippers.stop()
+        if gripper_pair is not None:
+            gripper_pair.close()
+        if tracking_sidecar is not None:
+            tracking_sidecar.close()
+        if tracker_started:
+            tracker.stop()
+        try:
+            capture_session.initialize()
+            capture_session.reject(
+                profiler,
+                reason=f"setup_failed:{type(exc).__name__}",
+            )
+        except BaseException:
+            log.exception(
+                "Could not preserve the failed setup as rejected; "
+                "its staging directory remains incomplete."
+            )
+        raise
+
+    assert dataset is not None
+    assert tracking_sidecar is not None
     world_calibration = HandumiWorldCalibration.identity(
         source_frame=f"{args.device}_right_handed_source",
         qualified=False,

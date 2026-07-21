@@ -361,6 +361,8 @@ class CaptureSession:
     started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     viewer_failures: list[str] = field(default_factory=list)
+    defer_initialization: bool = False
+    _initialized: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.profile.validate()
@@ -368,17 +370,42 @@ class CaptureSession:
         self.staging_root = self.requested_root.with_name(
             f".{self.requested_root.name}.handumi-inprogress-{self.session_id}"
         )
-        self.staging_root.mkdir(parents=True, exist_ok=False)
+        if not self.defer_initialization:
+            self.initialize()
+
+    def initialize(self) -> None:
+        """Make the reserved staging directory crash-visible.
+
+        Dataset implementations such as LeRobot require their root not to exist
+        when ``create`` is called. A recorder can therefore reserve the unique
+        name with ``defer_initialization=True``, let the dataset create it, and
+        call this method immediately afterwards. The default remains eager for
+        callers that write files directly.
+        """
+        if self._initialized:
+            return
+        self.staging_root.mkdir(parents=True, exist_ok=True)
+        if self.manifest_path.exists():
+            raise CaptureStorageError(
+                "reserved capture staging directory already has a session manifest"
+            )
         self._write_state("incomplete", profiler=None, reason="capture_started")
+        self._initialized = True
+
+    def _require_initialized(self) -> None:
+        if not self._initialized:
+            raise CaptureStorageError("capture session has not been initialized")
 
     @property
     def manifest_path(self) -> Path:
         return self.staging_root / "session-manifest.json"
 
     def checkpoint(self, profiler: StageProfiler, *, reason: str = "periodic") -> None:
+        self._require_initialized()
         self._write_state("incomplete", profiler=profiler, reason=reason)
 
     def reject(self, profiler: StageProfiler, *, reason: str) -> Path:
+        self._require_initialized()
         self._write_state("rejected", profiler=profiler, reason=reason)
         rejected = self.staging_root.with_name(
             self.staging_root.name.replace("handumi-inprogress", "handumi-rejected")
@@ -388,6 +415,7 @@ class CaptureSession:
         return rejected
 
     def complete(self, profiler: StageProfiler) -> Path:
+        self._require_initialized()
         if self.requested_root.exists():
             raise CaptureStorageError(
                 f"capture destination already exists: {self.requested_root.name}"
