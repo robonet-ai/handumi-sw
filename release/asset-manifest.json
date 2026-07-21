@@ -1,0 +1,91 @@
+{
+  "schema": "handumi.robot-asset-manifest.v1",
+  "hash_algorithm": "sha256-of-sorted-sha256sum-lines",
+  "legal_status": "evidence inventory; not legal approval",
+  "asset_sets": [
+    {
+      "id": "axol",
+      "paths": ["assets/axol", "configs/robots/axol.yaml", "configs/calibration/axol_table.yaml"],
+      "source_url": "https://github.com/Almond-AI/almond_handumi",
+      "revision": "unresolved-in-import-history",
+      "owner": "Almond AI, Inc.",
+      "license": "MIT",
+      "license_source": "LICENSE",
+      "redistribution": "license text present; exact source revision needs owner review",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": true,
+      "tree_sha256": "0910ca468fe854c1c398c8ee0682435933172eb3d05182a9fd2f1282af50d5ab"
+    },
+    {
+      "id": "piper",
+      "paths": ["assets/piper", "configs/robots/piper.yaml", "configs/calibration/piper_table.yaml"],
+      "source_url": "https://github.com/agilexrobotics/piper_ros",
+      "revision": "unresolved-in-import-history",
+      "owner": "RosenYin / AgileX Robotics",
+      "license": "MIT",
+      "license_source": "LICENSE",
+      "redistribution": "license text present; exact source revision needs owner review",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": true,
+      "tree_sha256": "fad1bc6a4f1c78055f4a2f81e1947dfdd47b67d51266b90988e0c20d9f0eeba1"
+    },
+    {
+      "id": "openarm",
+      "paths": ["assets/openarm", "configs/robots/openarmv1.yaml", "configs/calibration/openarmv1_table.yaml"],
+      "source_url": "https://github.com/enactic/openarm_description",
+      "revision": "6c7b720f1ba48e8bafa3a3dc752c45f397b42221",
+      "owner": "Enactic, Inc.",
+      "license": "Apache-2.0",
+      "license_source": "assets/openarm/LICENSE.openarm",
+      "redistribution": "permitted subject to Apache-2.0 notice/modified-file requirements",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": true,
+      "tree_sha256": "4a419eb8e3dca966f8b768b173668b2efce521ef140047b3f5c3d422ff771cd7"
+    },
+    {
+      "id": "trlc-dk1",
+      "paths": ["assets/trlc-dk1", "configs/robots/trlc_dk1.yaml", "configs/calibration/trlc_dk1_table.yaml"],
+      "source_url": "https://github.com/robot-learning-co/trlc-dk1",
+      "revision": "unresolved-in-import-history",
+      "owner": "The Robot Learning Company UG (haftungsbeschraenkt)",
+      "license": "Apache-2.0",
+      "license_source": "assets/trlc-dk1/LICENSE.trlc-dk1",
+      "redistribution": "permitted subject to bundled upstream notices; exact revision needs owner review",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": true,
+      "tree_sha256": "b7e75871908707d54e0ccfd00a4333882861f3a1bcd6e748e7cdcd6ccd6bb9ea"
+    },
+    {
+      "id": "yam",
+      "paths": ["assets/yam", "configs/robots/yam.yaml", "configs/calibration/yam_table.yaml"],
+      "source_url": "https://github.com/i2rt-robotics/i2rt",
+      "revision": "ac096928d6899ddf852a71c5e8fbaa6055cd9745",
+      "owner": "I2RT Robotics",
+      "license": "MIT",
+      "license_source": "assets/yam/LICENSE.i2rt",
+      "redistribution": "permitted subject to MIT notice retention",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": true,
+      "tree_sha256": "67b60b2e725ce7cf2d82c3ee6520224895a1134e48b5c46da67337ed4500e1e4"
+    },
+    {
+      "id": "r1lite",
+      "paths": ["assets/r1lite", "configs/robots/r1lite.yaml", "configs/calibration/r1lite_table.yaml"],
+      "source_url": "https://docs.galaxea-dynamics.com/R1Pro/en/docs/2026/development/r1pro_get_sdk/",
+      "revision": "atc_system-V2.3.0-20260403_12_02_32_aarch64",
+      "owner": "Galaxea Dynamics",
+      "license": null,
+      "license_source": null,
+      "redistribution": "blocked: repository/SDK availability is not a redistribution grant",
+      "modified": true,
+      "notice": "NOTICE",
+      "distributed": false,
+      "tree_sha256": "b824e797cac7d61e359d76a3e45c81074d33d6503728c8331e64831f0da33522"
+    }
+  ]
+}

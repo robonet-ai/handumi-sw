@@ -1,0 +1,73 @@
+{
+  "schema": "handumi.source-dependency-inventory.v1",
+  "classification": "research-preview source inventory; not PyPI readiness or legal approval",
+  "cpu_default": true,
+  "cuda_optional_group": "cuda",
+  "dependencies": [
+    {
+      "name": "jaxls",
+      "scope": "source-only ik-source",
+      "source": "https://github.com/brentyi/jaxls",
+      "revision": "f8f8dbb54b3e0c16e8bf014496462a4e675e9389",
+      "package_index": null,
+      "license": "MIT",
+      "license_source": "https://github.com/brentyi/jaxls/blob/f8f8dbb54b3e0c16e8bf014496462a4e675e9389/LICENSE",
+      "native_libraries": ["JAX/XLA runtime (platform-dependent)"],
+      "platforms": ["platforms supported by pinned JAX stack"],
+      "included_in_wheel_sdist": false,
+      "redistribution": "not vendored; source install resolves upstream"
+    },
+    {
+      "name": "pyroki",
+      "scope": "source-only ik-source",
+      "source": "https://github.com/chungmin99/pyroki",
+      "revision": "388e43e1fc0d0ee382968d3dd72970fd62a0450c",
+      "package_index": null,
+      "license": "MIT",
+      "license_source": "https://github.com/chungmin99/pyroki/blob/388e43e1fc0d0ee382968d3dd72970fd62a0450c/LICENSE",
+      "native_libraries": ["transitive JAX/XLA runtime"],
+      "platforms": ["platforms supported by pinned JAX stack"],
+      "included_in_wheel_sdist": false,
+      "redistribution": "not vendored; source install resolves upstream"
+    },
+    {
+      "name": "piper_sdk",
+      "scope": "source-only piper-source hardware backend",
+      "source": "https://github.com/agilexrobotics/piper_sdk",
+      "revision": "c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad",
+      "package_index": "PyPI also exists, but release lock uses reviewed Git revision",
+      "license": "MIT",
+      "license_source": "https://github.com/agilexrobotics/piper_sdk/blob/c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad/LICENSE",
+      "native_libraries": ["Linux SocketCAN kernel interface", "python-can backend"],
+      "platforms": ["Linux with configured CAN interface"],
+      "included_in_wheel_sdist": false,
+      "redistribution": "not vendored; physical robot safety controls remain independent"
+    },
+    {
+      "name": "openarm_can",
+      "scope": "source-only openarm-source hardware backend",
+      "source": "https://github.com/enactic/openarm_can",
+      "revision": "1.2.9",
+      "package_index": null,
+      "license": "Apache-2.0",
+      "license_source": "https://github.com/enactic/openarm_can",
+      "native_libraries": ["Linux SocketCAN kernel interface", "python-can backend"],
+      "platforms": ["Linux with configured CAN interface"],
+      "included_in_wheel_sdist": false,
+      "redistribution": "not vendored; source install resolves tagged upstream subdirectory"
+    },
+    {
+      "name": "xrobotoolkit-sdk",
+      "scope": "source-only pico-source local build",
+      "source": "external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64",
+      "revision": "repository-pinned source tree",
+      "package_index": null,
+      "license": "requires upstream/source-tree review",
+      "license_source": null,
+      "native_libraries": ["CMake-built XRoboToolkit PC service binding"],
+      "platforms": ["Linux x86_64/ARM64 when supported by upstream"],
+      "included_in_wheel_sdist": false,
+      "redistribution": "not included in bounded artifacts; legal review remains external"
+    }
+  ]
+}
