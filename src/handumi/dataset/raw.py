@@ -101,7 +101,9 @@ def raw_tracking_features() -> dict[str, Any]:
     """
     features: dict[str, Any] = {}
     for side in ("left", "right"):
-        features[f"observation.tracking.{side}_device_controller_pose"] = pose7_feature()
+        features[f"observation.tracking.{side}_device_controller_pose"] = (
+            pose7_feature()
+        )
         features[f"observation.tracking.{side}_tracked"] = scalar_feature("int64")
     features["observation.tracking.device_hmd_pose"] = pose7_feature()
     features["observation.tracking.workspace_from_device_pose"] = pose7_feature()

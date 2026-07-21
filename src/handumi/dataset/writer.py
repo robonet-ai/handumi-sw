@@ -79,7 +79,9 @@ def load_info(root: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
-def update_handumi_metadata(root: str | Path, metadata: dict[str, Any]) -> dict[str, Any]:
+def update_handumi_metadata(
+    root: str | Path, metadata: dict[str, Any]
+) -> dict[str, Any]:
     """Merge HandUMI-specific metadata into ``meta/info.json``."""
     path = info_path(root)
     info = load_info(root)
@@ -171,9 +173,9 @@ class EpisodeResult:
 
 def _compute_feature_stats(values: np.ndarray) -> dict[str, Any]:
     """Compute LeRobot-style statistics for a 2-D float array (frames × dim)."""
-    flat = values.reshape(-1) if values.ndim == 1 else values.reshape(len(values), -1)
-    if flat.ndim == 1:
-        flat = flat[:, None]
+    array = np.asarray(values)
+    feature_width = int(np.prod(array.shape[1:])) if array.ndim > 1 else 1
+    flat = array.reshape(len(array), feature_width)
 
     finite = np.isfinite(flat)
     count = finite.sum(axis=0).astype(int).tolist()
@@ -187,11 +189,25 @@ def _compute_feature_stats(values: np.ndarray) -> dict[str, Any]:
     max_vals = [finite_stat(column, np.max) for column in columns]
     mean_vals = [finite_stat(column, np.mean) for column in columns]
     std_vals = [finite_stat(column, np.std) for column in columns]
-    q01 = [finite_stat(column, lambda value: np.percentile(value, 1)) for column in columns]
-    q10 = [finite_stat(column, lambda value: np.percentile(value, 10)) for column in columns]
-    q50 = [finite_stat(column, lambda value: np.percentile(value, 50)) for column in columns]
-    q90 = [finite_stat(column, lambda value: np.percentile(value, 90)) for column in columns]
-    q99 = [finite_stat(column, lambda value: np.percentile(value, 99)) for column in columns]
+    q01 = [
+        finite_stat(column, lambda value: np.percentile(value, 1)) for column in columns
+    ]
+    q10 = [
+        finite_stat(column, lambda value: np.percentile(value, 10))
+        for column in columns
+    ]
+    q50 = [
+        finite_stat(column, lambda value: np.percentile(value, 50))
+        for column in columns
+    ]
+    q90 = [
+        finite_stat(column, lambda value: np.percentile(value, 90))
+        for column in columns
+    ]
+    q99 = [
+        finite_stat(column, lambda value: np.percentile(value, 99))
+        for column in columns
+    ]
 
     return {
         "min": min_vals,
@@ -440,11 +456,13 @@ def _load_source_video_refs(
 ) -> dict[int, dict[str, dict[str, float | int]]]:
     """Load per-episode video file/range references from LeRobot metadata."""
     refs: dict[int, dict[str, dict[str, float | int]]] = {}
-    episode_files = sorted((source_root / "meta" / "episodes").glob("chunk-*/*.parquet"))
+    episode_files = sorted(
+        (source_root / "meta" / "episodes").glob("chunk-*/*.parquet")
+    )
     for path in episode_files:
         frame = pd.read_parquet(path)
         for _, row in frame.iterrows():
-            episode_index = int(row["episode_index"])
+            episode_index = int(np.asarray(row.at["episode_index"]).item())
             episode_refs = refs.setdefault(episode_index, {})
             for key in video_keys:
                 prefix = f"videos/{key}"
@@ -457,10 +475,10 @@ def _load_source_video_refs(
                 if not all(column in frame.columns for column in required):
                     continue
                 episode_refs[key] = {
-                    "chunk_index": int(row[required[0]]),
-                    "file_index": int(row[required[1]]),
-                    "from_timestamp": float(row[required[2]]),
-                    "to_timestamp": float(row[required[3]]),
+                    "chunk_index": int(np.asarray(row.at[required[0]]).item()),
+                    "file_index": int(np.asarray(row.at[required[1]]).item()),
+                    "from_timestamp": float(np.asarray(row.at[required[2]]).item()),
+                    "to_timestamp": float(np.asarray(row.at[required[3]]).item()),
                 }
     return refs
 
@@ -658,7 +676,9 @@ def write_dataset(
                     if empty_body_observation is None:
                         from handumi.body.model import CanonicalBodyFrame
 
-                        empty_body_observation = CanonicalBodyFrame.empty().observation()
+                        empty_body_observation = (
+                            CanonicalBodyFrame.empty().observation()
+                        )
                     if key in empty_body_observation:
                         ep.optional_observations[key] = np.repeat(
                             empty_body_observation[key][None, ...], T, axis=0
@@ -851,9 +871,7 @@ def write_dataset(
         )
         session_manifest_reference: str | None = None
         if source_session_manifests.exists():
-            destination = (
-                output_root / "raw" / "tracking" / "session_manifests.jsonl"
-            )
+            destination = output_root / "raw" / "tracking" / "session_manifests.jsonl"
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_session_manifests, destination)
             session_manifest_reference = destination.relative_to(output_root).as_posix()
@@ -865,9 +883,7 @@ def write_dataset(
             }
             if session_manifest_reference is not None:
                 manifest["session_manifests"] = session_manifest_reference
-            sidecar_manifest.write_text(
-                json.dumps(manifest, indent=2) + "\n"
-            )
+            sidecar_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
 
     print(
         f"Dataset written to {output_root}\n"

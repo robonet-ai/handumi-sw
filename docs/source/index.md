@@ -34,7 +34,9 @@ setup
 teleoperation
 record
 workflows/replay_in_sim
-workflows/datasets
+   workflows/datasets
+   workflows/dataset_compatibility
+   workflows/capture_reliability
 workflows/body_tracking
 workflows/visualization
 ```
@@ -61,6 +63,7 @@ troubleshooting
 :maxdepth: 1
 :caption: Development
 
-development/new_embodiment
+   development/new_embodiment
+   development/test001_protocol_template
 development/release_checklist
 ```

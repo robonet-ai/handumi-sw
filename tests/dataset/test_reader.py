@@ -26,9 +26,7 @@ def _states(frame_count: int = 2) -> np.ndarray:
 
 def test_pose7_composition_rotates_local_translation():
     half_turn = np.sqrt(0.5)
-    workspace_from_device = np.array(
-        [1.0, 0.0, 0.0, 0.0, 0.0, half_turn, half_turn]
-    )
+    workspace_from_device = np.array([1.0, 0.0, 0.0, 0.0, 0.0, half_turn, half_turn])
     device_from_hmd = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
     composed = _compose_pose7(workspace_from_device, device_from_hmd)
@@ -89,9 +87,7 @@ def test_compact_signals_restore_metadata_and_derived_timing():
     normalized = normalize_raw_signals(_states(), signals, metadata=metadata)
 
     np.testing.assert_array_equal(normalized["observation.valid"], validity)
-    np.testing.assert_allclose(
-        normalized["observation.tracking.hmd_pose"], identity
-    )
+    np.testing.assert_allclose(normalized["observation.tracking.hmd_pose"], identity)
     assert "observation.tracking.streaming" not in normalized
     assert "observation.tracking.left_controller_pose" not in normalized
     np.testing.assert_array_equal(normalized["observation.feetech.enabled"], [0, 0])

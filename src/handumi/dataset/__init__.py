@@ -1,6 +1,24 @@
 """LeRobot dataset read/write boundary for handumi."""
 
-from typing import Any
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from handumi.dataset.tracking_sidecar import (
+        SIDECAR_SCHEMA,
+        TrackingSidecarWriter,
+        discover_tracking_sidecars,
+        load_tracking_sidecar,
+    )
+    from handumi.dataset.writer import (
+        CHUNKS_SIZE,
+        EpisodeResult,
+        chunk_and_file,
+        info_path,
+        load_info,
+        update_handumi_metadata,
+        write_dataset,
+    )
 
 from handumi.dataset.reader import (
     DatasetDownloadResult,
@@ -48,17 +66,7 @@ def __getattr__(name: str) -> Any:
         "write_dataset",
     }
     if name in writer_symbols:
-        from handumi.dataset.writer import (
-            CHUNKS_SIZE,
-            EpisodeResult,
-            chunk_and_file,
-            info_path,
-            load_info,
-            update_handumi_metadata,
-            write_dataset,
-        )
-
-        return locals()[name]
+        return getattr(import_module("handumi.dataset.writer"), name)
     sidecar_symbols = {
         "SIDECAR_SCHEMA",
         "TrackingSidecarWriter",
@@ -66,14 +74,7 @@ def __getattr__(name: str) -> Any:
         "load_tracking_sidecar",
     }
     if name in sidecar_symbols:
-        from handumi.dataset.tracking_sidecar import (
-            SIDECAR_SCHEMA,
-            TrackingSidecarWriter,
-            discover_tracking_sidecars,
-            load_tracking_sidecar,
-        )
-
-        return locals()[name]
+        return getattr(import_module("handumi.dataset.tracking_sidecar"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

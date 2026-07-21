@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 from handumi.dataset.raw import (
-    HANDUMI_CAPTURE_SCHEMA,
-    HANDUMI_STATE_SEMANTICS,
-    HANDUMI_TRACKING_SCHEMA,
     TRACKING_VALIDITY_NAMES,
 )
 from handumi.dataset.writer import info_path, load_info
@@ -80,10 +78,14 @@ class RawEpisode:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
+def handumi_metadata(
+    info_or_root: Mapping[str, object] | str | Path,
+) -> dict[str, Any]:
     """Return HandUMI-specific metadata from an ``info.json`` dict or dataset root."""
     info = (
-        load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+        load_info(info_or_root)
+        if not isinstance(info_or_root, Mapping)
+        else info_or_root
     )
     meta = info.get("handumi", {})
     return dict(meta) if isinstance(meta, dict) else {}
@@ -96,26 +98,14 @@ def recording_device(info_or_root: dict[str, Any] | str | Path) -> str | None:
 
 
 def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> None:
-    """Require the single current HandUMI layout stored in LeRobot v3."""
-    meta = handumi_metadata(info_or_root)
-    semantics = str(meta.get("state_semantics", ""))
-    tracking_schema = str(meta.get("tracking_schema", ""))
-    capture_schema = str(meta.get("capture_schema", ""))
-    expected = {
-        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
-        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
-        "state_semantics": HANDUMI_STATE_SEMANTICS,
-    }
-    actual = {
-        "tracking_schema": tracking_schema,
-        "capture_schema": capture_schema,
-        "state_semantics": semantics,
-    }
-    if actual != expected:
-        raise ValueError(
-            "Unsupported HandUMI raw layout. Re-record with the current "
-            f"handumi-record. Expected {expected}, got {actual}."
-        )
+    """Require the current layout and reject ambiguous historic recordings."""
+    from handumi.dataset.compatibility import validate_dataset_compatibility
+
+    info = (
+        load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+    )
+    root = Path(info_or_root) if isinstance(info_or_root, (str, Path)) else None
+    validate_dataset_compatibility(info, root=root)
 
 
 def load_raw_episode_states(
@@ -197,7 +187,9 @@ def load_raw_episode(
             if array.dtype == object:
                 array = np.stack(
                     [
-                        np.asarray(value.tolist() if hasattr(value, "tolist") else value)
+                        np.asarray(
+                            value.tolist() if hasattr(value, "tolist") else value
+                        )
                         for value in values
                     ]
                 )
@@ -346,15 +338,9 @@ def _restore_enabled_signals(
         )
 
 
-def _derive_source_timing(
-    signals: dict[str, np.ndarray], frame_count: int
-) -> None:
-    target = _frame_signal(
-        signals.get("observation.sync.target_time_ns"), frame_count
-    )
-    record = _frame_signal(
-        signals.get("observation.sync.record_time_ns"), frame_count
-    )
+def _derive_source_timing(signals: dict[str, np.ndarray], frame_count: int) -> None:
+    target = _frame_signal(signals.get("observation.sync.target_time_ns"), frame_count)
+    record = _frame_signal(signals.get("observation.sync.record_time_ns"), frame_count)
     if target is None or record is None:
         return
 
@@ -367,9 +353,7 @@ def _derive_source_timing(
     )
     if aligned is not None:
         sources["observation.tracking"] = (
-            aligned
-            if received is None
-            else np.where(aligned > 0, aligned, received)
+            aligned if received is None else np.where(aligned > 0, aligned, received)
         )
 
     for key, value in tuple(signals.items()):
@@ -382,16 +366,16 @@ def _derive_source_timing(
     missing_value_ms = np.iinfo(np.int64).max / 1e6
     for prefix, sample in sources.items():
         missing = sample <= 0
-        age_ms = np.where(missing, missing_value_ms, np.maximum(0, record - sample) / 1e6)
+        age_ms = np.where(
+            missing, missing_value_ms, np.maximum(0, record - sample) / 1e6
+        )
         sync_error_ms = np.where(
             missing,
             missing_value_ms,
             np.abs(sample - target) / 1e6,
         )
         signals.setdefault(f"{prefix}.age_ms", age_ms.astype(np.float32))
-        signals.setdefault(
-            f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32)
-        )
+        signals.setdefault(f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32))
 
 
 def _frame_signal(value: Any, frame_count: int) -> np.ndarray | None:
@@ -410,8 +394,7 @@ def _compose_pose7(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     qb = _normalize_quaternion(b[3:7])
     vector = qa[:3]
     rotated = b[:3] + 2.0 * (
-        qa[3] * np.cross(vector, b[:3])
-        + np.cross(vector, np.cross(vector, b[:3]))
+        qa[3] * np.cross(vector, b[:3]) + np.cross(vector, np.cross(vector, b[:3]))
     )
     ax, ay, az, aw = qa
     bx, by, bz, bw = qb

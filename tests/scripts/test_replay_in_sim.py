@@ -22,10 +22,9 @@ def test_recorded_normalized_grippers_take_precedence():
     states[:, 14:16] = 0.08
     recorded = np.array([[0.2, 0.7], [0.3, 0.8]], dtype=np.float32)
 
-    openings, source = _resolve_gripper_openings(
-        states, recorded, max_width_m=0.08
-    )
+    openings, source = _resolve_gripper_openings(states, recorded, max_width_m=0.08)
 
+    assert openings is not None
     np.testing.assert_allclose(openings, recorded)
     assert source == "recorded Feetech normalized"
 
@@ -34,10 +33,9 @@ def test_grippers_fall_back_to_widths_in_meters():
     states = np.zeros((2, 16), dtype=np.float32)
     states[:, 14:16] = [[0.0, 0.033], [0.066, 0.099]]
 
-    openings, source = _resolve_gripper_openings(
-        states, None, max_width_m=0.066
-    )
+    openings, source = _resolve_gripper_openings(states, None, max_width_m=0.066)
 
+    assert openings is not None
     np.testing.assert_allclose(openings, [[0.0, 0.5], [1.0, 1.0]], atol=1e-6)
     assert source == "state widths in meters"
 
@@ -54,6 +52,7 @@ def test_physical_width_gripper_retarget_overrides_recorded_percentage():
         mode="physical-width",
     )
 
+    assert openings is not None
     np.testing.assert_allclose(openings, [[0.25, 0.5], [1.0, 1.0]], atol=1e-6)
     assert source == "state widths in meters"
 
@@ -75,7 +74,11 @@ def test_explicit_controller_device_overrides_metadata():
 def test_controller_device_cannot_contradict_identity_bound_snapshot():
     args = Namespace(controller_device="pico")
     info = _metadata_calibration_info()
-    info["handumi"]["controller_tcp_calibration"].update(
+    handumi = info["handumi"]
+    assert isinstance(handumi, dict)
+    snapshot = handumi["controller_tcp_calibration"]
+    assert isinstance(snapshot, dict)
+    snapshot.update(
         {
             "schema_version": 2,
             "source_robot": "piper",
@@ -241,7 +244,10 @@ calibration:
 
 def test_identity_bound_dataset_snapshot_precedes_current_robot_setup():
     info = _metadata_calibration_info()
-    snapshot = info["handumi"]["controller_tcp_calibration"]
+    handumi = info["handumi"]
+    assert isinstance(handumi, dict)
+    snapshot = handumi["controller_tcp_calibration"]
+    assert isinstance(snapshot, dict)
     snapshot.update(
         {
             "schema_version": 2,

@@ -98,7 +98,9 @@ def test_frame_epoch_tracker_marks_reconnect_and_calibration_change():
     tracker.observe_connection_count(1)
     assert tracker.consume_change() is None
     tracker.observe_connection_count(2)
-    assert tracker.consume_change().reason == "tracking_transport_reconnected"
+    reconnect = tracker.consume_change()
+    assert reconnect is not None
+    assert reconnect.reason == "tracking_transport_reconnected"
     tracker.set_calibration("first", reason="initial")
     tracker.set_calibration("second", reason="recalibrated")
     event = tracker.consume_change()
@@ -112,6 +114,7 @@ def test_interrupted_jsonl_is_recovered_without_dropping_packets(tmp_path):
     writer = TrackingSidecarWriter(tmp_path)
     writer.start_episode(3)
     writer.append_packets([packet])
+    assert writer._journal is not None
     writer._journal.flush()
     writer._journal.write('{"truncated":')
     writer._journal.flush()
@@ -349,7 +352,7 @@ def test_lerobot_round_trip_accepts_nan_body_arrays_and_masks(tmp_path):
         features=features,
         use_videos=False,
     )
-    frame = {
+    frame: dict[str, object] = {
         key: np.zeros(tuple(feature["shape"]), dtype=np.dtype(feature["dtype"]))
         for key, feature in features.items()
     }
@@ -360,9 +363,10 @@ def test_lerobot_round_trip_accepts_nan_body_arrays_and_masks(tmp_path):
     provenance_values = [int(value) for value in CanonicalProvenance]
     body.provenance[:] = np.resize(provenance_values, 25)
     frame.update(body.observation())
-    frame["observation.state"][3:7] = [0, 0, 0, 1]
-    frame["observation.state"][10:14] = [0, 0, 0, 1]
-    frame["action"] = frame["observation.state"].copy()
+    state = np.asarray(frame["observation.state"])
+    state[3:7] = [0, 0, 0, 1]
+    state[10:14] = [0, 0, 0, 1]
+    frame["action"] = state.copy()
     frame["task"] = "schema round trip"
     dataset.add_frame(frame)
     dataset.save_episode()
