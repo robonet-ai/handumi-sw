@@ -12,7 +12,10 @@ from handumi.dataset.quality import (
     validate_episode,
     write_quality_report,
 )
-from handumi.dataset.reader import dataset_root_from_repo_id
+from handumi.dataset.selection import resolve_dataset_selection
+
+
+DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -20,7 +23,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run offline tracking, synchronization, and sensor-health checks.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--repo-id", default="NONHUMAN-RESEARCH/handumi-dataset-v2")
+    parser.add_argument(
+        "dataset",
+        nargs="?",
+        help="Local dataset path or Hugging Face repo id.",
+    )
+    parser.add_argument("--repo-id", default=None, help="Legacy Hub dataset flag.")
     parser.add_argument("--root", type=Path, default=None)
     parser.add_argument("--revision", default="main")
     parser.add_argument("--source", default="observation.state")
@@ -40,15 +48,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--fail-on-reject",
+        "--strict",
+        dest="fail_on_reject",
         action="store_true",
         help="Exit with status 2 when any episode is rejected.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and print the validation plan without loading episodes.",
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    root = args.root or dataset_root_from_repo_id(args.repo_id)
+    try:
+        selection = resolve_dataset_selection(
+            args.dataset,
+            repo_id=args.repo_id,
+            root=args.root,
+            revision=args.revision,
+            default_repo_id=DEFAULT_REPO_ID,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    args.repo_id = selection.repo_id
+    root = selection.root
+    print(
+        "Validation plan\n"
+        f"  Dataset: {root}\n"
+        f"  Repository: {args.repo_id}\n"
+        f"  Episodes: {args.episodes or 'all'}\n"
+        f"  Strict: {'yes' if args.fail_on_reject else 'no'}"
+    )
+    if args.dry_run:
+        return
     info = ensure_metadata(
         repo_id=args.repo_id,
         root=root,

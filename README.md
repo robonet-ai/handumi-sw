@@ -25,10 +25,16 @@ git clone https://github.com/robonet-ai/handumi-sw.git
 cd handumi-sw
 bash install.sh
 source .venv/bin/activate
-handumi-record --help
+cp configs/rig.example.yaml configs/rig.yaml
+handumi doctor
+handumi record outputs/my-first-dataset --dry-run
 ```
 
 PICO support is installed by default. Use `bash install.sh --skip-xrt` for a Meta Quest-only workstation.
+Edit `configs/rig.yaml` once with the local cameras, tracking device and robot
+profile. `handumi setup --check` prints the same read-only readiness checklist
+as `handumi doctor`; `handumi setup` runs the guided hardware setup. Existing
+flat commands such as `handumi-record` remain supported.
 
 ## Install from GitHub
 

@@ -18,12 +18,12 @@ Usage
     # Axol embodiment (output defaults to NONHUMAN-RESEARCH/handumi-dataset-v2-axol)
     handumi-convert \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --embodiment axol
+        --robot axol
 
     # Piper embodiment, custom output repo-id, push to hub afterwards
     handumi-convert \
         --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --embodiment piper \
+        --robot piper \
         --output-repo-id NONHUMAN-RESEARCH/my-piper-dataset \
         --push-to-hub
 """
@@ -95,9 +95,14 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     ds = parser.add_argument_group("Dataset I/O")
     ds.add_argument(
+        "dataset",
+        nargs="?",
+        help="Local source dataset path or Hugging Face repo id.",
+    )
+    ds.add_argument(
         "--repo-id",
-        default="NONHUMAN-RESEARCH/handumi-dataset-v2",
-        help="HuggingFace repo-id of the source HandUMI dataset.",
+        default=None,
+        help="Legacy Hugging Face source dataset flag.",
     )
     ds.add_argument(
         "--root",
@@ -177,18 +182,23 @@ def build_parser() -> argparse.ArgumentParser:
     emb = parser.add_argument_group("Embodiment")
     embodiment_selection = emb.add_mutually_exclusive_group()
     embodiment_selection.add_argument(
-        "--embodiment",
+        "--robot",
+        dest="embodiment",
         choices=EMBODIMENT_NAMES,
         default=None,
-        help="Target robot embodiment (default: axol).",
+        help="Target robot; loads its validated retargeting profile.",
+    )
+    embodiment_selection.add_argument(
+        "--embodiment",
+        dest="embodiment",
+        choices=EMBODIMENT_NAMES,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     embodiment_selection.add_argument(
         "--piper",
         action="store_true",
-        help=(
-            "Validated BiPiper profile: use the piper embodiment and the exact "
-            "absolute-table IK pipeline used by handumi-replay-in-sim."
-        ),
+        help=argparse.SUPPRESS,
     )
 
     # ------------------------------------------------------------------
@@ -232,7 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Retargeting mode shared with replay_in_sim.py. Defaults to "
-            "absolute-table for --piper and local-relative otherwise."
+            "absolute-table for --robot piper and local-relative otherwise."
         ),
     )
     ik.add_argument(
@@ -293,6 +303,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reject an episode when replay IK fidelity thresholds are exceeded.",
     )
 
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and print the conversion plan without loading episodes.",
+    )
+
     return parser
 
 
@@ -315,10 +331,12 @@ def _resolve_cli_profile(
     args: argparse.Namespace,
 ) -> None:
     """Resolve robot-specific conversion defaults before loading any data."""
+    requested_robot = args.embodiment or "axol"
+    args.piper = bool(args.piper or requested_robot == "piper")
+    args.embodiment = "piper" if args.piper else requested_robot
     if args.piper:
-        args.embodiment = "piper"
         if args.retarget_mode not in (None, "absolute-table"):
-            parser.error("--piper requires --retarget-mode absolute-table.")
+            parser.error("--robot piper requires --retarget-mode absolute-table.")
         args.retarget_mode = "absolute-table"
     else:
         args.embodiment = args.embodiment or "axol"
@@ -1018,19 +1036,41 @@ def main() -> None:
     if args.column is not None:
         args.source = args.column
 
+    from handumi.dataset.selection import resolve_dataset_selection
+
+    try:
+        selection = resolve_dataset_selection(
+            args.dataset,
+            repo_id=args.repo_id,
+            root=args.root,
+            revision=args.revision,
+            default_repo_id="NONHUMAN-RESEARCH/handumi-dataset-v2",
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.repo_id = selection.repo_id
+    args.root = selection.root
+
     # ------------------------------------------------------------------
     # Resolve paths and names
     # ------------------------------------------------------------------
     source_repo_id = args.repo_id
-    source_root = Path(args.root) if args.root else dataset_root_from_repo_id(source_repo_id)
+    source_root = selection.root
     output_repo_id = args.output_repo_id or _default_output_repo_id(
         source_repo_id, args.embodiment
     )
     output_root = dataset_root_from_repo_id(output_repo_id)
 
-    print(f"Source  : {source_root}  ({source_repo_id})")
-    print(f"Output  : {output_root}  ({output_repo_id})")
-    print(f"Embodiment: {args.embodiment}")
+    print(
+        "Conversion plan\n"
+        f"  Source: {source_root} ({source_repo_id})\n"
+        f"  Output: {output_root} ({output_repo_id})\n"
+        f"  Robot profile: {args.embodiment}\n"
+        f"  Retargeting: {args.retarget_mode}\n"
+        f"  Episodes: {args.episodes or 'all'}"
+    )
+    if args.dry_run:
+        return
 
     # ------------------------------------------------------------------
     # Ensure source metadata is available, then read episode count

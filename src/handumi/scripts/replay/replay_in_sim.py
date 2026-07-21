@@ -34,6 +34,7 @@ from handumi.dataset.raw import (
     RIGHT_GRIPPER_INDEX,
     RIGHT_POSE_SLICE,
 )
+from handumi.dataset.selection import resolve_dataset_selection
 from handumi.retargeting.handumi_to_robot import (
     VR_TO_ROBOT,
     absolute_table_robot_target_pose7,
@@ -72,7 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Replay a raw HandUMI LeRobot episode through bimanual IK."
     )
-    parser.add_argument("--repo-id", default=DEFAULT_REPO_ID)
+    parser.add_argument(
+        "dataset",
+        nargs="?",
+        help="Local dataset path or Hugging Face repo id.",
+    )
+    parser.add_argument("--repo-id", default=None, help="Legacy Hub dataset flag.")
     parser.add_argument(
         "--dataset-root",
         default=None,
@@ -246,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("-o", "--output", type=Path, default=None)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve and print the replay plan without loading the dataset.",
+    )
     return parser
 
 
@@ -1294,7 +1305,30 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    try:
+        selection = resolve_dataset_selection(
+            args.dataset,
+            repo_id=args.repo_id,
+            root=args.dataset_root,
+            revision=args.revision,
+            default_repo_id=DEFAULT_REPO_ID,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    args.repo_id = selection.repo_id
+    args.dataset_root = selection.root
+    print(
+        "Replay plan\n"
+        f"  Dataset: {selection.root}\n"
+        f"  Repository: {selection.repo_id}\n"
+        f"  Episode: {args.episode}\n"
+        f"  Robot profile: {args.robot}\n"
+        f"  Retargeting: {args.retarget_mode}"
+    )
+    if args.dry_run:
+        return
     if args.stride < 1:
         raise ValueError("--stride must be >= 1.")
     if args.initial_solve_iterations < 1:

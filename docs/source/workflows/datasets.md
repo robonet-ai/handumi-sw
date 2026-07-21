@@ -9,8 +9,8 @@ For local recordings, pass only the local root; `--repo-id` is unnecessary and
 no dataset is downloaded:
 
 ```bash
-JAX_PLATFORMS=cpu handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu handumi replay \
+  outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0
 ```
@@ -70,10 +70,8 @@ replay command.
 ## 2. Run Automated Validation
 
 ```bash
-handumi-validate \
-  --repo-id your-name/handumi-demo \
-  --root outputs/datasets/handumi-demo \
-  --fail-on-reject
+handumi validate \
+  outputs/datasets/handumi-demo --strict
 ```
 
 The report is written to `meta/handumi_quality.json`. Review rejected episodes
@@ -105,15 +103,14 @@ capture can be checked against another supported robot.
 ## 4. Convert and Check Target Motion
 
 Conversion creates a target-specific dataset while preserving the raw source.
-For Piper, use the validated `--piper` profile. It runs the same
+For Piper, use the validated `--robot piper` profile. It runs the same
 `absolute-table` solver as replay, validates `configs/calibration/piper_table.yaml`
 for the selected robot, and converts the replay result to physical Piper commands:
 
 ```bash
-JAX_PLATFORMS=cpu handumi-convert \
-  --repo-id your-name/handumi-demo \
-  --root outputs/datasets/handumi-demo \
-  --piper \
+JAX_PLATFORMS=cpu handumi convert \
+  outputs/datasets/handumi-demo \
+  --robot piper \
   --output-repo-id your-name/handumi-demo-piper
 ```
 
@@ -121,7 +118,7 @@ The Piper state has 14 physical commands: six replay arm joints in radians
 plus one gripper opening in meters per side. Its pairs are
 `observation.state[t] = command[t]` and `action[t] = command[t+1]`. The two
 mirrored URDF finger joints are reconstructed from the single opening only when
-rendering simulation. Other embodiments continue to use `--embodiment <name>`;
+rendering simulation. Other embodiments use the same `--robot <name>` interface;
 absolute-table support requires their corresponding
 `configs/calibration/<name>_table.yaml` file.
 
