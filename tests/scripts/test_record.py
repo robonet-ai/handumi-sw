@@ -635,6 +635,31 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):
+    def test_subsecond_episode_is_not_rejected_as_rate_evidence(self):
+        dataset = _FakeDataset()
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=0.002,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+        )
+
+        self.assertGreater(n_frames, 0)
+        self.assertEqual(status, "recorded")
+
     def test_frame_epoch_change_discards_before_writing_a_row(self):
         dataset = _FakeDataset()
 

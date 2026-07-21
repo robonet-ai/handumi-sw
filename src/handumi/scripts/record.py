@@ -1001,6 +1001,7 @@ def record_episode(
     if (
         status == "recorded"
         and timed
+        and episode_time_s >= 1.0
         and measured_duration_s >= episode_time_s * 0.95
         and n_frames < int(measured_duration_s * fps * 0.98)
     ):
