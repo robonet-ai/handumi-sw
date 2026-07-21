@@ -89,6 +89,8 @@ def run_soak(
             worker.close()
     elapsed = time.monotonic() - started
     resource_end = process_resource_snapshot()
+    for resource_name, end_value in resource_end.items():
+        resource_peak[resource_name] = max(resource_peak[resource_name], end_value)
     achieved_hz = rows / elapsed
     minimum_rows = math.floor(duration_s * dataset_hz * 0.98)
     maintained = rows >= minimum_rows
