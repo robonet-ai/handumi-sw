@@ -85,8 +85,8 @@ from handumi.tracking.gestures import DoubleClapDetector
 from handumi.teleop.core import TeleopController
 from handumi.tracking.transforms import Pose
 from handumi.utils.speech import log_say
-from handumi.utils.trajectory import TrajectoryTrail
-from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
+from handumi.visualization import LEFT_COLOR, RIGHT_COLOR
+from handumi.visualization.controller_trajectory import initialize_rerun
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,8 +95,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("handumi.teleop_sim")
 
-_TRAIL_SECONDS = 10.0
-_CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
 SIDE_CHOICES = ("left", "right", "both")
 
 
@@ -436,128 +434,22 @@ def _validate_unique_camera_ids(
     )
 
 
-def _init_rerun(enabled: bool, cam_names: list[str]):
+def _init_rerun(enabled: bool, cam_names: list[str], *, fps: int = 30):
     """Start Rerun with the classic live layout: 3D tracking on the left,
     cameras top-right, gripper-width chart bottom-right."""
     if not enabled:
         return None
-    import rerun as rr
-    import rerun.blueprint as rrb
-    import rerun.datatypes as rdt
-
-    rr.init("handumi_teleop_sim", spawn=True)
-    rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
-    for path, name, color in (
-        ("observation.feetech.left_width_mm", "left_width_mm", LEFT_COLOR),
-        ("observation.feetech.right_width_mm", "right_width_mm", RIGHT_COLOR),
-    ):
-        rr.log(
-            path,
-            rr.SeriesLines(colors=[[*color, 255]], widths=[2.5], names=[name]),
-            static=True,
-        )
-    # Faint corner markers spanning the working volume: the 3D view auto-fits
-    # to data bounds, so these fix the initial framing/zoom (wide horizontally,
-    # short vertically) instead of hugging the first few points.
-    half_xy, half_z = 0.75, 0.4
-    corners = [
-        [sx * half_xy, sy * half_xy, sz * half_z]
-        for sx in (-1, 1)
-        for sy in (-1, 1)
-        for sz in (-1, 1)
-    ]
-    rr.log(
-        "tracking/bounds",
-        rr.Points3D(corners, colors=[[128, 100, 100, 90]] * len(corners), radii=0.004),
-        static=True,
-    )
-
-    recent = rrb.VisibleTimeRanges(
-        rrb.VisibleTimeRange(
-            timeline="log_time",
-            range=rdt.TimeRange(
-                start=rdt.TimeRangeBoundary.cursor_relative(seconds=-_CHART_WINDOW_S),
-                end=rdt.TimeRangeBoundary.cursor_relative(seconds=0.0),
-            ),
-        )
-    )
-    width_chart = rrb.TimeSeriesView(
-        origin="/",
-        contents=[
-            "/observation.feetech.left_width_mm",
-            "/observation.feetech.right_width_mm",
-        ],
-        name="gripper_width_mm",
-        axis_y=rrb.ScalarAxis(range=(0.0, 90.0)),
-        time_ranges=recent,
-        plot_legend=rrb.Corner2D.LeftTop,
-    )
-    if cam_names:
-        right_column = rrb.Vertical(
-            rrb.Horizontal(
-                *[
-                    rrb.Spatial2DView(origin=f"/observation.images.{name}", name=name)
-                    for name in cam_names
-                ]
-            ),
-            width_chart,
-            row_shares=[3, 2],
-        )
-    else:
-        right_column = width_chart
-    blueprint = rrb.Blueprint(
-        rrb.Horizontal(
-            rrb.Spatial3DView(
-                origin="/tracking",
-                name="controller_trajectory",
-                background=rrb.Background(color=[*BACKGROUND_COLOR, 255]),
-            ),
-            right_column,
-            column_shares=[2, 3],
+    return initialize_rerun(
+        "handumi_teleop_sim",
+        cam_names,
+        fps=fps,
+        spawn=True,
+        recorder_status=False,
+        include_quality=False,
+        on_error=lambda exc: log.error(
+            "Rerun failed; disabling live view while teleoperation continues: %s", exc
         ),
-        rrb.BlueprintPanel(state="collapsed"),
-        rrb.SelectionPanel(state="collapsed"),
-        rrb.TimePanel(state="collapsed"),
     )
-    rr.send_blueprint(blueprint, make_active=True, make_default=True)
-    return rr
-
-
-def _log_rerun(
-    rr,
-    side: str,
-    tcp_pose7: np.ndarray,
-    raw_pose7: np.ndarray,
-    trail: TrajectoryTrail,
-    raw_trail: TrajectoryTrail,
-    color,
-) -> None:
-    """Two trails per side: solid = calibrated TCP, faint = raw controller
-    anchor (no mount offset) — they must differ only by a rigid offset."""
-    trail.append(tcp_pose7[:3])
-    rr.log(
-        f"tracking/{side}/tcp",
-        rr.Points3D([tcp_pose7[:3]], colors=[color], radii=0.012),
-    )
-    points = trail.points()
-    if len(points) >= 2:
-        rr.log(
-            f"tracking/{side}/trail",
-            rr.LineStrips3D([points], colors=[color], radii=0.003),
-        )
-
-    faint = [*color, 90]
-    raw_trail.append(raw_pose7[:3])
-    rr.log(
-        f"tracking/{side}/raw",
-        rr.Points3D([raw_pose7[:3]], colors=[faint], radii=0.007),
-    )
-    raw_points = raw_trail.points()
-    if len(raw_points) >= 2:
-        rr.log(
-            f"tracking/{side}/raw_trail",
-            rr.LineStrips3D([raw_points], colors=[faint], radii=0.0015),
-        )
 
 
 def main() -> None:
@@ -702,13 +594,7 @@ def main() -> None:
     else:
         log.info("Viser disabled; streaming live cameras and tracking only to Rerun.")
 
-    rr = _init_rerun(not args.no_rerun, cam_names)
-    max_points = max(2, int(_TRAIL_SECONDS * args.fps))
-    trails = {"left": TrajectoryTrail(max_points), "right": TrajectoryTrail(max_points)}
-    raw_trails = {
-        "left": TrajectoryTrail(max_points),
-        "right": TrajectoryTrail(max_points),
-    }
+    rr = _init_rerun(not args.no_rerun, cam_names, fps=args.fps)
 
     play_sounds = not args.no_sounds
     # Robot pose each side's anchor maps to. With --anchor-z the ritual is
@@ -763,20 +649,10 @@ def main() -> None:
                 if grippers is None
                 else grippers.read_normalized_widths()
             )
-            if rr is not None:
-                if cameras:
-                    cam_frames = read_camera_frames(
-                        cameras, cam_names, width=args.cam_width, height=args.cam_height
-                    )
-                    for key, frame in cam_frames.items():
-                        rr.log(key, rr.Image(frame).compress(jpeg_quality=75))
-                rr.log(
-                    "observation.feetech.left_width_mm",
-                    rr.Scalars(float(widths.left_mm)),
-                )
-                rr.log(
-                    "observation.feetech.right_width_mm",
-                    rr.Scalars(float(widths.right_mm)),
+            cam_frames = {}
+            if rr is not None and cameras:
+                cam_frames = read_camera_frames(
+                    cameras, cam_names, width=args.cam_width, height=args.cam_height
                 )
 
             state = _sample_state(sample, widths)
@@ -879,24 +755,7 @@ def main() -> None:
                     robot_view.update_cfg(q)
 
             if rr is not None:
-                for side, tcp, raw, color in (
-                    (
-                        "left",
-                        sample.left_tcp_pose,
-                        sample.left_controller_pose,
-                        LEFT_COLOR,
-                    ),
-                    (
-                        "right",
-                        sample.right_tcp_pose,
-                        sample.right_controller_pose,
-                        RIGHT_COLOR,
-                    ),
-                ):
-                    if side_tracked[side]:
-                        _log_rerun(
-                            rr, side, tcp, raw, trails[side], raw_trails[side], color
-                        )
+                rr.log_frame(cam_frames, sample, widths)
 
             dt = time.perf_counter() - loop_start
             if (sleep := interval - dt) > 0:

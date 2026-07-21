@@ -26,6 +26,25 @@ import yaml
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 
 RIG_CONFIG_PATH = DEFAULT_RIG_CONFIG
+_ENCODER_RESOLUTION = 4096
+_HALF_TURN = _ENCODER_RESOLUTION // 2
+_MAX_CALIBRATION_OVERRUN_FRACTION = 0.15
+
+
+class GripperCalibrationRangeError(ValueError):
+    """A live encoder position is incompatible with cached endpoints."""
+
+
+def _nearest_encoder_delta(value: int, reference: int) -> int:
+    """Return the signed modulo-4096 delta nearest ``reference``.
+
+    Feetech ``Present_Position`` wraps at 4096. Calibration endpoints are raw
+    encoder values, so a physically short motion across 4095/0 must not be
+    mistaken for motion through most of a revolution.
+    """
+    return int(
+        (int(value) - int(reference) + _HALF_TURN) % _ENCODER_RESOLUTION - _HALF_TURN
+    )
 
 
 def user_calibration_path() -> Path:
@@ -55,10 +74,22 @@ class GripperCalibration:
     def normalized_width(self, ticks: int) -> float:
         if self.closed_ticks is None or self.open_ticks is None:
             raise ValueError(f"Servo {self.servo_id} is not calibrated.")
-        span = self.open_ticks - self.closed_ticks
+        span = _nearest_encoder_delta(self.open_ticks, self.closed_ticks)
         if span == 0:
             raise ValueError(f"Servo {self.servo_id} has identical open/closed ticks.")
-        return float(min(1.0, max(0.0, (ticks - self.closed_ticks) / span)))
+        delta = _nearest_encoder_delta(ticks, self.closed_ticks)
+        ratio = delta / span
+        if (
+            ratio < -_MAX_CALIBRATION_OVERRUN_FRACTION
+            or ratio > 1.0 + _MAX_CALIBRATION_OVERRUN_FRACTION
+        ):
+            raise GripperCalibrationRangeError(
+                f"Servo {self.servo_id} position {ticks} is outside cached "
+                f"calibration {self.closed_ticks}->{self.open_ticks} "
+                f"({ratio:.2f} normalized before clipping). Re-home only if "
+                "needed, then run handumi-calibrate-grippers calibrate for this side."
+            )
+        return float(min(1.0, max(0.0, ratio)))
 
     def width_mm(self, ticks: int) -> float:
         if self.max_width_mm is None:
@@ -94,7 +125,9 @@ def assert_calibrated(config: FeetechConfig, *, source: Path | None = None) -> N
     Call this at startup (before the record/monitor loop) so an uncalibrated rig
     is reported clearly instead of crashing mid-run inside width computation.
     """
-    missing = [side for side in ("left", "right") if not getattr(config, side).is_complete]
+    missing = [
+        side for side in ("left", "right") if not getattr(config, side).is_complete
+    ]
     if not missing:
         return
     where = f" in {source}" if source else ""
@@ -179,7 +212,9 @@ def save_calibration(config: FeetechConfig, path: Path | None = None) -> Path:
     return path
 
 
-def _port_only_calibration(data: dict[str, Any], *, default_servo_id: int) -> GripperCalibration:
+def _port_only_calibration(
+    data: dict[str, Any], *, default_servo_id: int
+) -> GripperCalibration:
     return GripperCalibration(
         servo_id=int(data.get("servo_id", default_servo_id)),
         port=_optional_str(data.get("port")),
@@ -206,3 +241,17 @@ def _read_max_width_mm(data: dict[str, Any]) -> float | None:
         return _optional_float(data.get("max_width_mm"))
     max_width_m = _optional_float(data.get("max_width_m"))
     return None if max_width_m is None else max_width_m * 1000.0
+
+
+__all__ = [
+    "FeetechConfig",
+    "GripperCalibration",
+    "GripperCalibrationRangeError",
+    "assert_calibrated",
+    "default_config",
+    "load_calibration_values",
+    "load_config",
+    "load_ports",
+    "save_calibration",
+    "user_calibration_path",
+]

@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Scan complete Git history for secrets
+        run: |
+          mkdir -p /tmp/handumi-gitleaks dist
+          curl --proto '=https' --tlsv1.2 -fsSLo \
+            /tmp/handumi-gitleaks/gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          printf '%s  %s\n' \
+            551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb \
+            /tmp/handumi-gitleaks/gitleaks.tar.gz | sha256sum --check
+          tar -xzf /tmp/handumi-gitleaks/gitleaks.tar.gz \
+            -C /tmp/handumi-gitleaks gitleaks
+          /tmp/handumi-gitleaks/gitleaks git --redact \
+            --report-format json --report-path dist/gitleaks.json \
+            --log-opts=--all
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Verify lock file
+        run: uv lock --check
+
+      - name: Install locked development environment
+        run: uv sync --locked --dev
+
+      - name: Check Python compilation and patch whitespace
+        run: |
+          uv run --locked python -m compileall -q src tests
+          git diff --check
+
+      - name: Check maintained Python formatting, lint, and types
+        run: |
+          uv run --locked ruff format --check src tests bin
+          uv run --locked ruff check src tests bin
+          uv run --locked basedpyright src tests bin
+
+      - name: Run software tests
+        run: uv run --locked pytest -q
+
+      - name: Verify source dependency and robot asset inventories
+        run: uv run --locked python bin/verify_release_inventory.py
+
+      - name: Run critical recording and body suites
+        run: |
+          uv run --locked pytest -q \
+            tests/body tests/dataset/test_tracking_sidecar.py \
+            tests/scripts/test_record.py tests/teleop/test_recording_viewer.py
+
+      - name: Build strict documentation
+        run: |
+          uv run --locked --with-requirements docs/requirements.txt \
+            sphinx-build -W --keep-going -b html \
+            docs/source /tmp/handumi-docs
+
+      - name: Export headless Rerun fixtures
+        run: |
+          uv run --locked python \
+            bin/generate_ux001_golden.py /tmp/handumi-body.rrd
+          uv run --locked python bin/generate_ux001_golden.py \
+            /tmp/handumi-controller-only.rrd --controller-only
+
+      - name: Build source and wheel distributions
+        run: uv build
+
+      - name: Verify bounded wheel metadata and resources
+        run: uv run --locked python bin/verify_release_wheel.py dist/*.whl
+
+      - name: Smoke test isolated installed wheel
+        run: |
+          uv venv --clear /tmp/handumi-wheel-smoke
+          uv pip install --python /tmp/handumi-wheel-smoke/bin/python dist/*.whl
+          uv pip check --python /tmp/handumi-wheel-smoke/bin/python
+          for cli in \
+            handumi-record handumi-view-trajectory handumi-teleop-sim \
+            handumi-teleop-real handumi-pico-camera handumi-convert \
+            handumi-validate handumi-setup-ports handumi-setup-hardware \
+            handumi-set-servo-id handumi-home-servos \
+            handumi-calibrate-grippers handumi-calibrate-openarm-grippers \
+            handumi-print-controller-pose handumi-calibrate-tcp-offset \
+            handumi-calibrate-spatial handumi-replay-in-sim \
+            handumi-quest-probe handumi-preflight handumi-soak; do
+            "/tmp/handumi-wheel-smoke/bin/$cli" --help >/dev/null
+          done
+
+      - name: Generate dependency, license, vulnerability, and SBOM evidence
+        run: |
+          /tmp/handumi-wheel-smoke/bin/python \
+            bin/generate_dependency_report.py \
+            --output dist/dependency-licenses.json
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --path /tmp/handumi-wheel-smoke/lib/python3.12/site-packages \
+            --progress-spinner off --format json \
+            --output dist/pip-audit.json
+          uvx --from pip-audit==2.10.1 pip-audit \
+            --path /tmp/handumi-wheel-smoke/lib/python3.12/site-packages \
+            --progress-spinner off --format cyclonedx-json \
+            --output dist/handumi-wheel.cdx.json
+
+      - name: Generate artifact checksums
+        run: sha256sum dist/* | tee dist/SHA256SUMS
+
+      - name: Upload unsigned candidate artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: handumi-unsigned-candidate-${{ github.sha }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/dependency-licenses.json
+            dist/pip-audit.json
+            dist/handumi-wheel.cdx.json
+            dist/gitleaks.json
+            release/asset-manifest.json
+            release/dependency-source-inventory.json
+          if-no-files-found: error

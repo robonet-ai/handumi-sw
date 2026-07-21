@@ -42,11 +42,13 @@ class SerialPortDiagnosticsTest(unittest.TestCase):
         ]
         buf = io.StringIO()
         with (
-            mock.patch.object(setup_ports.glob, "glob", return_value=[]),
+            mock.patch.object(setup_ports.glob_module, "glob", return_value=[]),
             mock.patch.object(
                 setup_ports, "_detect_usb_serial_adapters", return_value=adapters
             ),
-            mock.patch.object(setup_ports, "_kernel_module_available", return_value=False),
+            mock.patch.object(
+                setup_ports, "_kernel_module_available", return_value=False
+            ),
             mock.patch.object(
                 setup_ports,
                 "_kernel_module_tree_hint",
@@ -68,10 +70,12 @@ class SerialPortDiagnosticsTest(unittest.TestCase):
         fake_stat = SimpleNamespace(st_gid=986)
         fake_group = SimpleNamespace(gr_name="uucp")
         with (
-            mock.patch.object(setup_ports.os, "access", return_value=False),
-            mock.patch.object(setup_ports.os, "stat", return_value=fake_stat),
-            mock.patch.object(setup_ports.os, "getgroups", return_value=[]),
-            mock.patch.object(setup_ports.grp, "getgrgid", return_value=fake_group),
+            mock.patch.object(setup_ports.os_module, "access", return_value=False),
+            mock.patch.object(setup_ports.os_module, "stat", return_value=fake_stat),
+            mock.patch.object(setup_ports.os_module, "getgroups", return_value=[]),
+            mock.patch.object(
+                setup_ports.group_module, "getgrgid", return_value=fake_group
+            ),
         ):
             hint = setup_ports._serial_port_permission_hint("/dev/ttyUSB0")
 

@@ -48,12 +48,14 @@ from __future__ import annotations
 import json
 import math
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +79,9 @@ def load_info(root: str | Path) -> dict[str, Any]:
         return json.load(fh)
 
 
-def update_handumi_metadata(root: str | Path, metadata: dict[str, Any]) -> dict[str, Any]:
+def update_handumi_metadata(
+    root: str | Path, metadata: dict[str, Any]
+) -> dict[str, Any]:
     """Merge HandUMI-specific metadata into ``meta/info.json``."""
     path = info_path(root)
     info = load_info(root)
@@ -155,6 +159,7 @@ class EpisodeResult:
     actions: np.ndarray
     task: str
     source_episode_index: int = -1
+    optional_observations: dict[str, np.ndarray] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.source_episode_index < 0:
@@ -168,20 +173,41 @@ class EpisodeResult:
 
 def _compute_feature_stats(values: np.ndarray) -> dict[str, Any]:
     """Compute LeRobot-style statistics for a 2-D float array (frames × dim)."""
-    flat = values.reshape(-1) if values.ndim == 1 else values.reshape(len(values), -1)
-    if flat.ndim == 1:
-        flat = flat[:, None]
+    array = np.asarray(values)
+    feature_width = int(np.prod(array.shape[1:])) if array.ndim > 1 else 1
+    flat = array.reshape(len(array), feature_width)
 
-    min_vals = flat.min(axis=0).tolist()
-    max_vals = flat.max(axis=0).tolist()
-    mean_vals = flat.mean(axis=0).tolist()
-    std_vals = flat.std(axis=0).tolist()
-    count = [int(len(flat))] * int(flat.shape[-1])
-    q01 = np.percentile(flat, 1, axis=0).tolist()
-    q10 = np.percentile(flat, 10, axis=0).tolist()
-    q50 = np.percentile(flat, 50, axis=0).tolist()
-    q90 = np.percentile(flat, 90, axis=0).tolist()
-    q99 = np.percentile(flat, 99, axis=0).tolist()
+    finite = np.isfinite(flat)
+    count = finite.sum(axis=0).astype(int).tolist()
+
+    def finite_stat(column: np.ndarray, operation) -> float:
+        values = column[np.isfinite(column)]
+        return float("nan") if len(values) == 0 else float(operation(values))
+
+    columns = [flat[:, index] for index in range(flat.shape[1])]
+    min_vals = [finite_stat(column, np.min) for column in columns]
+    max_vals = [finite_stat(column, np.max) for column in columns]
+    mean_vals = [finite_stat(column, np.mean) for column in columns]
+    std_vals = [finite_stat(column, np.std) for column in columns]
+    q01 = [
+        finite_stat(column, lambda value: np.percentile(value, 1)) for column in columns
+    ]
+    q10 = [
+        finite_stat(column, lambda value: np.percentile(value, 10))
+        for column in columns
+    ]
+    q50 = [
+        finite_stat(column, lambda value: np.percentile(value, 50))
+        for column in columns
+    ]
+    q90 = [
+        finite_stat(column, lambda value: np.percentile(value, 90))
+        for column in columns
+    ]
+    q99 = [
+        finite_stat(column, lambda value: np.percentile(value, 99))
+        for column in columns
+    ]
 
     return {
         "min": min_vals,
@@ -231,6 +257,14 @@ def _video_default_stats(shape: list[int]) -> dict[str, Any]:
     }
 
 
+def _fixed_shape_arrow_type(dtype: np.dtype, shape: tuple[int, ...]) -> pa.DataType:
+    """Return a typed Arrow scalar/fixed-list tree for one feature row."""
+    arrow_type: pa.DataType = pa.from_numpy_dtype(dtype)
+    for size in reversed(shape):
+        arrow_type = pa.list_(arrow_type, int(size))
+    return arrow_type
+
+
 def _build_info_json(
     *,
     robot_type: str,
@@ -241,6 +275,7 @@ def _build_info_json(
     joint_names: list[str],
     video_features: dict[str, Any],
     handumi_metadata: dict[str, Any] | None = None,
+    optional_features: dict[str, Any] | None = None,
     chunks_size: int = CHUNKS_SIZE,
 ) -> dict[str, Any]:
     """Build the ``info.json`` dict for a new LeRobot dataset."""
@@ -257,6 +292,7 @@ def _build_info_json(
         "observation.state": state_action_feature,
     }
     features.update(video_features)
+    features.update(optional_features or {})
     features["timestamp"] = {"dtype": "float32", "shape": [1], "names": None}
     features["frame_index"] = {"dtype": "int64", "shape": [1], "names": None}
     features["episode_index"] = {"dtype": "int64", "shape": [1], "names": None}
@@ -293,6 +329,7 @@ def _build_stats_json(
     all_global_indices: np.ndarray,
     all_task_indices: np.ndarray,
     video_features: dict[str, Any],
+    optional_values: dict[str, np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """Compute global statistics across all episodes."""
 
@@ -315,6 +352,9 @@ def _build_stats_json(
 
     for video_key, feat in video_features.items():
         stats[video_key] = _video_default_stats(feat["shape"])
+
+    for key, values in (optional_values or {}).items():
+        stats[key] = _compute_feature_stats(values)
 
     return stats
 
@@ -380,6 +420,11 @@ def _episode_parquet_row(
         for stat_name, val in ep_stats.items():
             row[f"stats/{col_prefix}/{stat_name}"] = val
 
+    for key, data in ep.optional_observations.items():
+        ep_stats = _compute_feature_stats(np.asarray(data))
+        for stat_name, value in ep_stats.items():
+            row[f"stats/{key}/{stat_name}"] = value
+
     ts_arr = np.arange(episode_length, dtype=np.float32) / fps
     fi_arr = np.arange(episode_length, dtype=np.int64)
     ei_arr = np.full(episode_length, ep.episode_index, dtype=np.int64)
@@ -411,11 +456,13 @@ def _load_source_video_refs(
 ) -> dict[int, dict[str, dict[str, float | int]]]:
     """Load per-episode video file/range references from LeRobot metadata."""
     refs: dict[int, dict[str, dict[str, float | int]]] = {}
-    episode_files = sorted((source_root / "meta" / "episodes").glob("chunk-*/*.parquet"))
+    episode_files = sorted(
+        (source_root / "meta" / "episodes").glob("chunk-*/*.parquet")
+    )
     for path in episode_files:
         frame = pd.read_parquet(path)
         for _, row in frame.iterrows():
-            episode_index = int(row["episode_index"])
+            episode_index = int(np.asarray(row.at["episode_index"]).item())
             episode_refs = refs.setdefault(episode_index, {})
             for key in video_keys:
                 prefix = f"videos/{key}"
@@ -428,10 +475,10 @@ def _load_source_video_refs(
                 if not all(column in frame.columns for column in required):
                     continue
                 episode_refs[key] = {
-                    "chunk_index": int(row[required[0]]),
-                    "file_index": int(row[required[1]]),
-                    "from_timestamp": float(row[required[2]]),
-                    "to_timestamp": float(row[required[3]]),
+                    "chunk_index": int(np.asarray(row.at[required[0]]).item()),
+                    "file_index": int(np.asarray(row.at[required[1]]).item()),
+                    "from_timestamp": float(np.asarray(row.at[required[2]]).item()),
+                    "to_timestamp": float(np.asarray(row.at[required[3]]).item()),
                 }
     return refs
 
@@ -509,6 +556,7 @@ def write_dataset(
     joint_names: list[str],
     fps: int,
     handumi_metadata: dict[str, Any] | None = None,
+    preserve_tracking_sidecars: bool = False,
     chunks_size: int = CHUNKS_SIZE,
 ) -> None:
     """Write a complete LeRobot v3.0 dataset to ``output_root``.
@@ -552,6 +600,13 @@ def write_dataset(
         source_info=source_info,
         explicit=handumi_metadata,
     )
+    if preserve_tracking_sidecars:
+        output_handumi_metadata = dict(output_handumi_metadata or {})
+        output_handumi_metadata["tracking_sidecar"] = {
+            "schema": "handumi_tracking_sidecar_v1",
+            "manifest": "raw/tracking/manifest.json",
+            "derived_references": True,
+        }
     source_video_refs = _load_source_video_refs(source_root, video_keys)
 
     # ------------------------------------------------------------------
@@ -564,6 +619,27 @@ def write_dataset(
     all_episode_indices_list: list[np.ndarray] = []
     all_global_indices_list: list[np.ndarray] = []
     all_task_indices_list: list[np.ndarray] = []
+    all_optional_values: dict[str, list[np.ndarray]] = {}
+
+    optional_keys = sorted(
+        {key for episode in episodes for key in episode.optional_observations}
+    )
+    source_features = source_info.get("features", {})
+    optional_features: dict[str, Any] = {}
+    for key in optional_keys:
+        if key in source_features:
+            optional_features[key] = source_features[key]
+            continue
+        sample = next(
+            np.asarray(episode.optional_observations[key])
+            for episode in episodes
+            if key in episode.optional_observations
+        )
+        optional_features[key] = {
+            "dtype": str(sample.dtype),
+            "shape": list(sample.shape[1:]),
+            "names": None,
+        }
 
     # Build task index map
     task_to_idx: dict[str, int] = {}
@@ -593,6 +669,35 @@ def write_dataset(
         task_idx_val = task_to_idx[ep.task]
         task_indices = np.full(T, task_idx_val, dtype=np.int64)
 
+        empty_body_observation: dict[str, np.ndarray] | None = None
+        for key in optional_keys:
+            if key not in ep.optional_observations:
+                if key.startswith("observation.body."):
+                    if empty_body_observation is None:
+                        from handumi.body.model import CanonicalBodyFrame
+
+                        empty_body_observation = (
+                            CanonicalBodyFrame.empty().observation()
+                        )
+                    if key in empty_body_observation:
+                        ep.optional_observations[key] = np.repeat(
+                            empty_body_observation[key][None, ...], T, axis=0
+                        )
+                if key not in ep.optional_observations:
+                    feature = optional_features[key]
+                    shape = tuple(feature.get("shape", ()))
+                    dtype = np.dtype(feature["dtype"])
+                    fill = np.nan if np.issubdtype(dtype, np.floating) else 0
+                    ep.optional_observations[key] = np.full(
+                        (T, *shape), fill, dtype=dtype
+                    )
+            values = np.asarray(ep.optional_observations[key])
+            if len(values) != T:
+                raise ValueError(
+                    f"Episode {ep.episode_index} feature {key!r} has {len(values)} "
+                    f"rows; expected {T}."
+                )
+
         rows = {
             "observation.state": list(ep.states),
             "action": list(ep.actions),
@@ -602,8 +707,20 @@ def write_dataset(
             "index": global_indices,
             "task_index": task_indices,
         }
-        df = pd.DataFrame(rows)
-        df.to_parquet(data_dir / f"file-{file_idx:03d}.parquet", index=False)
+        rows.update(
+            {
+                key: np.asarray(ep.optional_observations[key]).tolist()
+                for key in optional_keys
+            }
+        )
+        table = pa.Table.from_pandas(pd.DataFrame(rows), preserve_index=False)
+        for key in optional_keys:
+            values = np.asarray(ep.optional_observations[key])
+            arrow_type = _fixed_shape_arrow_type(values.dtype, values.shape[1:])
+            column = pa.array(values.tolist(), type=arrow_type)
+            column_index = table.schema.get_field_index(key)
+            table = table.set_column(column_index, pa.field(key, arrow_type), column)
+        pq.write_table(table, data_dir / f"file-{file_idx:03d}.parquet")
 
         # Accumulate for global stats
         all_states_list.append(ep.states)
@@ -613,6 +730,10 @@ def write_dataset(
         all_episode_indices_list.append(episode_indices)
         all_global_indices_list.append(global_indices)
         all_task_indices_list.append(task_indices)
+        for key in optional_keys:
+            all_optional_values.setdefault(key, []).append(
+                np.asarray(ep.optional_observations[key])
+            )
 
         episode_rows.append(
             _episode_parquet_row(
@@ -672,6 +793,7 @@ def write_dataset(
         joint_names=joint_names,
         video_features=video_features,
         handumi_metadata=output_handumi_metadata,
+        optional_features=optional_features,
         chunks_size=chunks_size,
     )
     with open(meta_dir / "info.json", "w") as fh:
@@ -698,6 +820,10 @@ def write_dataset(
             all_global_indices=all_global_indices,
             all_task_indices=all_task_indices,
             video_features=video_features,
+            optional_values={
+                key: np.concatenate(values, axis=0)
+                for key, values in all_optional_values.items()
+            },
         )
         with open(meta_dir / "stats.json", "w") as fh:
             json.dump(stats, fh, indent=4)
@@ -713,6 +839,51 @@ def write_dataset(
         source_video_refs=source_video_refs,
         chunks_size=chunks_size,
     )
+
+    if preserve_tracking_sidecars:
+        from handumi.dataset.tracking_sidecar import discover_tracking_sidecars
+
+        sidecar_records = []
+        for episode in episodes:
+            for source_path in discover_tracking_sidecars(
+                source_root, episode_index=episode.source_episode_index
+            ):
+                destination = (
+                    output_root
+                    / "raw"
+                    / "tracking"
+                    / "source"
+                    / f"episode-{episode.episode_index:06d}"
+                    / source_path.name
+                )
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, destination)
+                sidecar_records.append(
+                    {
+                        "path": destination.relative_to(output_root).as_posix(),
+                        "episode_index": episode.episode_index,
+                        "source_episode_index": episode.source_episode_index,
+                        "status": "derived_reference",
+                    }
+                )
+        source_session_manifests = (
+            source_root / "raw" / "tracking" / "session_manifests.jsonl"
+        )
+        session_manifest_reference: str | None = None
+        if source_session_manifests.exists():
+            destination = output_root / "raw" / "tracking" / "session_manifests.jsonl"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_session_manifests, destination)
+            session_manifest_reference = destination.relative_to(output_root).as_posix()
+        if sidecar_records:
+            sidecar_manifest = output_root / "raw" / "tracking" / "manifest.json"
+            manifest = {
+                "schema": "handumi_tracking_sidecar_v1",
+                "files": sidecar_records,
+            }
+            if session_manifest_reference is not None:
+                manifest["session_manifests"] = session_manifest_reference
+            sidecar_manifest.write_text(json.dumps(manifest, indent=2) + "\n")
 
     print(
         f"Dataset written to {output_root}\n"

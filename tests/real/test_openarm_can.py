@@ -1,6 +1,8 @@
 import tempfile
 import time
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 from unittest import mock
 
 import numpy as np
@@ -87,7 +89,7 @@ def test_sdk_side_initializes_gripper_for_posforce_position_commands():
         enable_fd=True,
         kp=(1.0,) * 7,
         kd=(1.0,) * 7,
-        sdk=FakeSdk,
+        sdk=cast(ModuleType, FakeSdk),
     )
 
     assert side.arm.gripper_init == ("DM4310", 0x08, 0x18, "POS_FORCE")
@@ -101,7 +103,7 @@ def test_sdk_side_maps_normalized_opening_to_v1_negative_sixty_degree_range():
         kd=(1.0,) * 7,
         gripper_closed_position_rad=0.0,
         gripper_open_position_rad=-np.pi / 3.0,
-        sdk=FakeSdk,
+        sdk=cast(ModuleType, FakeSdk),
     )
     side.arm.get_arm().mit_control_all = mock.Mock()
 

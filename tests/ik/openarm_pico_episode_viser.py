@@ -201,9 +201,7 @@ def solve_episode(
     target_right = np.asarray(targets["right"], dtype=np.float32)
     achieved_left = np.asarray(achieved["left"], dtype=np.float32)
     achieved_right = np.asarray(achieved["right"], dtype=np.float32)
-    errors = pose_error_arrays(
-        target_left, target_right, achieved_left, achieved_right
-    )
+    errors = pose_error_arrays(target_left, target_right, achieved_left, achieved_right)
     all_position = np.concatenate(
         [errors["left_pos_error_m"], errors["right_pos_error_m"]]
     )
@@ -257,7 +255,10 @@ def show_viewer(
     for key, color in colors.items():
         server.scene.add_spline_catmull_rom(
             f"/trajectory/{key}",
-            positions=rollout[key][:, :3],
+            positions=tuple(
+                (float(row[0]), float(row[1]), float(row[2]))
+                for row in rollout[key][:, :3]
+            ),
             color=color,
             line_width=2.0,
         )

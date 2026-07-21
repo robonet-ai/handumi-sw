@@ -8,11 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pyroki as pk
 import yaml
-import yourdfpy
 
-from handumi.robots.kinematics import BimanualKinematicsSolver, KinematicsConfig
+from handumi.robots.types import KinematicsConfig
 
 if TYPE_CHECKING:
     from handumi.sim.viser_sim import ViserSim
@@ -127,7 +125,7 @@ class RobotRuntime:
     name: str
     config: RobotConfig
     urdf_path: Path
-    robot: pk.Robot
+    robot: Any
     arms: dict[str, ArmRuntime]
     solver_cls: type
     config_cls: type = KinematicsConfig
@@ -202,7 +200,9 @@ class RobotRuntime:
                 return target_prefix + urdf_joint_name[len(source_prefix) :]
         return urdf_joint_name
 
-    def load_urdf(self, *, load_meshes: bool = False) -> yourdfpy.URDF:
+    def load_urdf(self, *, load_meshes: bool = False) -> Any:
+        import yourdfpy
+
         return yourdfpy.URDF.load(
             str(self.urdf_path),
             filename_handler=yourdfpy_handler(self.config.pkg_root),
@@ -378,6 +378,17 @@ def load_robot_config(name: str) -> RobotConfig:
 
 
 def load_embodiment(name: str) -> RobotRuntime:
+    try:
+        import pyroki as pk
+        import yourdfpy
+
+        from handumi.robots.kinematics import BimanualKinematicsSolver
+    except ImportError as exc:
+        raise ImportError(
+            "Robot IK is a source-only research integration. From a source "
+            "checkout run `uv sync --group ik-source`; built wheels do not "
+            "declare the unpublished PyRoki/JAXLS Git dependencies."
+        ) from exc
     cfg = load_robot_config(name)
     urdf = yourdfpy.URDF.load(
         str(cfg.urdf),
@@ -420,9 +431,7 @@ def load_embodiment(name: str) -> RobotRuntime:
                 home_q=home_q,
                 config=config or cfg.ik_weights,
                 locked_joint_indices=(
-                    locked_joint_indices
-                    if locked_joint_indices is not None
-                    else ()
+                    locked_joint_indices if locked_joint_indices is not None else ()
                 ),
             )
 
@@ -519,7 +528,7 @@ def _parse_gripper_joints(value: Any) -> tuple[GripperJointConfig, ...]:
 def _resolve_lock_joint_indices(
     name: str,
     joint_names: tuple[str, ...],
-    robot: pk.Robot,
+    robot: Any,
 ) -> tuple[int, ...]:
     if not joint_names:
         return ()
@@ -527,15 +536,12 @@ def _resolve_lock_joint_indices(
     missing = [joint for joint in joint_names if joint not in actuated_names]
     if missing:
         raise ValueError(
-            f"{name}: manipulation.lock_joints not in URDF actuated joints: "
-            f"{missing}"
+            f"{name}: manipulation.lock_joints not in URDF actuated joints: {missing}"
         )
     return tuple(actuated_names.index(joint) for joint in joint_names)
 
 
-def _resolve_arms(
-    name: str, cfg: RobotConfig, robot: pk.Robot
-) -> dict[str, ArmRuntime]:
+def _resolve_arms(name: str, cfg: RobotConfig, robot: Any) -> dict[str, ArmRuntime]:
     actuated_names = list(robot.joints.actuated_names)
     link_names = list(robot.links.names)
     arms: dict[str, ArmRuntime] = {}
@@ -572,8 +578,8 @@ def _resolve_arms(
 
 
 def _resolve_finger_joints(
-    urdf: yourdfpy.URDF,
-    robot: pk.Robot,
+    urdf: Any,
+    robot: Any,
     cfg: RobotConfig,
     arms: dict[str, ArmRuntime],
 ) -> dict[str, tuple[GripperJointRuntime, ...]]:
@@ -617,7 +623,7 @@ def _resolve_finger_joints(
     return fingers_by_side
 
 
-def _joint_open_value(urdf: yourdfpy.URDF, joint_name: str) -> float:
+def _joint_open_value(urdf: Any, joint_name: str) -> float:
     joint = urdf.joint_map.get(joint_name)
     if joint is None or joint.limit is None:
         raise ValueError(

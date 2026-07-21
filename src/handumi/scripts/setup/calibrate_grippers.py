@@ -57,7 +57,9 @@ class Monitor:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Monitor and calibrate HandUMI Feetech gripper encoders.")
+    parser = argparse.ArgumentParser(
+        description="Monitor and calibrate HandUMI Feetech gripper encoders."
+    )
     parser.add_argument(
         "--rig-config",
         "--config",
@@ -74,13 +76,17 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    monitor = subparsers.add_parser("monitor", help="Watch encoder ticks for configured grippers.")
+    monitor = subparsers.add_parser(
+        "monitor", help="Watch encoder ticks for configured grippers."
+    )
     monitor.add_argument("--duration-s", type=float, default=20.0)
     monitor.add_argument("--interval-s", type=float, default=0.2)
     monitor.add_argument("--keep-torque", action="store_true")
     monitor.set_defaults(func=cmd_monitor)
 
-    calibrate = subparsers.add_parser("calibrate", help="Record left/right open/closed ticks and max width.")
+    calibrate = subparsers.add_parser(
+        "calibrate", help="Record left/right open/closed ticks and max width."
+    )
     calibrate.add_argument("--side", choices=["left", "right", "both"], default="both")
     calibrate.add_argument("--max-width-mm", type=float, default=None)
     calibrate.add_argument("--left-max-width-mm", type=float, default=None)
@@ -103,7 +109,11 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     buses: list[FeetechBus] = []
     try:
         for port, calibration in ((left_port, config.left), (right_port, config.right)):
-            bus = FeetechBus(port=port, baudrate=config.baudrate, protocol_version=config.protocol_version)
+            bus = FeetechBus(
+                port=port,
+                baudrate=config.baudrate,
+                protocol_version=config.protocol_version,
+            )
             bus.open()
             buses.append(bus)
             if not args.keep_torque:
@@ -168,7 +178,9 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
     print(f"Saved calibration to {saved_path}")
     for side in sides:
         c = results[side]
-        print(f"{side}: closed={c.closed_ticks}, open={c.open_ticks}, max_width_mm={c.max_width_mm}")
+        print(
+            f"{side}: closed={c.closed_ticks}, open={c.open_ticks}, max_width_mm={c.max_width_mm}"
+        )
 
 
 def _calibrate_side(
@@ -182,8 +194,12 @@ def _calibrate_side(
     interval_s: float,
 ) -> tuple[int, int, float]:
     print(f"\nCalibrating {side} gripper: port={port}, servo_id={calibration.servo_id}")
-    width_mm = max_width_mm or _prompt_positive_float(f"{side} max gripper opening in mm")
-    with FeetechBus(port=port, baudrate=baudrate, protocol_version=protocol_version) as bus:
+    width_mm = max_width_mm or _prompt_positive_float(
+        f"{side} max gripper opening in mm"
+    )
+    with FeetechBus(
+        port=port, baudrate=baudrate, protocol_version=protocol_version
+    ) as bus:
         try:
             bus.disable_torque(calibration.servo_id)
         except RuntimeError as exc:
@@ -203,7 +219,9 @@ def _calibrate_side(
     return closed_ticks, open_ticks, width_mm
 
 
-def _capture_live_ticks(bus: FeetechBus, servo_id: int, prompt: str, interval_s: float) -> int:
+def _capture_live_ticks(
+    bus: FeetechBus, servo_id: int, prompt: str, interval_s: float
+) -> int:
     print(f"{prompt}. Press ENTER to capture the current encoder value.")
     initial: int | None = None
     latest: int | None = None
@@ -235,7 +253,9 @@ def _prompt_positive_float(label: str) -> float:
         return parsed
 
 
-def _side_port(config: FeetechConfig, calibration: GripperCalibration, side: str) -> str:
+def _side_port(
+    config: FeetechConfig, calibration: GripperCalibration, side: str
+) -> str:
     port = calibration.port or config.port
     if not port:
         raise SystemExit(f"{side} Feetech port is not configured.")

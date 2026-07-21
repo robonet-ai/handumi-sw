@@ -9,6 +9,7 @@ from handumi.dataset.raw import (
 )
 from handumi.dataset.reader import (
     _compose_pose7,
+    _decode_episode_images,
     normalize_raw_signals,
     validate_raw_state_metadata,
 )
@@ -25,9 +26,7 @@ def _states(frame_count: int = 2) -> np.ndarray:
 
 def test_pose7_composition_rotates_local_translation():
     half_turn = np.sqrt(0.5)
-    workspace_from_device = np.array(
-        [1.0, 0.0, 0.0, 0.0, 0.0, half_turn, half_turn]
-    )
+    workspace_from_device = np.array([1.0, 0.0, 0.0, 0.0, 0.0, half_turn, half_turn])
     device_from_hmd = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
     composed = _compose_pose7(workspace_from_device, device_from_hmd)
@@ -88,9 +87,7 @@ def test_compact_signals_restore_metadata_and_derived_timing():
     normalized = normalize_raw_signals(_states(), signals, metadata=metadata)
 
     np.testing.assert_array_equal(normalized["observation.valid"], validity)
-    np.testing.assert_allclose(
-        normalized["observation.tracking.hmd_pose"], identity
-    )
+    np.testing.assert_allclose(normalized["observation.tracking.hmd_pose"], identity)
     assert "observation.tracking.streaming" not in normalized
     assert "observation.tracking.left_controller_pose" not in normalized
     np.testing.assert_array_equal(normalized["observation.feetech.enabled"], [0, 0])
@@ -120,3 +117,23 @@ def test_rejects_previous_handumi_tracking_layout():
 
     with pytest.raises(ValueError, match="Re-record"):
         validate_raw_state_metadata(info)
+
+
+def test_optional_video_decode_uses_dataset_rows_and_normalizes_chw_float():
+    class _Table:
+        column_names = ["observation.images.left_wrist"]
+
+    class _Dataset:
+        hf_dataset = _Table()
+        features = {"observation.images.left_wrist": {"dtype": "video"}}
+
+        def __getitem__(self, index):
+            image = np.zeros((3, 4, 5), dtype=np.float32)
+            image[1] = index / 2
+            return {"observation.images.left_wrist": image}
+
+    decoded = _decode_episode_images(_Dataset(), 3)
+
+    assert decoded["observation.images.left_wrist"].shape == (3, 4, 5, 3)
+    assert decoded["observation.images.left_wrist"].dtype == np.uint8
+    assert decoded["observation.images.left_wrist"][2, 0, 0, 1] == 255

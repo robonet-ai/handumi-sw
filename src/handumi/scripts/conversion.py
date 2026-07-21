@@ -76,6 +76,7 @@ class ConversionTcpCalibrationSelection:
     metadata: dict[str, Any]
     source: str
 
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -169,6 +170,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-quality-filter",
         action="store_true",
         help="Convert rejected episodes too; intended only for debugging.",
+    )
+    ds.add_argument(
+        "--preserve-body",
+        action="store_true",
+        help=(
+            "Copy optional aligned observation.body fields and native tracking "
+            "sidecars into the derived dataset."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -385,7 +394,7 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
 
     tasks_df = pd.read_parquet(tasks_path)
     task_idx_to_str: dict[int, str] = {
-        int(row["task_index"]): str(task_str)
+        int(np.asarray(row.at["task_index"]).item()): str(task_str)
         for task_str, row in tasks_df.iterrows()
     }
 
@@ -394,13 +403,17 @@ def _load_source_tasks(source_root: Path) -> dict[int, str]:
 
     import glob
 
-    for parquet_path in sorted(glob.glob(str(episodes_dir / "**/*.parquet"), recursive=True)):
+    for parquet_path in sorted(
+        glob.glob(str(episodes_dir / "**/*.parquet"), recursive=True)
+    ):
         ep_df = pd.read_parquet(parquet_path)
         for _, row in ep_df.iterrows():
-            ep_idx = int(row["episode_index"])
+            ep_idx = int(np.asarray(row.at["episode_index"]).item())
             task_list = row.get("tasks", [])
             if task_list and len(task_list) > 0:
-                first_task_idx = task_list[0] if isinstance(task_list[0], (int, np.integer)) else 0
+                first_task_idx = (
+                    task_list[0] if isinstance(task_list[0], (int, np.integer)) else 0
+                )
                 task_map[ep_idx] = task_idx_to_str.get(int(first_task_idx), "task")
     return task_map
 
@@ -426,9 +439,7 @@ def _resolve_conversion_tcp_calibration(
         else ""
     )
     source_robot = str(
-        (snapshot or {}).get("source_robot")
-        or legacy_source_robot
-        or args.embodiment
+        (snapshot or {}).get("source_robot") or legacy_source_robot or args.embodiment
     )
     snapshot_device = str((snapshot or {}).get("tracking_device") or "")
     if (
@@ -839,6 +850,7 @@ def process_episode(
     episode_index: int,
     source_episode_index: int,
     task: str,
+    optional_observations: dict[str, np.ndarray] | None = None,
 ) -> Any:
     """Run IK retargeting on one episode and return an EpisodeResult.
 
@@ -914,9 +926,7 @@ def process_episode(
                         np.max(rollout["right_rot_error_deg"]),
                     )
                 ),
-                "initial_solve_iterations": int(
-                    rollout["initial_solve_iterations"][0]
-                ),
+                "initial_solve_iterations": int(rollout["initial_solve_iterations"][0]),
                 "gripper_source": str(rollout["gripper_source"][0]),
             }
         )
@@ -925,8 +935,8 @@ def process_episode(
             args=args,
             states=states,
         )
-    states = joint_array[:-1]               # t = 0 … T-2
-    actions = joint_array[1:]               # t = 1 … T-1
+    states = joint_array[:-1]  # t = 0 … T-2
+    actions = joint_array[1:]  # t = 1 … T-1
 
     return EpisodeResult(
         episode_index=episode_index,
@@ -934,6 +944,10 @@ def process_episode(
         actions=actions,
         task=task,
         source_episode_index=source_episode_index,
+        optional_observations={
+            key: np.asarray(value)[:-1]
+            for key, value in (optional_observations or {}).items()
+        },
     )
 
 
@@ -1022,7 +1036,9 @@ def main() -> None:
     # Resolve paths and names
     # ------------------------------------------------------------------
     source_repo_id = args.repo_id
-    source_root = Path(args.root) if args.root else dataset_root_from_repo_id(source_repo_id)
+    source_root = (
+        Path(args.root) if args.root else dataset_root_from_repo_id(source_repo_id)
+    )
     output_repo_id = args.output_repo_id or _default_output_repo_id(
         source_repo_id, args.embodiment
     )
@@ -1144,16 +1160,18 @@ def main() -> None:
                 episode_index=len(results),
                 source_episode_index=src_idx,
                 task=task,
+                optional_observations=(
+                    raw_episode.body.signals
+                    if args.preserve_body and raw_episode.body is not None
+                    else None
+                ),
             )
         except Exception as exc:
             print(f"  SKIP: IK failed — {exc}", file=sys.stderr)
             continue
 
         results.append(result)
-        print(
-            f"  Done: {len(result.states)} frames, "
-            f"task={result.task!r}"
-        )
+        print(f"  Done: {len(result.states)} frames, task={result.task!r}")
 
     if not results:
         print("No episodes processed successfully. Exiting.", file=sys.stderr)
@@ -1206,9 +1224,7 @@ def main() -> None:
             "deployment_calibration": _deployment_calibration_metadata(args),
             "absolute_orientation": args.absolute_orientation,
             "initial_solve_iterations": int(args.initial_solve_iterations),
-            "initial_position_tolerance_m": float(
-                args.initial_position_tolerance_m
-            ),
+            "initial_position_tolerance_m": float(args.initial_position_tolerance_m),
             "ik_fidelity": args.ik_reports,
             "controller_device": args.controller_device,
             "raw_controller_debug": bool(args.raw_controller_debug),
@@ -1225,7 +1241,9 @@ def main() -> None:
                 not report.accepted for report in quality_reports
             ),
             "converted_source_episodes": len(results),
+            "body_observations_preserved": bool(args.preserve_body),
         },
+        preserve_tracking_sidecars=bool(args.preserve_body),
     )
     _write_converted_dataset_readme(
         output_root,

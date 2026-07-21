@@ -214,7 +214,9 @@ def ensure_feetech_serial_permissions(
         print_fn("Necesito sudo para agregar tu usuario al grupo del puerto.")
         sudo = runner(["sudo", "-v"], check=False)
         if sudo.returncode != 0:
-            raise SystemExit("No se pudo obtener sudo; no se cambiaron permisos seriales.")
+            raise SystemExit(
+                "No se pudo obtener sudo; no se cambiaron permisos seriales."
+            )
         for group in sorted(missing_groups):
             result = runner(
                 ["sudo", "usermod", "-aG", group, target_user],
@@ -224,7 +226,9 @@ def ensure_feetech_serial_permissions(
             )
             if result.returncode != 0:
                 stderr = (result.stderr or "").strip()
-                raise SystemExit(f"No se pudo agregar {target_user} a {group}.\n{stderr}")
+                raise SystemExit(
+                    f"No se pudo agregar {target_user} a {group}.\n{stderr}"
+                )
         raise SystemExit(
             "Permisos seriales actualizados.\n"
             "Cierra sesion y vuelve a entrar, o reinicia la maquina, y corre de nuevo:\n"
@@ -245,10 +249,7 @@ def _assert_serial_port_access(port: str) -> None:
         return
     hint = _serial_port_permission_hint(port)
     if hint:
-        raise SystemExit(
-            f"No tengo permisos para abrir {port}.\n"
-            + "\n".join(hint)
-        )
+        raise SystemExit(f"No tengo permisos para abrir {port}.\n" + "\n".join(hint))
     raise SystemExit(f"No tengo permisos para abrir {port}.")
 
 
@@ -366,7 +367,9 @@ def run_feetech_wizard(
         used_ports={right.port},
     )
     if left.port == right.port:
-        raise SystemExit(f"Feetech izquierdo y derecho usan el mismo puerto: {left.port}")
+        raise SystemExit(
+            f"Feetech izquierdo y derecho usan el mismo puerto: {left.port}"
+        )
 
     save_feetech_mapping(
         rig_config=rig_config,

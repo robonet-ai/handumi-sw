@@ -83,12 +83,18 @@ class PoseTest(unittest.TestCase):
     def test_inverse_round_trip(self):
         p = _rand_pose(self.rng)
         ident = Pose.identity()
-        self.assertTrue(np.allclose(p.compose(p.inverse()).as_matrix(), ident.as_matrix()))
-        self.assertTrue(np.allclose(p.inverse().compose(p).as_matrix(), ident.as_matrix()))
+        self.assertTrue(
+            np.allclose(p.compose(p.inverse()).as_matrix(), ident.as_matrix())
+        )
+        self.assertTrue(
+            np.allclose(p.inverse().compose(p).as_matrix(), ident.as_matrix())
+        )
 
     def test_matrix_round_trip(self):
         p = _rand_pose(self.rng)
-        self.assertTrue(np.allclose(Pose.from_matrix(p.as_matrix()).as_matrix(), p.as_matrix()))
+        self.assertTrue(
+            np.allclose(Pose.from_matrix(p.as_matrix()).as_matrix(), p.as_matrix())
+        )
 
     def test_matmul_operator(self):
         a, b = _rand_pose(self.rng), _rand_pose(self.rng)
@@ -148,7 +154,9 @@ class WorkspaceTest(unittest.TestCase):
     def test_identity_is_passthrough(self):
         p = _rand_pose(self.rng)
         self.assertTrue(
-            np.allclose(WorkspaceCalibration.identity().apply(p).as_matrix(), p.as_matrix())
+            np.allclose(
+                WorkspaceCalibration.identity().apply(p).as_matrix(), p.as_matrix()
+            )
         )
 
 
@@ -163,7 +171,9 @@ class MountingOffsetsTest(unittest.TestCase):
             {"left": {"position": [0.1, 0.0, 0.0], "quaternion": [0, 0, 0, 1]}}
         )
         self.assertTrue(np.allclose(m.left.position, [0.1, 0.0, 0.0]))
-        self.assertTrue(np.allclose(m.right.as_matrix(), np.eye(4)))  # missing -> identity
+        self.assertTrue(
+            np.allclose(m.right.as_matrix(), np.eye(4))
+        )  # missing -> identity
 
     def test_meta_calibration_file_keeps_mirror_invariant(self):
         # The two HandUMI mounts are physical mirror-image twins across the
@@ -185,7 +195,9 @@ class MountingOffsetsTest(unittest.TestCase):
             float(np.linalg.norm(calibration.left[:3])), 0.25, delta=0.01
         )
         lx, ly, lz, lw = calibration.left[3:7]
-        self.assertAlmostEqual(float(np.linalg.norm(calibration.left[3:7])), 1.0, places=4)
+        self.assertAlmostEqual(
+            float(np.linalg.norm(calibration.left[3:7])), 1.0, places=4
+        )
         self.assertTrue(
             np.allclose(calibration.right[3:7], [-lx, ly, -lz, lw], atol=1e-6)
         )
@@ -199,11 +211,14 @@ class PipelineTest(unittest.TestCase):
         pos = self.rng.standard_normal(3)
         quat = _rand_quat(self.rng)
         out = gripper_pose_in_workspace(
-            pos, quat,
+            pos,
+            quat,
             mounting_offset=Pose.identity(),
             workspace=WorkspaceCalibration.identity(),
         )
-        self.assertTrue(np.allclose(out.as_matrix(), unity_pose_to_handumi(pos, quat).as_matrix()))
+        self.assertTrue(
+            np.allclose(out.as_matrix(), unity_pose_to_handumi(pos, quat).as_matrix())
+        )
 
     def test_full_pipeline_order(self):
         pos = self.rng.standard_normal(3)

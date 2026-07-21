@@ -1,0 +1,46 @@
+name: Hardware validation evidence
+description: Propose redacted evidence for a defined release hardware gate.
+title: "[HIL]: "
+labels: [hardware]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Never use a public issue for participant evidence, private network or
+        device identifiers, raw room imagery, or safety incidents. This form
+        does not authorize hardware operation or publication.
+  - type: input
+    id: gate
+    attributes:
+      label: Gate and source commit
+      placeholder: e.g. FEAT-003.3 at full commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: matrix
+    attributes:
+      label: Redacted hardware/software matrix
+      description: Models and versions without serial numbers or private addresses.
+    validations:
+      required: true
+  - type: textarea
+    id: procedure
+    attributes:
+      label: Approved procedure and exact commands
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result, uncertainty, and failed/skipped checks
+    validations:
+      required: true
+  - type: checkboxes
+    id: attestations
+    attributes:
+      label: Attestations
+      options:
+        - label: The evidence is synthetic/redacted and approved for public posting.
+          required: true
+        - label: Offline or simulator results are not presented as physical validation.
+          required: true

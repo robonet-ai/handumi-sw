@@ -17,10 +17,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import glob
-import grp
+import glob as glob_module
+import grp as group_module
 import io
-import os
+import os as os_module
 import sys
 from pathlib import Path
 import shutil
@@ -39,6 +39,10 @@ _USB_SERIAL_ADAPTERS = {
     ("0403", "6001"): ("FTDI USB Serial", "ftdi_sio"),
     ("067b", "2303"): ("Prolific PL2303", "pl2303"),
 }
+
+# Public module handles are intentional dependency-injection seams for the
+# read-only hardware discovery tests.
+__all__ = ["glob_module", "group_module", "os_module"]
 
 
 def main() -> None:
@@ -108,7 +112,7 @@ def _draw_frame(lines: list[str], previous: list[str] | None) -> None:
 
 def _print_serial_ports(scan_ids: range) -> None:
     print("\nFeetech serial ports")
-    ports = sorted(glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*"))
+    ports = sorted(glob_module.glob("/dev/ttyACM*") + glob_module.glob("/dev/ttyUSB*"))
     if not ports:
         print("  none")
         _print_missing_serial_port_diagnostics()
@@ -247,17 +251,18 @@ def _kernel_module_tree_hint() -> str:
 
 
 def _serial_port_permission_hint(port: str) -> list[str]:
-    if os.access(port, os.R_OK | os.W_OK):
+    if os_module.access(port, os_module.R_OK | os_module.W_OK):
         return []
     try:
-        stat_result = os.stat(port)
-        group_name = grp.getgrgid(stat_result.st_gid).gr_name
+        stat_result = os_module.stat(port)
     except OSError:
         return []
+    try:
+        group_name = group_module.getgrgid(stat_result.st_gid).gr_name
     except KeyError:
         group_name = str(stat_result.st_gid)
 
-    if stat_result.st_gid in os.getgroups():
+    if stat_result.st_gid in os_module.getgroups():
         return [
             "Permission check failed even though your user is in the device group.",
             "Check udev rules or another process holding the port.",
@@ -284,7 +289,7 @@ def _print_camera_ports() -> None:
         print(_format_v4l2_usb_cameras(output) if output else "  none")
     else:
         print("  v4l2-ctl not found; showing /dev/video* only")
-        videos = sorted(glob.glob("/dev/video*"))
+        videos = sorted(glob_module.glob("/dev/video*"))
         print("\n".join(f"  {video}" for video in videos) if videos else "  none")
 
 

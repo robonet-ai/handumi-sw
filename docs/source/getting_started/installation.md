@@ -31,8 +31,8 @@ profiles needed on the workstation:
 bash install.sh --skip-xrt --sim --robot openarmv1
 # Or manage profiles directly after installing system prerequisites:
 uv sync --extra sim
-uv sync --extra piper
-uv sync --extra openarm
+uv sync --group piper-source
+uv sync --group openarm-source
 uv sync --extra cuda --extra sim
 ```
 
@@ -44,7 +44,15 @@ sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:openarm/main
 sudo apt update
 sudo apt install -y libopenarm-can-dev openarm-can-utils
-uv sync --extra openarm
+uv sync --group openarm-source
 ```
 
 Simulation does not require `piper_sdk` or `openarm_can`.
+
+The base wheel deliberately contains no unpublished Git dependencies and does
+not pull PyTorch/CUDA through LeRobot. Full recording and IK are source-release
+integrations: the default source `uv sync` selects the pinned `recording-source`
+and `ik-source` groups, with PyTorch resolved from the configured CPU-only
+index. `piper-source`, `openarm-source`, and `pico-source` are explicit groups.
+This separation keeps a clean wheel install bounded while the unpublished
+PyRoki/JAXLS and manufacturer SDK dependencies remain ineligible for PyPI.

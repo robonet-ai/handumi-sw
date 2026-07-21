@@ -59,3 +59,32 @@ def test_tracking_loss_clears_anchors_and_holds_feedback():
         step.q[runtime.arm_joint_indices("right")],
         held[runtime.arm_joint_indices("right")],
     )
+
+
+def test_step_reports_reach_limiting_without_emitting_an_unbounded_target():
+    runtime = load_embodiment("openarmv1")
+    controller = TeleopController(
+        runtime,
+        home_q=runtime.home_q(),
+        enabled_sides=("right",),
+        source_world_to_robot_world=np.eye(3, dtype=np.float32),
+    )
+    controller.max_reach = 0.10
+    sources = {"left": _pose(0, 0, 0), "right": _pose(0.3, -0.2, 1.0)}
+    controller.anchor(sources, {"left": False, "right": True}, ("right",))
+
+    moved = dict(sources)
+    moved["right"] = _pose(10.0, -0.2, 1.0)
+    step = controller.step(
+        moved,
+        {"left": False, "right": True},
+        {"left": 0.0, "right": 0.0},
+    )
+
+    assert step.reach_limited_sides == ("right",)
+    assert (
+        np.linalg.norm(
+            step.target_pose7["right"][:3] - controller.anchor_ref["right"][:3]
+        )
+        <= controller.max_reach + 1e-6
+    )

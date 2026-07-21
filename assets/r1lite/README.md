@@ -15,3 +15,11 @@ vendor `r1lite_2026.urdf` package layout.
 
 This is currently a kinematic model for simulation and replay. It does not
 register a Galaxea hardware backend.
+
+## Redistribution status
+
+The vendor SDK provenance above does not by itself grant redistribution
+rights, and no license for these URDF/mesh files is bundled in this repository.
+Do not include the R1 Lite assets in a public source or binary release until
+the copyright owner supplies compatible terms and the release NOTICE records
+them. Repository availability is not a substitute for permission.

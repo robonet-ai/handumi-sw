@@ -10,7 +10,7 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO, Iterator, cast
 
 log = logging.getLogger("handumi.pico_vision")
 
@@ -575,7 +575,7 @@ class PicoRemoteVisionBridge:
         stopped = threading.Event()
         try:
             assert process.stdout is not None
-            for unit in iter_annexb_units(process.stdout, stopped):
+            for unit in iter_annexb_units(cast(BinaryIO, process.stdout), stopped):
                 if not self.state.is_current(generation):
                     break
                 stream_socket.sendall(struct.pack(">I", len(unit)) + unit)
@@ -594,8 +594,7 @@ class PicoRemoteVisionBridge:
                 # closed during that hand-off; retain the request so the worker
                 # reconnects without requiring another press of Listen.
                 log.warning(
-                    "PICO video decoder restarted the stream: %s. "
-                    "Retrying in 1 s.",
+                    "PICO video decoder restarted the stream: %s. Retrying in 1 s.",
                     exc,
                 )
                 self.state.shutdown.wait(1.0)

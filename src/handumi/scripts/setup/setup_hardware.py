@@ -19,7 +19,10 @@ from handumi.calibration.control_tcp import calibration_path_for_robot_device
 from handumi.real.backends import REAL_BACKEND_NAMES
 from handumi.real.backends.setup import RobotSetupOptions, run_robot_setup
 from handumi.real.can_setup import ensure_rig_config
-from handumi.scripts.setup import calibrate_grippers, home_servos
+from handumi.scripts.setup import (
+    calibrate_grippers as calibrate_grippers,
+    home_servos as home_servos,
+)
 from handumi.tracking.pico import prepare_pico_adb_session
 
 
@@ -149,7 +152,9 @@ def main() -> None:
         )
 
     print("\nSetup listo. Prueba:")
-    command = f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}"
+    command = (
+        f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}"
+    )
     if args.controller_tcp_calibration is not None:
         command += f" --controller-tcp-calibration {calibration_path}"
     print(command)

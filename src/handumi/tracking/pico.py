@@ -7,8 +7,11 @@ import logging
 import socket
 import subprocess
 import time
+from importlib import import_module
 
 import numpy as np
+
+from handumi.body.model import PICO_BODY_24_SOURCE_NAMES
 
 from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.robots.utils import IDENTITY_POSE7, pose_mul
@@ -16,6 +19,22 @@ from handumi.tracking.base import (
     ControllerPairSample,
     apply_tcp_calibration_pose7,
     as_pose7,
+)
+from handumi.tracking.packet import (
+    TRACKING_PACKET_SCHEMA,
+    TRACKING_PACKET_VERSION,
+    BodyChannel,
+    ControllerChannel,
+    ExternalTrackerChannel,
+    HandChannel,
+    JointSample,
+    JointTrackingState,
+    PoseChannel,
+    SourceProvenance,
+    TimestampQuality,
+    TrackingPacket,
+    TrackingPacketStream,
+    TrackingTimestamps,
 )
 
 log = logging.getLogger("handumi.record")
@@ -200,7 +219,7 @@ def launch_xrt_service() -> None:
 def init_xrt():
     """Import and initialise xrobotoolkit_sdk. Returns the module."""
     try:
-        import xrobotoolkit_sdk as xrt
+        xrt = import_module("xrobotoolkit_sdk")
     except ImportError as exc:
         raise SystemExit(
             f"ERROR: could not import xrobotoolkit_sdk: {exc}\n"
@@ -256,7 +275,9 @@ def safe_array(value, shape: tuple[int, ...], dtype=np.float32) -> np.ndarray:
         return np.zeros(shape, dtype=dtype)
     if arr.shape != shape:
         out = np.zeros(shape, dtype=dtype)
-        slices = tuple(slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=False))
+        slices = tuple(
+            slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=False)
+        )
         try:
             out[slices] = arr[slices]
         except Exception:  # noqa: BLE001
@@ -323,10 +344,7 @@ def wait_for_button_release(
     threshold: float,
     stop_event,
 ) -> None:
-    while (
-        read_start_button_value(xrt, button) >= threshold
-        and not stop_event.is_set()
-    ):
+    while read_start_button_value(xrt, button) >= threshold and not stop_event.is_set():
         time.sleep(0.02)
 
 
@@ -479,8 +497,12 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
         )
     else:
         frame["observation.pico.body_joints_pose"] = np.zeros((24, 7), dtype=np.float32)
-        frame["observation.pico.body_joints_velocity"] = np.zeros((24, 6), dtype=np.float32)
-        frame["observation.pico.body_joints_accel"] = np.zeros((24, 6), dtype=np.float32)
+        frame["observation.pico.body_joints_velocity"] = np.zeros(
+            (24, 6), dtype=np.float32
+        )
+        frame["observation.pico.body_joints_accel"] = np.zeros(
+            (24, 6), dtype=np.float32
+        )
 
     lh = (
         np.array(xrt.get_left_hand_tracking_state(), dtype=np.float32)
@@ -496,7 +518,9 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     frame["observation.pico.right_hand_pose"] = rh
 
     tracker_pose, tracker_vel, tracker_accel, tracker_count, tracker_serial_hashes = (
-        read_motion_trackers(xrt) if mode == "object" else (
+        read_motion_trackers(xrt)
+        if mode == "object"
+        else (
             np.zeros((MAX_MOTION_TRACKERS, 7), dtype=np.float32),
             np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
             np.zeros((MAX_MOTION_TRACKERS, 6), dtype=np.float32),
@@ -511,6 +535,201 @@ def read_pico_frame(xrt, *, mode: str) -> dict:
     frame["observation.pico.motion_tracker_serial_hash"] = tracker_serial_hashes
 
     return frame
+
+
+def _pico_pose_channel(
+    value: object,
+    *,
+    provenance: SourceProvenance = SourceProvenance.PLATFORM_ESTIMATED,
+) -> PoseChannel:
+    raw_pose = np.asarray(value, dtype=np.float32).reshape(-1)
+    valid = bool(
+        raw_pose.size >= 7
+        and np.all(np.isfinite(raw_pose[:7]))
+        and np.any(np.abs(raw_pose[:7]) > 0)
+    )
+    pose = as_pose7(raw_pose)
+    return PoseChannel(
+        pose=tuple(float(item) for item in pose),  # type: ignore[arg-type]
+        tracking_state=(
+            JointTrackingState.TRACKED if valid else JointTrackingState.INVALID
+        ),
+        location_flags=0xF if valid else 0,
+        confidence=1.0 if valid else 0.0,
+        provenance=provenance,
+    )
+
+
+def _pico_joint_samples(
+    values: object,
+    *,
+    prefix: str,
+    names: tuple[str, ...] | None = None,
+    provenance: SourceProvenance = SourceProvenance.PLATFORM_ESTIMATED,
+) -> tuple[JointSample, ...]:
+    array = np.asarray(values, dtype=np.float32)
+    if array.ndim != 2 or array.shape[1] < 7:
+        return ()
+    joints: list[JointSample] = []
+    for index, raw_pose in enumerate(array):
+        valid = bool(
+            np.all(np.isfinite(raw_pose[:7])) and np.any(np.abs(raw_pose[:7]) > 0)
+        )
+        pose = as_pose7(raw_pose[:7])
+        flags = 0xF if valid else 0
+        joints.append(
+            JointSample(
+                index=index,
+                name=(
+                    names[index]
+                    if names is not None and index < len(names)
+                    else f"{prefix}_{index}"
+                ),
+                pose=tuple(float(item) for item in pose),  # type: ignore[arg-type]
+                location_flags=flags,
+                tracking_state=(
+                    JointTrackingState.TRACKED if valid else JointTrackingState.INVALID
+                ),
+                confidence=1.0 if valid else 0.0,
+                provenance=provenance,
+            )
+        )
+    return tuple(joints)
+
+
+def tracking_packet_from_pico_frame(
+    frame: dict,
+    *,
+    sequence: int,
+    receive_time_ns: int,
+) -> TrackingPacket:
+    """Normalize PICO body/hand/tracker arrays into ``tracking_packet_v2``."""
+
+    source_time = int(
+        np.asarray(frame.get("observation.pico.timestamp_ns", [0])).reshape(-1)[0]
+    )
+    body_joints = _pico_joint_samples(
+        frame.get("observation.pico.body_joints_pose", np.zeros((0, 7))),
+        prefix="PicoBody",
+        names=PICO_BODY_24_SOURCE_NAMES,
+    )
+    body_active = any(
+        joint.tracking_state is not JointTrackingState.INVALID for joint in body_joints
+    )
+    hands = tuple(
+        HandChannel(
+            side=side,
+            active=any(
+                joint.tracking_state is not JointTrackingState.INVALID
+                for joint in joints
+            ),
+            joints=joints,
+            provenance=SourceProvenance.PLATFORM_ESTIMATED,
+        )
+        for side, joints in (
+            (
+                "left",
+                _pico_joint_samples(
+                    frame.get("observation.pico.left_hand_pose", np.zeros((0, 7))),
+                    prefix="PicoLeftHand",
+                ),
+            ),
+            (
+                "right",
+                _pico_joint_samples(
+                    frame.get("observation.pico.right_hand_pose", np.zeros((0, 7))),
+                    prefix="PicoRightHand",
+                ),
+            ),
+        )
+    )
+    tracker_poses = np.asarray(
+        frame.get("observation.pico.motion_tracker_pose", np.zeros((0, 7))),
+        dtype=np.float32,
+    )
+    tracker_velocities = np.asarray(
+        frame.get("observation.pico.motion_tracker_velocity", np.zeros((0, 6))),
+        dtype=np.float32,
+    )
+    tracker_accelerations = np.asarray(
+        frame.get("observation.pico.motion_tracker_accel", np.zeros((0, 6))),
+        dtype=np.float32,
+    )
+    tracker_hashes = np.asarray(
+        frame.get("observation.pico.motion_tracker_serial_hash", np.zeros((0,))),
+        dtype=np.int64,
+    ).reshape(-1)
+    count = int(
+        np.asarray(frame.get("observation.pico.motion_tracker_count", [0])).reshape(-1)[
+            0
+        ]
+    )
+    trackers = tuple(
+        ExternalTrackerChannel(
+            tracker_id=str(int(tracker_hashes[index]))
+            if index < len(tracker_hashes)
+            else str(index),
+            pose=_pico_pose_channel(
+                tracker_poses[index], provenance=SourceProvenance.EXTERNAL_TRACKER
+            ),
+            velocity=tuple(float(value) for value in tracker_velocities[index])
+            if index < len(tracker_velocities)
+            else (),
+            acceleration=tuple(float(value) for value in tracker_accelerations[index])
+            if index < len(tracker_accelerations)
+            else (),
+        )
+        for index in range(min(count, len(tracker_poses)))
+    )
+
+    return TrackingPacket(
+        schema=TRACKING_PACKET_SCHEMA,
+        source_schema_version=TRACKING_PACKET_VERSION,
+        source="pico",
+        sequence=int(sequence),
+        receive_sequence=int(sequence),
+        coordinate_space="PICO SDK source space",
+        timestamps=TrackingTimestamps(
+            source_time_ns=source_time,
+            source_time_domain="XRoboToolkit.get_time_stamp_ns",
+            mapped_pc_monotonic_ns=receive_time_ns,
+            receive_time_ns=receive_time_ns,
+            quality=TimestampQuality.RECEIVE_ONLY,
+        ),
+        hmd=_pico_pose_channel(frame.get("observation.pico.headset_pose")),
+        controllers=(
+            ControllerChannel(
+                side="left",
+                pose=_pico_pose_channel(
+                    frame.get("observation.pico.left_controller_pose")
+                ),
+            ),
+            ControllerChannel(
+                side="right",
+                pose=_pico_pose_channel(
+                    frame.get("observation.pico.right_controller_pose")
+                ),
+            ),
+        ),
+        body=BodyChannel(
+            active=body_active,
+            requested_joint_set="PicoBody24",
+            active_joint_set="PicoBody24" if body_active else "None",
+            joint_count=len(body_joints),
+            joints=body_joints,
+            confidence=1.0 if body_active else 0.0,
+            calibration_state="Unknown",
+            fidelity="SDKDefault",
+            skeleton_revision=0,
+            source_time_ns=source_time,
+            source_time_domain="XRoboToolkit.get_time_stamp_ns",
+            timestamp_quality=TimestampQuality.RECEIVE_ONLY,
+            provenance=SourceProvenance.PLATFORM_ESTIMATED,
+        ),
+        hands=hands,
+        external_trackers=trackers,
+        raw=frame,
+    )
 
 
 class PicoTrackingProvider:
@@ -530,7 +749,9 @@ class PicoTrackingProvider:
         self.mode = mode
         self.transport = transport
         self.skip_adb_check = skip_adb_check
-        self.xrt = None
+        self.xrt: object | None = None
+        self._packet_sequence = 0
+        self._packet_stream = TrackingPacketStream(2048)
         self.workspace_from_device_pose = IDENTITY_POSE7.astype(np.float32).copy()
         self.workspace_set = False
         self.workspace_locked = False
@@ -550,15 +771,23 @@ class PicoTrackingProvider:
                     PICO_SERVICE_PORT,
                 )
             else:
-                log.info("PICO WiFi mode: set PC-service IP to this computer and port %d.", PICO_SERVICE_PORT)
+                log.info(
+                    "PICO WiFi mode: set PC-service IP to this computer and port %d.",
+                    PICO_SERVICE_PORT,
+                )
         else:
-            log.info("ADB check skipped. Assuming XRoboToolkit can reach the PC service.")
+            log.info(
+                "ADB check skipped. Assuming XRoboToolkit can reach the PC service."
+            )
 
         stop_xrt_service()
         launch_xrt_service()
         self.xrt = init_xrt()
         if not wait_for_pico_data(self.xrt, mode=self.mode, timeout_s=15.0):
-            log.warning("PICO %r data not available after 15 s; poses may be zero-filled.", self.mode)
+            log.warning(
+                "PICO %r data not available after 15 s; poses may be zero-filled.",
+                self.mode,
+            )
 
     def recover(self) -> bool:
         """Best-effort reconnect after PICO tracking drops during teleop."""
@@ -570,7 +799,11 @@ class PicoTrackingProvider:
             elif self.transport == "wifi":
                 lan_ip = guess_lan_ip()
                 if lan_ip:
-                    log.info("PICO WiFi mode: PC-service IP should be %s:%d.", lan_ip, PICO_SERVICE_PORT)
+                    log.info(
+                        "PICO WiFi mode: PC-service IP should be %s:%d.",
+                        lan_ip,
+                        PICO_SERVICE_PORT,
+                    )
             stop_xrt_service()
             launch_xrt_service()
             self.xrt = init_xrt()
@@ -584,7 +817,9 @@ class PicoTrackingProvider:
     def stop(self) -> None:
         if self.xrt is not None:
             try:
-                self.xrt.close()
+                close = getattr(self.xrt, "close", None)
+                if callable(close):
+                    close()
             except Exception:
                 pass
             self.xrt = None
@@ -605,6 +840,13 @@ class PicoTrackingProvider:
         if self.xrt is None:
             return ControllerPairSample.empty(self.device)
         frame = read_pico_frame(self.xrt, mode=self.mode)
+        packet = tracking_packet_from_pico_frame(
+            frame,
+            sequence=self._packet_sequence,
+            receive_time_ns=time.monotonic_ns(),
+        )
+        self._packet_sequence += 1
+        self._packet_stream.publish(packet)
         left_device = as_pose7(frame["observation.pico.left_controller_pose"])
         right_device = as_pose7(frame["observation.pico.right_controller_pose"])
         hmd_device = as_pose7(frame["observation.pico.headset_pose"])
@@ -642,7 +884,24 @@ class PicoTrackingProvider:
             aligned_time_ns=pc_time_ns,
             connected=True,
             streaming=tracked,
+            sequence=packet.receive_sequence,
         )
+
+    def latest_packet(self) -> TrackingPacket | None:
+        if self.xrt is None:
+            return self._packet_stream.latest()
+        frame = read_pico_frame(self.xrt, mode=self.mode)
+        packet = tracking_packet_from_pico_frame(
+            frame,
+            sequence=self._packet_sequence,
+            receive_time_ns=time.monotonic_ns(),
+        )
+        self._packet_sequence += 1
+        self._packet_stream.publish(packet)
+        return packet
+
+    def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]:
+        return self._packet_stream.drain(max_packets)
 
     def sample_at(self, target_time_ns: int) -> ControllerPairSample:
         """PICO has no native history buffer; timestamp its synchronous snapshot."""

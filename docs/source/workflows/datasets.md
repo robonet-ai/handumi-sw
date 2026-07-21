@@ -5,8 +5,21 @@ replay, then run automated validation and inspect the captured signals.
 
 ## 1. Replay and Inspect
 
-For local recordings, pass only the local root; `--repo-id` is unnecessary and
-no dataset is downloaded:
+Inspect the synchronized raw controllers, optional body/CoM, cameras, and
+diagnostics before robot-specific replay:
+
+```bash
+handumi-view-trajectory \
+  --repo-id your-name/handumi-demo \
+  --root outputs/datasets/handumi-demo \
+  --episode 0 --video
+```
+
+See [Body and Trajectory Visualization](visualization.md) for headless export,
+decimation, and controller-only compatibility.
+
+For robot-specific simulation of a local recording, pass only the local root;
+`--repo-id` is unnecessary and no dataset is downloaded:
 
 ```bash
 JAX_PLATFORMS=cpu handumi-replay-in-sim \

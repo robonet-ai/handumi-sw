@@ -10,7 +10,8 @@ Before connecting or commanding the arms:
 
 - Clear the complete arm workspace and keep the emergency stop reachable.
 - Power both arms, but stop every other process that may use their CAN buses.
-- Install the Piper backend with `uv sync --extra piper`.
+- Install the pinned source-only Piper backend with
+  `uv sync --group piper-source`.
 - Connect one USB-to-CAN adapter per arm.
 - Verify tracking and motion mapping in simulation before enabling hardware.
 
@@ -19,7 +20,7 @@ Before connecting or commanding the arms:
 Run the guided hardware setup:
 
 ```bash
-uv sync --extra piper
+uv sync --group piper-source
 handumi-setup-hardware --robot piper --device meta \
   --skip-feetech-map --skip-feetech-calibration
 ```

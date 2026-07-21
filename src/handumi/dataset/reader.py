@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 from handumi.dataset.raw import (
-    HANDUMI_CAPTURE_SCHEMA,
-    HANDUMI_STATE_SEMANTICS,
-    HANDUMI_TRACKING_SCHEMA,
     TRACKING_VALIDITY_NAMES,
 )
 from handumi.dataset.writer import info_path, load_info
+from handumi.dataset.tracking_sidecar import discover_tracking_sidecars
 
 
 def dataset_root_from_repo_id(repo_id: str) -> Path:
@@ -60,18 +59,33 @@ class DatasetDownloadResult:
 
 
 @dataclass(frozen=True)
+class CanonicalBodyEpisode:
+    """Optional aligned canonical body columns for one episode."""
+
+    signals: dict[str, np.ndarray]
+
+
+@dataclass(frozen=True)
 class RawEpisode:
     """Raw state plus derived diagnostics for one compact HandUMI episode."""
 
     states: np.ndarray
     fps: float
     signals: dict[str, np.ndarray]
+    body: CanonicalBodyEpisode | None = None
+    tracking_sidecars: tuple[Path, ...] = ()
+    images: dict[str, np.ndarray] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
-def handumi_metadata(info_or_root: dict[str, Any] | str | Path) -> dict[str, Any]:
+def handumi_metadata(
+    info_or_root: Mapping[str, object] | str | Path,
+) -> dict[str, Any]:
     """Return HandUMI-specific metadata from an ``info.json`` dict or dataset root."""
     info = (
-        load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+        load_info(info_or_root)
+        if not isinstance(info_or_root, Mapping)
+        else info_or_root
     )
     meta = info.get("handumi", {})
     return dict(meta) if isinstance(meta, dict) else {}
@@ -84,26 +98,14 @@ def recording_device(info_or_root: dict[str, Any] | str | Path) -> str | None:
 
 
 def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> None:
-    """Require the single current HandUMI layout stored in LeRobot v3."""
-    meta = handumi_metadata(info_or_root)
-    semantics = str(meta.get("state_semantics", ""))
-    tracking_schema = str(meta.get("tracking_schema", ""))
-    capture_schema = str(meta.get("capture_schema", ""))
-    expected = {
-        "tracking_schema": HANDUMI_TRACKING_SCHEMA,
-        "capture_schema": HANDUMI_CAPTURE_SCHEMA,
-        "state_semantics": HANDUMI_STATE_SEMANTICS,
-    }
-    actual = {
-        "tracking_schema": tracking_schema,
-        "capture_schema": capture_schema,
-        "state_semantics": semantics,
-    }
-    if actual != expected:
-        raise ValueError(
-            "Unsupported HandUMI raw layout. Re-record with the current "
-            f"handumi-record. Expected {expected}, got {actual}."
-        )
+    """Require the current layout and reject ambiguous historic recordings."""
+    from handumi.dataset.compatibility import validate_dataset_compatibility
+
+    info = (
+        load_info(info_or_root) if not isinstance(info_or_root, dict) else info_or_root
+    )
+    root = Path(info_or_root) if isinstance(info_or_root, (str, Path)) else None
+    validate_dataset_compatibility(info, root=root)
 
 
 def load_raw_episode_states(
@@ -137,7 +139,7 @@ def load_raw_episode(
     revision: str | None = None,
     download_videos: bool = False,
 ) -> RawEpisode:
-    """Load state and non-image HandUMI diagnostics without decoding videos."""
+    """Load one validated episode, optionally decoding its recorded cameras."""
     dataset = open_dataset(
         ref,
         repo_id=repo_id,
@@ -177,7 +179,74 @@ def load_raw_episode(
             values = values[:, 0]
         signals[key] = values
     signals = normalize_raw_signals(states, signals, metadata=metadata)
-    return RawEpisode(states=states, fps=fps, signals=signals)
+    body_signals: dict[str, np.ndarray] = {}
+    for key in table.column_names:
+        if key.startswith("observation.body."):
+            values = table[key]
+            array = np.asarray(values)
+            if array.dtype == object:
+                array = np.stack(
+                    [
+                        np.asarray(
+                            value.tolist() if hasattr(value, "tolist") else value
+                        )
+                        for value in values
+                    ]
+                )
+            body_signals[key] = array
+    body = CanonicalBodyEpisode(body_signals) if body_signals else None
+    images = _decode_episode_images(dataset, len(states)) if download_videos else {}
+    dataset_root = Path(getattr(dataset, "root", root or "."))
+    sidecars = discover_tracking_sidecars(dataset_root, episode_index=episode)
+    return RawEpisode(
+        states=states,
+        fps=fps,
+        signals=signals,
+        body=body,
+        tracking_sidecars=sidecars,
+        images=images,
+        metadata=dict(info) if isinstance(info, dict) else {},
+    )
+
+
+def _decode_episode_images(dataset: Any, frame_count: int) -> dict[str, np.ndarray]:
+    """Decode available LeRobot image/video features without a second parser."""
+    table = dataset.hf_dataset
+    feature_keys = set(getattr(dataset, "features", {}) or {})
+    feature_keys.update(getattr(table, "column_names", ()))
+    image_keys = sorted(
+        key for key in feature_keys if str(key).startswith("observation.images.")
+    )
+    decoded: dict[str, np.ndarray] = {}
+    for key in image_keys:
+        frames: list[np.ndarray] = []
+        for index in range(frame_count):
+            row = dataset[index]
+            if key not in row:
+                frames = []
+                break
+            value = row[key]
+            if hasattr(value, "detach"):
+                value = value.detach().cpu().numpy()
+            elif hasattr(value, "numpy"):
+                value = value.numpy()
+            else:
+                value = np.asarray(value)
+            image = np.asarray(value)
+            if image.ndim == 3 and image.shape[0] in (1, 3, 4):
+                image = np.moveaxis(image, 0, -1)
+            if image.ndim not in (2, 3):
+                frames = []
+                break
+            if np.issubdtype(image.dtype, np.floating):
+                image = np.clip(image, 0.0, 1.0)
+                image = np.rint(image * 255.0).astype(np.uint8)
+            elif image.dtype != np.uint8:
+                image = np.clip(image, 0, 255).astype(np.uint8)
+            frames.append(image)
+        if frames:
+            decoded[key] = np.stack(frames)
+    return decoded
 
 
 def normalize_raw_signals(
@@ -269,15 +338,9 @@ def _restore_enabled_signals(
         )
 
 
-def _derive_source_timing(
-    signals: dict[str, np.ndarray], frame_count: int
-) -> None:
-    target = _frame_signal(
-        signals.get("observation.sync.target_time_ns"), frame_count
-    )
-    record = _frame_signal(
-        signals.get("observation.sync.record_time_ns"), frame_count
-    )
+def _derive_source_timing(signals: dict[str, np.ndarray], frame_count: int) -> None:
+    target = _frame_signal(signals.get("observation.sync.target_time_ns"), frame_count)
+    record = _frame_signal(signals.get("observation.sync.record_time_ns"), frame_count)
     if target is None or record is None:
         return
 
@@ -290,9 +353,7 @@ def _derive_source_timing(
     )
     if aligned is not None:
         sources["observation.tracking"] = (
-            aligned
-            if received is None
-            else np.where(aligned > 0, aligned, received)
+            aligned if received is None else np.where(aligned > 0, aligned, received)
         )
 
     for key, value in tuple(signals.items()):
@@ -305,16 +366,16 @@ def _derive_source_timing(
     missing_value_ms = np.iinfo(np.int64).max / 1e6
     for prefix, sample in sources.items():
         missing = sample <= 0
-        age_ms = np.where(missing, missing_value_ms, np.maximum(0, record - sample) / 1e6)
+        age_ms = np.where(
+            missing, missing_value_ms, np.maximum(0, record - sample) / 1e6
+        )
         sync_error_ms = np.where(
             missing,
             missing_value_ms,
             np.abs(sample - target) / 1e6,
         )
         signals.setdefault(f"{prefix}.age_ms", age_ms.astype(np.float32))
-        signals.setdefault(
-            f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32)
-        )
+        signals.setdefault(f"{prefix}.sync_error_ms", sync_error_ms.astype(np.float32))
 
 
 def _frame_signal(value: Any, frame_count: int) -> np.ndarray | None:
@@ -333,8 +394,7 @@ def _compose_pose7(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     qb = _normalize_quaternion(b[3:7])
     vector = qa[:3]
     rotated = b[:3] + 2.0 * (
-        qa[3] * np.cross(vector, b[:3])
-        + np.cross(vector, np.cross(vector, b[:3]))
+        qa[3] * np.cross(vector, b[:3]) + np.cross(vector, np.cross(vector, b[:3]))
     )
     ax, ay, az, aw = qa
     bx, by, bz, bw = qb

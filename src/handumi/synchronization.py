@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from handumi.feetech import GripperSample, GripperWidths, zero_gripper_widths
-from handumi.tracking.base import ControllerPairSample, TrackingProvider
+from handumi.tracking.base import ControllerPairSample, TrackingSampleSource
 
 
 @dataclass(frozen=True)
@@ -45,11 +45,16 @@ class SustainedHealthGate:
 
 
 def tracking_sample_at(
-    tracker: TrackingProvider,
+    tracker: TrackingSampleSource,
     target_time_ns: int,
 ) -> ControllerPairSample:
     sampler = getattr(tracker, "sample_at", None)
-    return sampler(target_time_ns) if sampler is not None else tracker.latest()
+    if callable(sampler):
+        sample = sampler(target_time_ns)
+        if not isinstance(sample, ControllerPairSample):
+            raise TypeError("tracking sample_at() returned an invalid sample")
+        return sample
+    return tracker.latest()
 
 
 def synchronized_gripper_frame(

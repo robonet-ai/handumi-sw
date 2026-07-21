@@ -27,7 +27,7 @@ import statistics
 import struct
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -37,10 +37,29 @@ import numpy as np
 from handumi.calibration.control_tcp import ControllerTcpCalibration
 from handumi.config import load_rig_section
 from handumi.tracking.base import ControllerPairSample, apply_tcp_calibration_pose7
+from handumi.tracking.packet import (
+    TRACKING_PACKET_SCHEMA,
+    TRACKING_PACKET_VERSION,
+    BodyChannel,
+    ControllerChannel,
+    ExternalTrackerChannel,
+    HandChannel,
+    JointSample,
+    JointTrackingState,
+    PacketLossReason,
+    PoseChannel,
+    SourceProvenance,
+    TimestampQuality,
+    TrackingPacket,
+    TrackingPacketStream,
+    TrackingTimestamps,
+    tracking_state_from_location_flags,
+)
 from handumi.tracking.transforms import (
     Pose,
     WorkspaceCalibration,
     apply_mounting_offset,
+    quat_rotate,
     unity_pose_to_handumi,
 )
 
@@ -142,6 +161,29 @@ def workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
     return WorkspaceCalibration.from_reference(reference)
 
 
+def level_workspace_from_hmd(hmd: HmdState) -> WorkspaceCalibration:
+    """Re-center on the HMD while preserving the Quest Stage gravity axis.
+
+    The legacy reset uses the full inverse HMD orientation. That is useful for
+    controller-only relative motion, but it tilts a Stage-space body and floor
+    whenever the wearer looks up or down. Body-enabled recording removes only
+    heading and translation so source Z remains vertical.
+    """
+    reference = unity_pose_to_handumi(hmd.position, hmd.quaternion)
+    forward = quat_rotate(reference.quaternion, (1.0, 0.0, 0.0))
+    horizontal = forward[:2]
+    if float(np.linalg.norm(horizontal)) <= 1e-9:
+        yaw = 0.0
+    else:
+        yaw = float(np.arctan2(horizontal[1], horizontal[0]))
+    half_yaw = 0.5 * yaw
+    level_reference = Pose(
+        reference.position,
+        (0.0, 0.0, np.sin(half_yaw), np.cos(half_yaw)),
+    )
+    return WorkspaceCalibration.from_reference(level_reference)
+
+
 def pose_to_pose7(pose: Pose) -> np.ndarray:
     """Return ``[x,y,z,qx,qy,qz,qw]`` for a tracking :class:`Pose`."""
     return np.concatenate([pose.position, pose.quaternion]).astype(np.float32)
@@ -150,24 +192,34 @@ def pose_to_pose7(pose: Pose) -> np.ndarray:
 # Flat HandUMI Quest App wire keys, per side.
 _POSE_KEYS = {
     "left": {
-        "pos": "leftControllerPosition", "rot": "leftControllerRotation",
-        "tracked": "leftTracked", "valid": "leftValid",
+        "pos": "leftControllerPosition",
+        "rot": "leftControllerRotation",
+        "tracked": "leftTracked",
+        "valid": "leftValid",
     },
     "right": {
-        "pos": "rightControllerPosition", "rot": "rightControllerRotation",
-        "tracked": "rightTracked", "valid": "rightValid",
+        "pos": "rightControllerPosition",
+        "rot": "rightControllerRotation",
+        "tracked": "rightTracked",
+        "valid": "rightValid",
     },
 }
 _BUTTON_KEYS = {
     "left": {
-        "primary": "buttonXPressed", "secondary": "buttonYPressed",
-        "trigger": "leftTriggerPressed", "grip": "leftGripPressed",
-        "stick": "leftJoystick", "stick_click": "leftThumbstickClick",
+        "primary": "buttonXPressed",
+        "secondary": "buttonYPressed",
+        "trigger": "leftTriggerPressed",
+        "grip": "leftGripPressed",
+        "stick": "leftJoystick",
+        "stick_click": "leftThumbstickClick",
     },
     "right": {
-        "primary": "buttonAPressed", "secondary": "buttonBPressed",
-        "trigger": "rightTriggerPressed", "grip": "rightGripPressed",
-        "stick": "rightJoystick", "stick_click": "rightThumbstickClick",
+        "primary": "buttonAPressed",
+        "secondary": "buttonBPressed",
+        "trigger": "rightTriggerPressed",
+        "grip": "rightGripPressed",
+        "stick": "rightJoystick",
+        "stick_click": "rightThumbstickClick",
     },
 }
 
@@ -221,6 +273,280 @@ def parse_frame(msg: dict[str, Any], *, pc_monotonic_ns: int) -> QuestFrame:
     )
 
 
+def _pose_tuple(
+    position: object, orientation: object
+) -> tuple[float, float, float, float, float, float, float]:
+    pos = _vec3(position)
+    quat = _quat(orientation)
+    return (
+        float(pos[0]),
+        float(pos[1]),
+        float(pos[2]),
+        float(quat[0]),
+        float(quat[1]),
+        float(quat[2]),
+        float(quat[3]),
+    )
+
+
+def _pose_channel(
+    position: object,
+    orientation: object,
+    *,
+    tracked: bool,
+    valid: bool,
+    provenance: SourceProvenance = SourceProvenance.PLATFORM_ESTIMATED,
+) -> PoseChannel:
+    state = (
+        JointTrackingState.TRACKED
+        if tracked and valid
+        else JointTrackingState.VALID
+        if valid
+        else JointTrackingState.INVALID
+    )
+    flags = (0x3 if valid else 0) | (0xC if tracked else 0)
+    return PoseChannel(
+        pose=_pose_tuple(position, orientation),
+        tracking_state=state,
+        location_flags=flags,
+        confidence=1.0 if tracked and valid else 0.0,
+        provenance=provenance,
+    )
+
+
+def _body_joints(body: dict[str, Any]) -> tuple[JointSample, ...]:
+    provenance = SourceProvenance.PLATFORM_ESTIMATED
+    confidence = _as_float(body.get("confidence"))
+    verbose = body.get("joints")
+    if isinstance(verbose, list):
+        result: list[JointSample] = []
+        for fallback_index, raw_joint in enumerate(verbose):
+            if not isinstance(raw_joint, dict):
+                continue
+            index = int(raw_joint.get("index", fallback_index) or fallback_index)
+            flags = int(raw_joint.get("locationFlags", 0) or 0)
+            result.append(
+                JointSample(
+                    index=index,
+                    name=str(raw_joint.get("name", f"Joint_{index}")),
+                    pose=_pose_tuple(
+                        raw_joint.get("position"), raw_joint.get("orientation")
+                    ),
+                    location_flags=flags,
+                    tracking_state=tracking_state_from_location_flags(flags),
+                    confidence=confidence,
+                    provenance=provenance,
+                )
+            )
+        return tuple(result)
+
+    poses = body.get("jointPoses")
+    flags = body.get("jointLocationFlags")
+    names = body.get("jointNames")
+    if not isinstance(poses, list) or not isinstance(flags, list):
+        return ()
+    result = []
+    count = min(len(flags), len(poses) // 7)
+    for index in range(count):
+        offset = index * 7
+        pose = tuple(_as_float(value) for value in poses[offset : offset + 7])
+        name = (
+            str(names[index])
+            if isinstance(names, list) and index < len(names)
+            else f"Joint_{index}"
+        )
+        location_flags = int(flags[index] or 0)
+        result.append(
+            JointSample(
+                index=index,
+                name=name,
+                pose=pose,  # type: ignore[arg-type]
+                location_flags=location_flags,
+                tracking_state=tracking_state_from_location_flags(location_flags),
+                confidence=confidence,
+                provenance=provenance,
+            )
+        )
+    return tuple(result)
+
+
+def _parse_optional_hands(msg: dict[str, Any]) -> tuple[HandChannel, ...]:
+    raw_hands = msg.get("hands")
+    if not isinstance(raw_hands, list):
+        return ()
+    hands: list[HandChannel] = []
+    for raw_hand in raw_hands:
+        if not isinstance(raw_hand, dict):
+            continue
+        hand_body = {**raw_hand, "confidence": raw_hand.get("confidence", 0.0)}
+        hands.append(
+            HandChannel(
+                side=str(raw_hand.get("side", "unknown")),
+                active=bool(raw_hand.get("active", False)),
+                joints=_body_joints(hand_body),
+                provenance=SourceProvenance.PLATFORM_ESTIMATED,
+            )
+        )
+    return tuple(hands)
+
+
+def _parse_external_trackers(
+    msg: dict[str, Any],
+) -> tuple[ExternalTrackerChannel, ...]:
+    raw_trackers = msg.get("externalTrackers")
+    if not isinstance(raw_trackers, list):
+        return ()
+    trackers: list[ExternalTrackerChannel] = []
+    for index, raw_tracker in enumerate(raw_trackers):
+        if not isinstance(raw_tracker, dict):
+            continue
+        trackers.append(
+            ExternalTrackerChannel(
+                tracker_id=str(raw_tracker.get("id", index)),
+                pose=_pose_channel(
+                    raw_tracker.get("position"),
+                    raw_tracker.get("orientation"),
+                    tracked=bool(raw_tracker.get("tracked", False)),
+                    valid=bool(raw_tracker.get("valid", False)),
+                    provenance=SourceProvenance.EXTERNAL_TRACKER,
+                ),
+                velocity=tuple(
+                    _as_float(value) for value in raw_tracker.get("velocity", [])
+                ),
+                acceleration=tuple(
+                    _as_float(value) for value in raw_tracker.get("acceleration", [])
+                ),
+            )
+        )
+    return tuple(trackers)
+
+
+def parse_tracking_packet(
+    msg: dict[str, Any],
+    *,
+    pc_monotonic_ns: int,
+    receive_sequence: int,
+    clock_offset_ns: int = 0,
+    rtt_ns: int | None = None,
+) -> TrackingPacket:
+    """Normalize legacy or v2 Meta JSON without discarding unknown source fields."""
+
+    raw_schema = msg.get("schema")
+    source_version = int(
+        msg.get(
+            "sourceSchemaVersion",
+            TRACKING_PACKET_VERSION if raw_schema == TRACKING_PACKET_SCHEMA else 1,
+        )
+        or 1
+    )
+    source_sequence = (
+        int(msg["seq"]) if "seq" in msg and msg.get("seq") is not None else None
+    )
+    source_time_ns = int(msg.get("ovrTimeNs", msg.get("sourceTimeNs", 0)) or 0)
+    source_time_domain = str(
+        msg.get("sourceTimeDomain", "OVRPlugin.GetTimeInSeconds.seconds")
+    )
+    mapped = (
+        source_time_ns + clock_offset_ns
+        if source_time_ns > 0 and rtt_ns is not None
+        else 0
+    )
+    declared_quality = str(msg.get("timestampQuality", "")).upper()
+    if declared_quality == TimestampQuality.DIAGNOSTIC_ONLY.value:
+        quality = TimestampQuality.DIAGNOSTIC_ONLY
+    elif source_time_ns <= 0:
+        quality = TimestampQuality.UNAVAILABLE
+    elif rtt_ns is None:
+        quality = TimestampQuality.MAPPED_UNBOUNDED
+    else:
+        quality = TimestampQuality.SYNCHRONIZED
+
+    hmd_position = msg.get("hmdPosition")
+    hmd_orientation = msg.get("hmdRotation")
+    hmd = _pose_channel(
+        hmd_position,
+        hmd_orientation,
+        tracked=hmd_position is not None and hmd_orientation is not None,
+        valid=hmd_position is not None and hmd_orientation is not None,
+    )
+    controllers = tuple(
+        ControllerChannel(
+            side=side,
+            pose=_pose_channel(
+                msg.get(_POSE_KEYS[side]["pos"]),
+                msg.get(_POSE_KEYS[side]["rot"]),
+                tracked=bool(msg.get(_POSE_KEYS[side]["tracked"], False)),
+                valid=bool(msg.get(_POSE_KEYS[side]["valid"], False)),
+            ),
+            buttons=_controller_from_msg(msg, side).buttons.__dict__,
+        )
+        for side in ("left", "right")
+    )
+
+    raw_body = msg.get("body")
+    body = None
+    if isinstance(raw_body, dict):
+        joints = _body_joints(raw_body)
+        body_quality = (
+            TimestampQuality.DIAGNOSTIC_ONLY
+            if str(raw_body.get("timestampQuality", "DIAGNOSTIC_ONLY")).upper()
+            == TimestampQuality.DIAGNOSTIC_ONLY.value
+            else quality
+        )
+        body = BodyChannel(
+            active=bool(raw_body.get("active", False)),
+            requested_joint_set=str(raw_body.get("requestedJointSet", "")),
+            active_joint_set=str(raw_body.get("activeJointSet", "")),
+            joint_count=int(raw_body.get("jointCount", len(joints)) or 0),
+            joints=joints,
+            confidence=_as_float(raw_body.get("confidence")),
+            calibration_state=str(raw_body.get("calibrationState", "Unknown")),
+            fidelity=str(raw_body.get("fidelity", "Unknown")),
+            skeleton_revision=int(raw_body.get("skeletonRevision", 0) or 0),
+            source_time_ns=int(raw_body.get("sourceTimeNs", 0) or 0),
+            source_time_domain=str(raw_body.get("sourceTimeDomain", "")),
+            timestamp_quality=body_quality,
+            provenance=SourceProvenance.PLATFORM_ESTIMATED,
+            observation_sequence=(
+                int(raw_body["observationSeq"])
+                if raw_body.get("observationSeq") is not None
+                else None
+            ),
+            is_new_observation=(
+                bool(raw_body["isNewObservation"])
+                if "isNewObservation" in raw_body
+                else None
+            ),
+        )
+
+    return TrackingPacket(
+        schema=TRACKING_PACKET_SCHEMA,
+        source_schema_version=source_version,
+        source=str(msg.get("source", "meta_quest")),
+        sequence=source_sequence,
+        receive_sequence=receive_sequence,
+        coordinate_space=str(
+            msg.get("sourceCoordinateSpace", msg.get("space", "Unity local"))
+        ),
+        timestamps=TrackingTimestamps(
+            source_time_ns=source_time_ns,
+            source_time_domain=source_time_domain,
+            mapped_pc_monotonic_ns=mapped,
+            receive_time_ns=pc_monotonic_ns,
+            clock_offset_ns=clock_offset_ns,
+            rtt_ns=0 if rtt_ns is None else int(rtt_ns),
+            uncertainty_ns=0 if rtt_ns is None else int(rtt_ns // 2),
+            quality=quality,
+        ),
+        hmd=hmd,
+        controllers=controllers,
+        body=body,
+        hands=_parse_optional_hands(msg),
+        external_trackers=_parse_external_trackers(msg),
+        raw=msg,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Config.
 # ---------------------------------------------------------------------------
@@ -236,20 +562,21 @@ class MetaQuestConfig:
     fps_window: int = 30
     offset_history: int = 15
     rtt_accept_ns: int = 8_000_000
+    packet_queue_size: int = 2048
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MetaQuestConfig":
         data = load_rig_section(Path(path), "meta_quest")
         conn = data.get("connection", {}) or {}
         health = data.get("health", {}) or {}
+        streams = data.get("streams", {}) or {}
         return cls(
             quest_ip=str(conn.get("quest_ip", "")),
             tcp_port=int(conn.get("tcp_port", 65432)),
             sync_port=int(conn.get("sync_port", 42000)),
             connect_retry_s=float(conn.get("connect_retry_s", 1.0)),
-            frame_stale_timeout_s=float(
-                health.get("frame_stale_timeout_s", 0.25)
-            ),
+            frame_stale_timeout_s=float(health.get("frame_stale_timeout_s", 0.25)),
+            packet_queue_size=int(streams.get("packet_queue_size", 2048)),
         )
 
 
@@ -271,9 +598,13 @@ class MetaQuestReceiver:
         config: MetaQuestConfig,
         *,
         on_frame: Callable[[QuestFrame], None] | None = None,
+        on_raw_message: Callable[[dict[str, Any], int, int], None] | None = None,
+        on_packet: Callable[[TrackingPacket], None] | None = None,
     ) -> None:
         self.config = config
         self._on_frame = on_frame
+        self._on_raw_message = on_raw_message
+        self._on_packet = on_packet
 
         self._lock = threading.Lock()
         self._running = False
@@ -288,6 +619,11 @@ class MetaQuestReceiver:
         self._offset_ns: int = 0
         self._rtt_ns: int | None = None
         self._receive_sequence = 0
+        self._packet_stream = TrackingPacketStream(config.packet_queue_size)
+        self._packet_diagnostics: Counter[str] = Counter()
+        self._last_source_sequence: int | None = None
+        self._connection_count = 0
+        self._session_manifest: dict[str, Any] | None = None
 
     # ---------- public API ----------
 
@@ -317,6 +653,33 @@ class MetaQuestReceiver:
     def latest(self) -> QuestFrame | None:
         with self._lock:
             return self._latest
+
+    def latest_packet(self) -> TrackingPacket | None:
+        return self._packet_stream.latest()
+
+    def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]:
+        return self._packet_stream.drain(max_packets)
+
+    def session_manifest(self) -> dict[str, Any] | None:
+        with self._lock:
+            return (
+                None if self._session_manifest is None else dict(self._session_manifest)
+            )
+
+    def packet_stream_stats(self) -> dict[str, Any]:
+        stats = self._packet_stream.stats()
+        with self._lock:
+            diagnostics = dict(self._packet_diagnostics)
+            connection_count = self._connection_count
+        return {
+            "accepted": stats.accepted,
+            "delivered": stats.delivered,
+            "queued": stats.queued,
+            "dropped": dict(stats.dropped),
+            "diagnostics": diagnostics,
+            "connection_count": connection_count,
+            "reconnects": max(0, connection_count - 1),
+        }
 
     def aligned_at(self, target_time_ns: int | None = None) -> AlignedQuestFrame | None:
         """Return the buffered Quest frame nearest one PC monotonic timestamp."""
@@ -357,6 +720,7 @@ class MetaQuestReceiver:
             last_frame_mono = self._last_frame_mono
             offset_ns = self._offset_ns
             rtt_ns = self._rtt_ns
+            packet_diagnostics = dict(self._packet_diagnostics)
 
         if len(frame_times) >= 2 and frame_times[-1] > frame_times[0]:
             fps = (len(frame_times) - 1) / (frame_times[-1] - frame_times[0])
@@ -379,6 +743,8 @@ class MetaQuestReceiver:
             "offset_s": offset_ns / 1e9,
             "rtt_ns": rtt_ns,
             "rtt_ms": float("nan") if rtt_ns is None else rtt_ns / 1e6,
+            "packet_diagnostics": packet_diagnostics,
+            "packet_stream": self.packet_stream_stats(),
         }
 
     # ---------- internals ----------
@@ -392,6 +758,7 @@ class MetaQuestReceiver:
 
             with self._lock:
                 self._connected = True
+                self._connection_count += 1
                 self._frame_times.clear()
                 self._frames.clear()
                 self._last_frame_mono = None
@@ -419,7 +786,9 @@ class MetaQuestReceiver:
             log.warning("quest_ip is not set; cannot connect.")
             return None
         try:
-            log.info("Connecting TCP %s:%d ...", self.config.quest_ip, self.config.tcp_port)
+            log.info(
+                "Connecting TCP %s:%d ...", self.config.quest_ip, self.config.tcp_port
+            )
             sock = socket.create_connection(
                 (self.config.quest_ip, self.config.tcp_port), timeout=2.0
             )
@@ -454,15 +823,107 @@ class MetaQuestReceiver:
                 try:
                     msg = json.loads(line)
                 except json.JSONDecodeError:
+                    with self._lock:
+                        self._packet_diagnostics[
+                            PacketLossReason.MALFORMED_FRAME.value
+                        ] += 1
+                    self._packet_stream.record_drop(PacketLossReason.MALFORMED_FRAME)
                     continue
-                self._handle_message(msg)
+                if isinstance(msg, dict):
+                    self._handle_message(msg)
 
     def _handle_message(self, msg: dict[str, Any]) -> None:
         pc_mono_ns = time.monotonic_ns()
-        frame = parse_frame(msg, pc_monotonic_ns=pc_mono_ns)
         with self._lock:
             self._receive_sequence += 1
-            frame = replace(frame, receive_sequence=self._receive_sequence)
+            receive_sequence = self._receive_sequence
+        if self._on_raw_message is not None:
+            try:
+                self._on_raw_message(msg, pc_mono_ns, receive_sequence)
+            except Exception:  # noqa: BLE001 - evidence callback must not kill rx.
+                log.exception("on_raw_message callback raised")
+
+        # A diagnostic manifest is evidence and connection metadata, not a pose
+        # sample. Do not briefly replace the production provider's latest frame
+        # with a synthetic all-zero controller sample.
+        if msg.get("packetType") == "session_manifest":
+            with self._lock:
+                self._session_manifest = dict(msg)
+            return
+
+        raw_schema = msg.get("schema")
+        raw_version = msg.get("sourceSchemaVersion")
+        if raw_schema is not None and raw_schema != TRACKING_PACKET_SCHEMA:
+            with self._lock:
+                self._packet_diagnostics[
+                    PacketLossReason.UNSUPPORTED_VERSION.value
+                ] += 1
+            self._packet_stream.record_drop(PacketLossReason.UNSUPPORTED_VERSION)
+            return
+        if raw_version is not None:
+            try:
+                version_supported = int(raw_version) == TRACKING_PACKET_VERSION
+            except (TypeError, ValueError):
+                version_supported = False
+            if not version_supported:
+                with self._lock:
+                    self._packet_diagnostics[
+                        PacketLossReason.UNSUPPORTED_VERSION.value
+                    ] += 1
+                self._packet_stream.record_drop(PacketLossReason.UNSUPPORTED_VERSION)
+                return
+
+        with self._lock:
+            offset_ns = self._offset_ns
+            rtt_ns = self._rtt_ns
+        try:
+            packet = parse_tracking_packet(
+                msg,
+                pc_monotonic_ns=pc_mono_ns,
+                receive_sequence=receive_sequence,
+                clock_offset_ns=offset_ns,
+                rtt_ns=rtt_ns,
+            )
+        except (KeyError, TypeError, ValueError, IndexError):
+            with self._lock:
+                self._packet_diagnostics[PacketLossReason.MALFORMED_FRAME.value] += 1
+            self._packet_stream.record_drop(PacketLossReason.MALFORMED_FRAME)
+            log.warning("Ignoring malformed tracking packet", exc_info=True)
+            return
+        source_sequence = packet.sequence
+        if source_sequence is not None:
+            with self._lock:
+                previous = self._last_source_sequence
+                if previous is not None:
+                    delta = source_sequence - previous
+                    if delta > 1:
+                        missing = delta - 1
+                        self._packet_diagnostics[
+                            PacketLossReason.SEQUENCE_GAP.value
+                        ] += missing
+                        self._packet_stream.record_drop(
+                            PacketLossReason.SEQUENCE_GAP, missing
+                        )
+                    elif delta == 0:
+                        self._packet_diagnostics[PacketLossReason.DUPLICATE.value] += 1
+                        self._packet_stream.record_drop(PacketLossReason.DUPLICATE)
+                    elif delta < 0:
+                        self._packet_diagnostics[
+                            PacketLossReason.OUT_OF_ORDER.value
+                        ] += 1
+                        self._packet_stream.record_drop(PacketLossReason.OUT_OF_ORDER)
+                if previous is None or source_sequence > previous:
+                    self._last_source_sequence = source_sequence
+        self._packet_stream.publish(packet)
+        if self._on_packet is not None:
+            try:
+                self._on_packet(packet)
+            except Exception:  # noqa: BLE001 - packet callback must not kill rx.
+                log.exception("on_packet callback raised")
+
+        frame = parse_frame(msg, pc_monotonic_ns=pc_mono_ns)
+        with self._lock:
+            frame = replace(frame, receive_sequence=receive_sequence)
             self._latest = frame
             self._frames.append(frame)
             self._last_frame_mono = pc_mono_ns / 1e9
@@ -525,6 +986,7 @@ class MetaQuestTrackingProvider:
         config: MetaQuestConfig,
         calibration: ControllerTcpCalibration,
         reset_workspace_on_x: bool = True,
+        level_workspace_on_reset: bool = False,
     ) -> None:
         self.config = config
         self.calibration = calibration
@@ -535,11 +997,16 @@ class MetaQuestTrackingProvider:
         # When False, controller buttons cannot reset the workspace (for
         # example, handumi-teleop-sim owns its anchoring behavior).
         self.reset_workspace_on_x = reset_workspace_on_x
+        self.level_workspace_on_reset = level_workspace_on_reset
         self._prev_reset = False
 
     def start(self) -> None:
         self.receiver.start()
-        log.info("Connecting to Quest at %s:%d ...", self.config.quest_ip, self.config.tcp_port)
+        log.info(
+            "Connecting to Quest at %s:%d ...",
+            self.config.quest_ip,
+            self.config.tcp_port,
+        )
 
     def stop(self) -> None:
         self.receiver.stop()
@@ -547,20 +1014,35 @@ class MetaQuestTrackingProvider:
     def reset_workspace(self) -> None:
         """Re-center on the next HMD frame unless a table calibration is locked."""
         if self.workspace_locked:
-            log.info("Workspace is locked to the calibrated table frame; reset ignored.")
+            log.info(
+                "Workspace is locked to the calibrated table frame; reset ignored."
+            )
             return
         self.workspace_set = False
 
-    def set_workspace_from_device_pose(self, pose7: np.ndarray, *, locked: bool = True) -> None:
+    def set_workspace_from_device_pose(
+        self, pose7: np.ndarray, *, locked: bool = True
+    ) -> None:
         """Set ``T_workspace_quest`` explicitly, normally from session calibration."""
         value = np.asarray(pose7, dtype=np.float64).reshape(7)
         self.workspace = WorkspaceCalibration(Pose(value[:3], value[3:]))
         self.workspace_set = True
         self.workspace_locked = bool(locked)
-        log.info("Workspace set from calibration (%s).", "locked" if locked else "unlocked")
+        log.info(
+            "Workspace set from calibration (%s).", "locked" if locked else "unlocked"
+        )
 
     def latest(self) -> ControllerPairSample:
         return self._sample(self.receiver.aligned_at())
+
+    def latest_packet(self) -> TrackingPacket | None:
+        return self.receiver.latest_packet()
+
+    def drain_packets(self, max_packets: int | None = None) -> list[TrackingPacket]:
+        return self.receiver.drain_packets(max_packets)
+
+    def session_manifest(self) -> dict[str, Any] | None:
+        return self.receiver.session_manifest()
 
     def sample_at(self, target_time_ns: int) -> ControllerPairSample:
         """Return the native Quest frame nearest a synchronized row target."""
@@ -587,12 +1069,21 @@ class MetaQuestTrackingProvider:
             and frame.hmd.tracked
             and (reset_edge or not self.workspace_set)
         ):
-            self.workspace = workspace_from_hmd(frame.hmd)
+            workspace_factory = (
+                level_workspace_from_hmd
+                if self.level_workspace_on_reset
+                else workspace_from_hmd
+            )
+            self.workspace = workspace_factory(frame.hmd)
             self.workspace_set = True
-            log.info("Workspace %s on HMD pose.", "reset" if reset_edge else "initialized")
+            log.info(
+                "Workspace %s on HMD pose.", "reset" if reset_edge else "initialized"
+            )
 
         left_device = unity_pose_to_handumi(frame.left.position, frame.left.quaternion)
-        right_device = unity_pose_to_handumi(frame.right.position, frame.right.quaternion)
+        right_device = unity_pose_to_handumi(
+            frame.right.position, frame.right.quaternion
+        )
         hmd_device = unity_pose_to_handumi(frame.hmd.position, frame.hmd.quaternion)
         left_controller = self.workspace.apply(left_device)
         right_controller = self.workspace.apply(right_device)
@@ -692,10 +1183,14 @@ def _main() -> None:
     parser.add_argument("--quest-ip", default="127.0.0.1")
     parser.add_argument("--tcp-port", type=int, default=65432)
     parser.add_argument("--sync-port", type=int, default=42000)
-    parser.add_argument("--config", type=Path, default=None,
-                        help="Optional configs/rig.yaml override.")
-    parser.add_argument("--print-raw", action="store_true",
-                        help="Dump the first received raw JSON frame (verify wire format).")
+    parser.add_argument(
+        "--config", type=Path, default=None, help="Optional configs/rig.yaml override."
+    )
+    parser.add_argument(
+        "--print-raw",
+        action="store_true",
+        help="Dump the first received raw JSON frame (verify wire format).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(

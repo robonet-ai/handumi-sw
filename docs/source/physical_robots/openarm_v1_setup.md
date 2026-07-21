@@ -13,7 +13,7 @@ Before enabling or calibrating motors:
 - Clear the complete arm workspace and keep the emergency stop reachable.
 - Connect and power both arms, but stop every teleoperation process.
 - Install `openarm-can-cli`, the OpenArm v1 zero-position calibrator, and the
-  Python bindings with `uv sync --extra openarm`.
+  Python bindings with `uv sync --group openarm-source`.
 - Provide two SocketCAN interfaces, normally `can0` and `can1`.
 - Configure motor IDs J1-J8 as send IDs `0x01-0x08`, with receive IDs
   `0x11-0x18`, on each arm.
@@ -31,7 +31,7 @@ while teleoperation is active.
 Run the guided setup. For a PICO rig without Feetech gripper sensing:
 
 ```bash
-uv sync --extra openarm
+uv sync --group openarm-source
 uv run handumi-setup-hardware \
   --robot openarmv1 \
   --device pico \

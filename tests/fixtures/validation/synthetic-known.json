@@ -1,0 +1,9 @@
+{
+  "schema": "handumi_test001_synthetic_v1",
+  "transform": {"target": "handumi_world", "source": "mocap", "pose7": [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]},
+  "points_mocap": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+  "points_handumi_world": [[1.0, 2.0, 3.0], [2.0, 2.0, 3.0]],
+  "position_error_m": 0.01,
+  "temporal_offset_samples": 2,
+  "dropout_reasons": [null, "transport_gap", "transport_gap", null, "invalid_tracking", null]
+}

@@ -24,16 +24,16 @@ from pathlib import Path
 
 import numpy as np
 
+from handumi.sim.scene import SCENES_DIR
+
 log = logging.getLogger(__name__)
 
 try:
-    import mujoco
+    import mujoco  # pyright: ignore[reportMissingImports]
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "mujoco is required for --scene physics. Install with: uv sync"
     ) from exc
-
-from handumi.sim.scene import SCENES_DIR
 
 
 def _build_model(
@@ -63,7 +63,9 @@ def _build_model(
         scene_spec = mujoco.MjSpec.from_file(str(scene_xml))
         # Every MjSpec has an implicit unnamed root "world" body — skip it.
         scene_body_names = [
-            body.name for body in scene_spec.bodies if body.name and body.name != "world"
+            body.name
+            for body in scene_spec.bodies
+            if body.name and body.name != "world"
         ]
         frame = robot_spec.worldbody.add_frame(pos=list(scene_position))
         robot_spec.attach(scene_spec, frame=frame, prefix="")

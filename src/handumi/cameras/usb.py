@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 
 import numpy as np
 
@@ -15,6 +15,10 @@ from handumi.config import load_rig_section
 log = logging.getLogger("handumi.record")
 
 CameraSpec = dict[str, Any]
+
+
+class CameraSampleSource(Protocol):
+    def sample_at(self, target_time_ns: int) -> CameraSample: ...
 
 
 def build_camera_specs(
@@ -67,10 +71,7 @@ def resolve_camera_ids(
         return cam_ids
     defaults = {"left_wrist": 0, "right_wrist": 2, "workspace": 4}
     data = load_rig_section(rig_config, "cameras")
-    return [
-        _read_camera_value(data, name, defaults.get(name, 0))
-        for name in names
-    ]
+    return [_read_camera_value(data, name, defaults.get(name, 0)) for name in names]
 
 
 def connect_cameras(
@@ -107,7 +108,7 @@ def connect_cameras(
 
 
 def read_camera_frames(
-    cameras: list[CameraDevice | None],
+    cameras: Sequence[CameraDevice | None],
     cam_names: list[str],
     *,
     width: int,
@@ -125,7 +126,7 @@ def read_camera_frames(
 
 
 def read_camera_samples(
-    cameras: list[CameraDevice | None],
+    cameras: Sequence[CameraSampleSource | None],
     cam_names: list[str],
     *,
     target_time_ns: int,

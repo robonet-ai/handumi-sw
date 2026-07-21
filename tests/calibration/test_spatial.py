@@ -32,7 +32,9 @@ def _transform(translation, rotvec) -> np.ndarray:
     return value
 
 
-def _synthetic_views() -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray, np.ndarray]:
+def _synthetic_views() -> tuple[
+    list[np.ndarray], list[np.ndarray], np.ndarray, np.ndarray
+]:
     rng = np.random.default_rng(7)
     controller_from_camera = _transform([0.03, -0.02, 0.08], [0.2, -0.1, 0.05])
     quest_from_board = _transform([0.4, 0.2, 0.7], [0.1, 0.2, -0.3])

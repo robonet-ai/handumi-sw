@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from scipy.spatial.transform import Rotation
 
 from handumi.calibration.spatial import CameraIntrinsics, CharucoBoardSpec
+from handumi.cameras.base import CameraSample
 from handumi.robots.utils import mat_to_pose7
 from handumi.scripts.setup.calibrate_spatial import (
+    _assert_fresh_camera_sample,
     _controller_is_stable,
     _init_rerun_view,
     _log_camera_model,
@@ -33,6 +36,35 @@ def test_controller_stability_tolerates_tracking_jitter_but_not_motion():
 
     assert _controller_is_stable(_rotation_pose(2.0), reference)
     assert not _controller_is_stable(_rotation_pose(10.0), reference)
+
+
+def test_calibration_fails_closed_on_stale_camera_frame():
+    sample = CameraSample(
+        image=np.zeros((8, 8, 3), dtype=np.uint8),
+        capture_time_ns=1_000_000_000,
+        sequence=7,
+    )
+
+    with pytest.raises(SystemExit, match="Camera stream stalled"):
+        _assert_fresh_camera_sample(
+            sample,
+            now_ns=2_100_000_000,
+            timeout_s=1.0,
+        )
+
+
+def test_calibration_accepts_fresh_camera_frame():
+    sample = CameraSample(
+        image=np.zeros((8, 8, 3), dtype=np.uint8),
+        capture_time_ns=1_000_000_000,
+        sequence=7,
+    )
+
+    _assert_fresh_camera_sample(
+        sample,
+        now_ns=1_900_000_000,
+        timeout_s=1.0,
+    )
 
 
 def test_rerun_calibration_archetypes_are_valid():

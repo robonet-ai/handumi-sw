@@ -14,10 +14,12 @@ frames", ...) are on by default — pass --no-sounds to disable them. Without
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import logging
 import os
+import queue
 import select
 import signal
 import sys
@@ -25,12 +27,29 @@ import termios
 import threading
 import time
 import tty
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Iterable, Protocol, Sequence, cast
 
 import numpy as np
 import yaml
 
+from handumi.body import (
+    AnthropometricTable,
+    BodyProfile,
+    CanonicalBodyFrame,
+    KinematicComEstimator,
+    NeutralCalibrationCapture,
+    ProfileConstrainedSkeleton,
+    ProfileNeutralCalibration,
+    canonical_body_features,
+    canonical_body_from_packet,
+    canonical_body_metadata,
+    estimate_profile_neutral_calibration,
+    persist_neutral_calibration_capture,
+    validate_neutral_capture,
+)
 from handumi.calibration.control_tcp import (
     ControllerTcpCalibration,
     calibration_path_for_device,
@@ -59,6 +78,7 @@ from handumi.dataset.raw import (
     raw_state_feature,
     raw_tracking_features,
 )
+from handumi.dataset.tracking_sidecar import TrackingSidecarWriter
 from handumi.feetech import (
     FeetechGripperPair,
     FeetechGripperSampler,
@@ -68,17 +88,38 @@ from handumi.feetech import (
     user_calibration_path,
     zero_gripper_widths,
 )
+from handumi.feetech.gripper import GripperWidthSource
 from handumi.feetech.bus import FeetechUnavailableError
 from handumi.robots.utils import IDENTITY_POSE7
+from handumi.reliability import (
+    CaptureSession,
+    CaptureStorageError,
+    StageProfiler,
+    check_disk_space,
+    hash_configuration,
+    recover_interrupted_sessions,
+    resolve_capture_profile,
+)
 from handumi.synchronization import (
     SustainedHealthGate,
     capture_timing_frame,
     synchronized_gripper_frame,
     tracking_sample_at,
 )
-from handumi.tracking.base import ControllerPairSample, TrackingProvider
+from handumi.teleop.recording_viewer import (
+    QueuedRecorderRobotViewer,
+    RecorderRobotFrame,
+    RecorderRobotSink,
+    RecorderRobotViewerConfig,
+)
+from handumi.tracking.base import (
+    ControllerPairSample,
+    TrackingProvider,
+    TrackingSampleSource,
+)
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.tracking.meta_quest import MetaQuestConfig, MetaQuestTrackingProvider
+from handumi.tracking.packet import TrackingPacket
 from handumi.tracking.pico import (
     START_BUTTON_CHOICES,
     PicoTrackingProvider,
@@ -86,10 +127,9 @@ from handumi.tracking.pico import (
     wait_for_manual_start,
     wait_for_start_button,
 )
-from handumi.tracking.transforms import Pose
+from handumi.tracking.transforms import HandumiWorldCalibration, Pose
 from handumi.utils.speech import log_say
-from handumi.utils.trajectory import TrajectoryTrail
-from handumi.visualization import BACKGROUND_COLOR, LEFT_COLOR, RIGHT_COLOR
+from handumi.visualization.controller_trajectory import initialize_rerun
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,8 +139,33 @@ logging.basicConfig(
 log = logging.getLogger("handumi.record")
 
 ROBOT_CONFIG_DIR = Path("configs/robots")
-_RERUN_TRAIL_SECONDS = 10.0
-_RERUN_CHART_WINDOW_S = 20.0
+
+
+class _TrackingSidecarSink(Protocol):
+    def drain_provider(self, provider: object) -> int: ...
+
+    def consume_frame_epoch_change(self) -> object | None: ...
+
+    def nearest_packet(self, target_time_ns: int) -> TrackingPacket | None: ...
+
+
+class _BodyEstimator(Protocol):
+    def estimate(self, frame: CanonicalBodyFrame) -> CanonicalBodyFrame: ...
+
+
+class _RerunSink(Protocol):
+    def log(
+        self,
+        cam_frames: dict,
+        sample: ControllerPairSample,
+        widths: GripperWidths,
+        *,
+        body_frame: CanonicalBodyFrame | None = None,
+    ) -> None: ...
+
+
+class _RobotFrameSink(Protocol):
+    def submit(self, frame: RecorderRobotFrame) -> bool: ...
 
 
 class _EscapeStopListener:
@@ -152,11 +217,36 @@ class _EscapeStopListener:
             self._original = None
 
 
+def _wait_for_enter(
+    stop_event: threading.Event,
+    prompt: str,
+    *,
+    fd: int | None = None,
+) -> bool:
+    """Wait for a newline while remaining responsive to graceful-stop signals."""
+    input_fd = sys.stdin.fileno() if fd is None else fd
+    print(prompt, end="", flush=True)
+    while not stop_event.is_set():
+        readable, _, _ = select.select([input_fd], [], [], 0.1)
+        if not readable:
+            continue
+        value = os.read(input_fd, 1)
+        if value == b"":
+            print()
+            return False
+        if value in (b"\n", b"\r"):
+            return True
+    print()
+    return False
+
+
 def build_features(
     cam_names: list[str],
     cam_width: int,
     cam_height: int,
     use_videos: bool,
+    *,
+    include_body: bool = True,
 ) -> dict:
     img_dtype = "video" if use_videos else "image"
     features: dict = {}
@@ -172,7 +262,183 @@ def build_features(
     features.update(raw_tracking_features())
     features.update(capture_timing_features())
     features.update(camera_health_features(cam_names))
+    if include_body:
+        features.update(canonical_body_features())
     return features
+
+
+def _discard_tracking_backlog(provider: object) -> int:
+    """Drop native-rate packets received before the recording gate opened."""
+    drain = getattr(provider, "drain_packets", None)
+    if not callable(drain):
+        return 0
+    packets = cast(Iterable[object], drain())
+    try:
+        discarded = len(cast(Sequence[object], packets))
+    except TypeError:
+        discarded = sum(1 for _ in packets)
+    if discarded:
+        log.info("Discarded %d pre-episode tracking packets.", discarded)
+    return discarded
+
+
+def _body_calibration_from_workspace(
+    workspace_from_device_pose: np.ndarray,
+    *,
+    device: str,
+    qualified: bool,
+) -> HandumiWorldCalibration:
+    """Use the controller workspace for body geometry and its source ground."""
+    value = np.asarray(workspace_from_device_pose, dtype=np.float64).reshape(7)
+    world_from_source = Pose(value[:3], value[3:])
+    rotation = world_from_source.as_matrix()[:3, :3]
+    normal = rotation @ np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+    offset = -float(np.dot(normal, world_from_source.position))
+    return HandumiWorldCalibration(
+        world_from_source,
+        ground_plane=np.concatenate([normal, [offset]]),
+        source_frame=f"{device}_right_handed_source",
+        qualified=qualified,
+    )
+
+
+def build_body_estimator(args: argparse.Namespace) -> KinematicComEstimator | None:
+    profile_path = getattr(args, "body_profile", None)
+    height_m = getattr(args, "body_height_m", None)
+    mass_kg = getattr(args, "body_mass_kg", None)
+    foot_length_m = getattr(args, "body_foot_length_m", None)
+    foot_width_m = getattr(args, "body_foot_width_m", None)
+    table_path = getattr(args, "anthropometric_table", None)
+
+    direct_values = (height_m, mass_kg, foot_length_m, foot_width_m)
+    if profile_path is not None and any(value is not None for value in direct_values):
+        raise SystemExit(
+            "--body-profile cannot be combined with direct --body-*-m values."
+        )
+    if profile_path is not None:
+        try:
+            profile = BodyProfile.from_yaml(profile_path)
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise SystemExit(f"Invalid body profile: {exc}") from exc
+    elif height_m is None and mass_kg is None:
+        if (
+            table_path is not None
+            or foot_length_m is not None
+            or foot_width_m is not None
+        ):
+            raise SystemExit(
+                "Body dimensions and anthropometric tables require both "
+                "--body-height-m and --body-mass-kg, or --body-profile."
+            )
+        return None
+    else:
+        if height_m is None or mass_kg is None:
+            raise SystemExit(
+                "--body-height-m and --body-mass-kg must be provided together."
+            )
+        try:
+            profile = BodyProfile(
+                height_m=height_m,
+                mass_kg=mass_kg,
+                foot_length_m=foot_length_m,
+                foot_width_m=foot_width_m,
+                source="recording_cli",
+            )
+        except ValueError as exc:
+            raise SystemExit(f"Invalid body profile: {exc}") from exc
+
+    try:
+        table = (
+            AnthropometricTable.from_yaml(table_path)
+            if table_path is not None
+            else None
+        )
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise SystemExit(f"Invalid anthropometric table: {exc}") from exc
+    return KinematicComEstimator(profile, table=table)
+
+
+def _capture_profile_neutral_calibration(
+    tracker: TrackingProvider,
+    profile: BodyProfile,
+    *,
+    duration_s: float,
+    stop_event: threading.Event,
+) -> tuple[ProfileNeutralCalibration, NeutralCalibrationCapture]:
+    """Capture a short upright pose without consuming the sidecar queue."""
+    latest_packet = getattr(tracker, "latest_packet", None)
+    if not callable(latest_packet):
+        raise SystemExit(
+            "Selected tracking backend cannot provide native body packets for "
+            "profile neutral calibration."
+        )
+    packet_accessor = cast(Callable[[], TrackingPacket | None], latest_packet)
+    if duration_s <= 0:
+        raise SystemExit("--body-neutral-calibration-s must be greater than zero.")
+
+    log.info(
+        "Stand upright in a neutral or T-pose with both feet on the floor for %.1fs.",
+        duration_s,
+    )
+    source_frames: list[CanonicalBodyFrame] = []
+    hmd_poses: list[np.ndarray] = []
+    packets: list[TrackingPacket] = []
+    seen: set[tuple[int | None, int, int]] = set()
+    deadline = time.monotonic() + duration_s
+    while time.monotonic() < deadline and not stop_event.is_set():
+        packet = packet_accessor()
+        sample = tracker.latest()
+        if packet is None or packet.body is None or not packet.body.active:
+            time.sleep(0.01)
+            continue
+        if (
+            tracker.device == "meta"
+            and packet.body.calibration_state.lower() != "valid"
+        ):
+            raise SystemExit(
+                "Meta body calibration state became invalid during neutral capture; "
+                "complete headset body setup and retry."
+            )
+        if not sample.hmd_tracked:
+            time.sleep(0.01)
+            continue
+        key = (
+            packet.sequence,
+            int(packet.body.source_time_ns),
+            int(packet.body.observation_sequence or -1),
+        )
+        if key in seen:
+            time.sleep(0.005)
+            continue
+        seen.add(key)
+        source_frames.append(canonical_body_from_packet(packet))
+        hmd_poses.append(np.asarray(sample.device_hmd_pose, dtype=np.float64).copy())
+        packets.append(packet)
+        time.sleep(0.005)
+
+    if stop_event.is_set():
+        raise SystemExit("Body neutral calibration interrupted.")
+    min_samples = max(15, min(60, int(round(duration_s * 10.0))))
+    capture = NeutralCalibrationCapture(
+        packets=tuple(packets),
+        device_hmd_poses=tuple(hmd_poses),
+        requested_duration_s=duration_s,
+    )
+    try:
+        validate_neutral_capture(capture, min_samples=min_samples)
+        neutral = estimate_profile_neutral_calibration(
+            source_frames,
+            hmd_poses,
+            profile,
+            source_frame=f"{tracker.device}_right_handed_source",
+            min_samples=min_samples,
+        )
+    except ValueError as exc:
+        raise SystemExit(
+            f"Body neutral calibration failed: {exc}. Stand upright and retry; "
+            "do not record against an unverified floor."
+        ) from exc
+    return neutral, capture
 
 
 def _tuple_shape(feature: dict) -> dict:
@@ -181,7 +447,12 @@ def _tuple_shape(feature: dict) -> dict:
     return feature
 
 
-def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> dict:
+def build_observation(
+    sample: ControllerPairSample,
+    widths: GripperWidths,
+    *,
+    body_frame: CanonicalBodyFrame | None = None,
+) -> dict:
     left_controller = _pose_from_pose7(sample.left_controller_pose)
     right_controller = _pose_from_pose7(sample.right_controller_pose)
     state = pose_to_state_vector(
@@ -190,17 +461,30 @@ def build_observation(sample: ControllerPairSample, widths: GripperWidths) -> di
         widths.left,
         widths.right,
     )
-    return {
+    observation = {
         "observation.state": state,
         "action": state.copy(),
         "observation.feetech.left_ticks": np.array([widths.left_ticks], dtype=np.int64),
-        "observation.feetech.right_ticks": np.array([widths.right_ticks], dtype=np.int64),
-        "observation.feetech.left_width_mm": np.array([widths.left_mm], dtype=np.float32),
-        "observation.feetech.right_width_mm": np.array([widths.right_mm], dtype=np.float32),
-        "observation.feetech.left_normalized": np.array([widths.left_normalized], dtype=np.float32),
-        "observation.feetech.right_normalized": np.array([widths.right_normalized], dtype=np.float32),
+        "observation.feetech.right_ticks": np.array(
+            [widths.right_ticks], dtype=np.int64
+        ),
+        "observation.feetech.left_width_mm": np.array(
+            [widths.left_mm], dtype=np.float32
+        ),
+        "observation.feetech.right_width_mm": np.array(
+            [widths.right_mm], dtype=np.float32
+        ),
+        "observation.feetech.left_normalized": np.array(
+            [widths.left_normalized], dtype=np.float32
+        ),
+        "observation.feetech.right_normalized": np.array(
+            [widths.right_normalized], dtype=np.float32
+        ),
         **sample.tracking_frame(),
     }
+    if body_frame is not None:
+        observation.update(body_frame.observation())
+    return observation
 
 
 def _pose_from_pose7(pose7: np.ndarray) -> Pose:
@@ -213,7 +497,7 @@ def _tracking_healthy(sample: ControllerPairSample) -> bool:
 
 
 def _wait_for_tracking(
-    tracker: TrackingProvider,
+    tracker: TrackingSampleSource,
     stop_event: threading.Event,
     *,
     poll_s: float = 0.05,
@@ -239,122 +523,118 @@ def _wait_for_tracking(
 
 
 class _RecordingRerun:
-    """Live Rerun stream owned by the recorder (never opens another device)."""
+    """Bounded asynchronous Rerun stream owned by the recorder."""
 
     def __init__(self, cam_names: list[str], fps: int) -> None:
-        import rerun as rr
-        import rerun.blueprint as rrb
-        import rerun.datatypes as rdt
-
-        self.rr = rr
-        self.trails = {
-            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-        }
-        self.raw_trails = {
-            "left": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-            "right": TrajectoryTrail(max(2, int(_RERUN_TRAIL_SECONDS * fps))),
-        }
-        self._healthy = True
-        rr.init("handumi_record", spawn=True)
-        rr.log("tracking", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
-        for path, name, color in (
-            ("observation.feetech.left_width_mm", "left_width_mm", LEFT_COLOR),
-            ("observation.feetech.right_width_mm", "right_width_mm", RIGHT_COLOR),
-        ):
-            rr.log(path, rr.SeriesLines(colors=[[*color, 255]], widths=[2.5], names=[name]), static=True)
-
-        corners = [[sx * 0.75, sy * 0.75, sz * 0.4]
-                   for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)]
-        rr.log("tracking/bounds", rr.Points3D(corners, colors=[[128, 100, 100, 90]] * 8, radii=0.004), static=True)
-        recent = rrb.VisibleTimeRanges(rrb.VisibleTimeRange(
-            timeline="log_time",
-            range=rdt.TimeRange(
-                start=rdt.TimeRangeBoundary.cursor_relative(seconds=-_RERUN_CHART_WINDOW_S),
-                end=rdt.TimeRangeBoundary.cursor_relative(seconds=0.0),
-            ),
-        ))
-        chart = rrb.TimeSeriesView(
-            origin="/",
-            contents=["/observation.feetech.left_width_mm", "/observation.feetech.right_width_mm"],
-            name="gripper_width_mm",
-            axis_y=rrb.ScalarAxis(range=(0.0, 90.0)),
-            time_ranges=recent,
-            plot_legend=rrb.Corner2D.LeftTop,
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._frames: queue.Queue[
+            tuple[
+                dict,
+                ControllerPairSample,
+                GripperWidths,
+                CanonicalBodyFrame | None,
+            ]
+        ] = queue.Queue(maxsize=2)
+        self._dropped_frames = 0
+        self._worker: threading.Thread | None = None
+        self.stream = initialize_rerun(
+            "handumi_record",
+            cam_names,
+            fps=fps,
+            spawn=True,
+            recorder_status=True,
+            include_quality=True,
+            on_error=self._on_error,
         )
-        right = chart if not cam_names else rrb.Vertical(
-            rrb.Horizontal(*[
-                rrb.Spatial2DView(origin=f"/observation.images.{name}", name=name)
-                for name in cam_names
-            ]),
-            chart,
-            row_shares=[3, 2],
-        )
-        status = rrb.TextDocumentView(
-            origin="/recording",
-            contents=["/recording/status"],
-            name="recording_status",
-        )
-        rr.send_blueprint(rrb.Blueprint(
-            rrb.Vertical(
-                rrb.Horizontal(
-                    rrb.Spatial3DView(origin="/tracking", name="controller_trajectory",
-                                       background=rrb.Background(color=[*BACKGROUND_COLOR, 255])),
-                    right,
-                    column_shares=[2, 3],
-                ),
-                status,
-                row_shares=[10, 1],
-            ),
-            rrb.BlueprintPanel(state="collapsed"),
-            rrb.SelectionPanel(state="collapsed"),
-            rrb.TimePanel(state="collapsed"),
-        ), make_active=True, make_default=True)
+        if self.stream is not None:
+            self._worker = threading.Thread(
+                target=self._run,
+                name="handumi_rerun",
+                daemon=True,
+            )
+            self._worker.start()
         self.set_status("READY", "Waiting to start the first episode")
+
+    @staticmethod
+    def _on_error(exc: BaseException) -> None:
+        log.error(
+            "Rerun failed; disabling live view while recording continues: %s", exc
+        )
 
     def set_status(self, state: str, detail: str) -> None:
         """Show the current recorder state as a persistent operator flag."""
-        self.rr.log(
-            "recording/status",
-            self.rr.TextDocument(
-                f"# {state}\n\n{detail}", media_type="text/markdown"
-            ),
-        )
+        if self.stream is not None:
+            with self._lock:
+                self.stream.set_status(state, detail)
 
-    def log(self, cam_frames: dict, sample: ControllerPairSample, widths: GripperWidths) -> None:
-        """Log a frame without allowing a viewer problem to stop recording."""
-        if not self._healthy:
+    def log(
+        self,
+        cam_frames: dict,
+        sample: ControllerPairSample,
+        widths: GripperWidths,
+        *,
+        body_frame: CanonicalBodyFrame | None = None,
+    ) -> None:
+        """Queue the newest synchronized frame without blocking capture."""
+        if self.stream is None or self._stop.is_set():
             return
-        rr = self.rr
+        item = (cam_frames, sample, widths, body_frame)
         try:
-            # ``cam_frames`` also contains camera-health scalar fields. Only
-            # image entries belong in Rerun's image archetype.
-            for key, frame in cam_frames.items():
-                if key.startswith("observation.images."):
-                    rr.log(key, rr.Image(frame).compress(jpeg_quality=75))
-            rr.log("observation.feetech.left_width_mm", rr.Scalars(float(widths.left_mm)))
-            rr.log("observation.feetech.right_width_mm", rr.Scalars(float(widths.right_mm)))
-            for side, tcp, raw, color, tracked in (
-                ("left", sample.left_tcp_pose, sample.left_controller_pose, LEFT_COLOR, sample.left_tracked),
-                ("right", sample.right_tcp_pose, sample.right_controller_pose, RIGHT_COLOR, sample.right_tracked),
-            ):
-                if not tracked:
-                    continue
-                trail = self.trails[side]
-                trail.append(tcp[:3])
-                rr.log(f"tracking/{side}/tcp", rr.Points3D([tcp[:3]], colors=[color], radii=0.012))
-                if len(points := trail.points()) >= 2:
-                    rr.log(f"tracking/{side}/trail", rr.LineStrips3D([points], colors=[color], radii=0.003))
-                raw_trail = self.raw_trails[side]
-                raw_trail.append(raw[:3])
-                rr.log(f"tracking/{side}/raw", rr.Points3D([raw[:3]], colors=[[*color, 90]], radii=0.007))
-                if len(raw_points := raw_trail.points()) >= 2:
-                    rr.log(f"tracking/{side}/raw_trail", rr.LineStrips3D(
-                        [raw_points], colors=[[*color, 90]], radii=0.0015
-                    ))
-        except Exception:
-            self._healthy = False
-            log.exception("Rerun failed; disabling live view while recording continues.")
+            self._frames.put_nowait(item)
+        except queue.Full:
+            try:
+                self._frames.get_nowait()
+                self._frames.task_done()
+            except queue.Empty:
+                pass
+            self._dropped_frames += 1
+            try:
+                self._frames.put_nowait(item)
+            except queue.Full:
+                self._dropped_frames += 1
+
+    @property
+    def pending_frames(self) -> int:
+        return self._frames.qsize()
+
+    @property
+    def dropped_frames(self) -> int:
+        return self._dropped_frames
+
+    def close(self, timeout_s: float = 2.0) -> None:
+        """Flush the bounded queue best-effort and stop the worker."""
+        self._stop.set()
+        worker = self._worker
+        if worker is not None:
+            worker.join(timeout=max(0.0, timeout_s))
+            if worker.is_alive():
+                log.warning("Rerun worker did not flush before shutdown.")
+        self._worker = None
+        if self._dropped_frames:
+            log.info(
+                "Rerun dropped %d stale live frames to keep recording responsive.",
+                self._dropped_frames,
+            )
+
+    def _run(self) -> None:
+        while not self._stop.is_set() or not self._frames.empty():
+            try:
+                cam_frames, sample, widths, body_frame = self._frames.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            try:
+                stream = self.stream
+                if stream is not None:
+                    with self._lock:
+                        stream.log_frame(
+                            cam_frames,
+                            sample,
+                            widths,
+                            body_frame=body_frame,
+                        )
+            finally:
+                self._frames.task_done()
 
 
 def record_episode(
@@ -362,8 +642,8 @@ def record_episode(
     dataset,
     cameras: list,
     cam_names: list[str],
-    tracker: TrackingProvider,
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    tracker: TrackingSampleSource,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
     episode_time_s: float,
     fps: int,
     task: str,
@@ -382,7 +662,16 @@ def record_episode(
     camera_stale_timeout_s: float = 0.25,
     gripper_stale_timeout_s: float = 0.10,
     sensor_loss_timeout_s: float = 1.0,
-    rerun: _RecordingRerun | None = None,
+    tracking_sidecar: _TrackingSidecarSink | None = None,
+    world_calibration: HandumiWorldCalibration | None = None,
+    profile_skeleton: ProfileConstrainedSkeleton | None = None,
+    body_estimator: _BodyEstimator | None = None,
+    rerun: _RerunSink | None = None,
+    robot_viewer: _RobotFrameSink | None = None,
+    profiler: StageProfiler | None = None,
+    capture_session: CaptureSession | None = None,
+    minimum_free_bytes: int = 0,
+    disk_check_interval_s: float = 5.0,
 ) -> tuple[int, str]:
     control_interval = 1.0 / fps
     n_frames = 0
@@ -415,10 +704,31 @@ def record_episode(
     sync_lag_ns = int(sync_lag_s * 1e9)
     max_sync_skew_ns = int(max_sync_skew_s * 1e9)
     health_gate = SustainedHealthGate(sensor_loss_timeout_s)
+    next_disk_check = time.monotonic()
 
+    elapsed = 0.0
     while True:
         loop_start = time.perf_counter()
         tracking_now_ns = time.monotonic_ns()
+        disk_now = time.monotonic()
+        if minimum_free_bytes and disk_now >= next_disk_check:
+            try:
+                with (
+                    profiler.measure("disk_space_check")
+                    if profiler is not None
+                    else nullcontext()
+                ):
+                    check_disk_space(
+                        Path(dataset.root), minimum_free_bytes=minimum_free_bytes
+                    )
+            except CaptureStorageError as exc:
+                status = "storage_failure"
+                dataset.clear_episode_buffer()
+                log.error("Capture storage check failed; discarding episode: %s", exc)
+                break
+            if profiler is not None and capture_session is not None:
+                capture_session.checkpoint(profiler, reason="periodic_disk_check")
+            next_disk_check = disk_now + disk_check_interval_s
         if episode_start_ns is None:
             episode_start_ns = tracking_now_ns
         elapsed = loop_start - start_t
@@ -439,13 +749,23 @@ def record_episode(
             break
 
         if manual_control and xrt is not None:
-            start_pressed = read_start_button_value(xrt, start_button) >= start_threshold
-            repeat_pressed = read_start_button_value(xrt, repeat_button) >= start_threshold
-            finish_pressed = read_start_button_value(xrt, finish_button) >= start_threshold
+            start_pressed = (
+                read_start_button_value(xrt, start_button) >= start_threshold
+            )
+            repeat_pressed = (
+                read_start_button_value(xrt, repeat_button) >= start_threshold
+            )
+            finish_pressed = (
+                read_start_button_value(xrt, finish_button) >= start_threshold
+            )
             start_rise = start_pressed and not prev_start
             repeat_rise = repeat_pressed and not prev_repeat
             finish_rise = finish_pressed and not prev_finish
-            prev_start, prev_repeat, prev_finish = start_pressed, repeat_pressed, finish_pressed
+            prev_start, prev_repeat, prev_finish = (
+                start_pressed,
+                repeat_pressed,
+                finish_pressed,
+            )
             if repeat_rise:
                 status = "repeat"
                 dataset.clear_episode_buffer()
@@ -458,16 +778,24 @@ def record_episode(
                 break
 
         target_time_ns = max(episode_start_ns, tracking_now_ns - sync_lag_ns)
-        cam_frames, camera_health = read_camera_samples(
-            cameras,
-            cam_names,
-            target_time_ns=target_time_ns,
-            record_time_ns=tracking_now_ns,
-            width=cam_width,
-            height=cam_height,
-            stale_timeout_s=camera_stale_timeout_s,
-            max_sync_skew_s=max_sync_skew_s,
-        )
+        with (
+            profiler.measure("camera_synchronization", items=len(cameras))
+            if profiler is not None
+            else nullcontext()
+        ):
+            cam_frames, camera_health = read_camera_samples(
+                cameras,
+                cam_names,
+                target_time_ns=target_time_ns,
+                record_time_ns=tracking_now_ns,
+                width=cam_width,
+                height=cam_height,
+                stale_timeout_s=camera_stale_timeout_s,
+                max_sync_skew_s=max_sync_skew_s,
+            )
+        if profiler is not None:
+            with profiler.measure("camera_acquisition", items=len(cam_frames)):
+                pass
         gripper_frame = synchronized_gripper_frame(
             grippers,
             target_time_ns=target_time_ns,
@@ -476,7 +804,54 @@ def record_episode(
             max_sync_skew_s=max_sync_skew_s,
         )
         widths = gripper_frame.widths
-        sample = tracking_sample_at(tracker, target_time_ns)
+        with (
+            profiler.measure("tracking_reception_clock_alignment")
+            if profiler is not None
+            else nullcontext()
+        ):
+            sample = tracking_sample_at(tracker, target_time_ns)
+        body_frame = None
+        if tracking_sidecar is not None:
+            with (
+                profiler.measure("tracking_sidecar_write")
+                if profiler is not None
+                else nullcontext()
+            ):
+                tracking_sidecar.drain_provider(tracker)
+            epoch_event = tracking_sidecar.consume_frame_epoch_change()
+            if epoch_event is not None:
+                epoch_index = getattr(epoch_event, "index", None)
+                epoch_reason = getattr(epoch_event, "reason", None)
+                if not isinstance(epoch_index, int) or not isinstance(
+                    epoch_reason, str
+                ):
+                    raise TypeError("invalid tracking frame epoch event")
+                status = "frame_epoch_changed"
+                dataset.clear_episode_buffer()
+                if body_estimator is not None:
+                    reset_estimator = getattr(body_estimator, "reset", None)
+                    if callable(reset_estimator):
+                        reset_estimator()
+                log.error(
+                    "Tracking frame epoch changed to %d (%s); discarding the "
+                    "episode and requiring calibration review.",
+                    epoch_index,
+                    epoch_reason,
+                )
+                break
+            with (
+                profiler.measure("body_canonicalization_derived_estimation")
+                if profiler is not None
+                else nullcontext()
+            ):
+                body_frame = canonical_body_from_packet(
+                    tracking_sidecar.nearest_packet(target_time_ns),
+                    calibration=world_calibration,
+                )
+                if profile_skeleton is not None:
+                    body_frame = profile_skeleton.apply(body_frame)
+                if body_estimator is not None:
+                    body_frame = body_estimator.estimate(body_frame)
         sample_time_ns = int(sample.aligned_time_ns or sample.pc_monotonic_ns)
         tracking_sync_ok = bool(
             sample_time_ns > 0
@@ -540,16 +915,77 @@ def record_episode(
                 dataset.clear_episode_buffer()
                 break
         if rerun is not None:
-            rerun.log(cam_frames, sample, widths)
-        dataset.add_frame(
-            {
-                **cam_frames,
-                **build_observation(sample, widths),
-                **gripper_frame.frame,
-                **capture_timing_frame(target_time_ns, tracking_now_ns),
-                "task": task,
-            }
-        )
+            # This is the same aligned, already-estimated frame written below.
+            with (
+                profiler.measure("rerun_enqueue")
+                if profiler is not None
+                else nullcontext()
+            ):
+                rerun.log(cam_frames, sample, widths, body_frame=body_frame)
+            if profiler is not None:
+                profiler.queue_depth("rerun", int(getattr(rerun, "pending_frames", 0)))
+        if robot_viewer is not None:
+            try:
+                with (
+                    profiler.measure("viser_robot_ik_enqueue")
+                    if profiler is not None
+                    else nullcontext()
+                ):
+                    robot_viewer.submit(
+                        RecorderRobotFrame(
+                            sample_time_ns=sample_time_ns,
+                            left_tcp_pose=sample.left_tcp_pose,
+                            right_tcp_pose=sample.right_tcp_pose,
+                            left_tracked=sample.left_tracked,
+                            right_tracked=sample.right_tracked,
+                            left_gripper_opening=widths.left_normalized,
+                            right_gripper_opening=widths.right_normalized,
+                        )
+                    )
+                status_reader = getattr(robot_viewer, "status", None)
+                viewer_status = status_reader() if callable(status_reader) else None
+            except Exception as exc:  # noqa: BLE001 - viewer never owns capture.
+                log.exception("Recorder Viser sink failed; recording continues")
+                if rerun is not None:
+                    status_writer = getattr(rerun, "set_status", None)
+                    if callable(status_writer):
+                        status_writer(
+                            "RECORDING",
+                            f"Dataset capture continues; Viser sink failed: {exc}",
+                        )
+            else:
+                if rerun is not None and bool(getattr(viewer_status, "failures", 0)):
+                    status_writer = getattr(rerun, "set_status", None)
+                    if callable(status_writer):
+                        status_writer(
+                            "RECORDING",
+                            "Dataset capture continues; Viser degraded: "
+                            f"{getattr(viewer_status, 'last_error', None)}",
+                        )
+        try:
+            with (
+                profiler.measure("dataset_serialization_writes")
+                if profiler is not None
+                else nullcontext()
+            ):
+                dataset.add_frame(
+                    {
+                        **cam_frames,
+                        **build_observation(sample, widths, body_frame=body_frame),
+                        **gripper_frame.frame,
+                        **capture_timing_frame(target_time_ns, tracking_now_ns),
+                        "task": task,
+                    }
+                )
+        except OSError as exc:
+            if exc.errno != errno.ENOSPC:
+                raise
+            status = "storage_failure"
+            dataset.clear_episode_buffer()
+            log.error(
+                "Storage exhausted while serializing the episode; it was rejected."
+            )
+            break
         n_frames += 1
 
         dt = time.perf_counter() - loop_start
@@ -557,13 +993,34 @@ def record_episode(
         if sleep > 0:
             time.sleep(sleep)
         else:
-            log.warning("Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6))
+            log.warning(
+                "Loop slower than %d Hz (%.1f Hz actual).", fps, 1.0 / max(dt, 1e-6)
+            )
 
+    measured_duration_s = max(0.0, elapsed)
+    if (
+        status == "recorded"
+        and timed
+        and episode_time_s >= 1.0
+        and measured_duration_s >= episode_time_s * 0.95
+        and n_frames < int(measured_duration_s * fps * 0.98)
+    ):
+        status = "profile_unmaintained"
+        dataset.clear_episode_buffer()
+        log.error(
+            "Requested %d Hz row profile was not maintained: %d rows in %.3fs; "
+            "episode rejected.",
+            fps,
+            n_frames,
+            measured_duration_s,
+        )
     return n_frames, status
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Record HandUMI data with PICO or Meta Quest.")
+    p = argparse.ArgumentParser(
+        description="Record HandUMI data with PICO or Meta Quest."
+    )
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument(
         "--rig-config",
@@ -598,6 +1055,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cam-width", type=int, default=640)
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
+    p.add_argument(
+        "--minimum-free-gb",
+        type=float,
+        default=2.0,
+        help="Fail before and during capture if usable disk space falls below this value.",
+    )
+    p.add_argument("--disk-check-interval-s", type=float, default=5.0)
     p.add_argument("--feetech-port", type=str, default=None)
     p.add_argument("--skip-feetech", action="store_true")
     p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
@@ -645,6 +1109,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Open a live Rerun view with recorded cameras, controller/TCP trails, and gripper widths.",
     )
+    p.add_argument(
+        "--viser",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Show recorder-owned robot IK in Viser without opening another "
+            "tracking, camera, or Feetech provider (default: disabled)."
+        ),
+    )
+    p.add_argument(
+        "--viser-host",
+        default="127.0.0.1",
+        help="Viser bind host (default: localhost; use LAN addresses explicitly).",
+    )
+    p.add_argument("--viser-port", type=int, default=8003)
+    p.add_argument(
+        "--viser-anchor",
+        choices=("episode-start", "first-tracked", "disabled"),
+        default="episode-start",
+        help="When the simulated robot establishes its controller/TCP anchor.",
+    )
+    p.add_argument("--viser-anchor-z", type=float, default=None)
+    p.add_argument("--viser-home-pose", default=None)
+    p.add_argument("--viser-scene", default=None)
+    p.add_argument("--viser-queue-size", type=int, default=2)
     p.add_argument("--vcodec", type=str, default="h264")
     p.add_argument("--push-to-hub", action="store_true")
     p.add_argument(
@@ -683,8 +1172,38 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--quest-ip", type=str, default=None)
     p.add_argument("--tcp-port", type=int, default=None)
     p.add_argument("--sync-port", type=int, default=None)
+    p.add_argument(
+        "--body-profile",
+        type=Path,
+        default=None,
+        help=(
+            "YAML body profile with required height_m and mass_kg. Enables "
+            "kinematic CoM/contact estimation."
+        ),
+    )
+    p.add_argument("--body-height-m", type=float, default=None)
+    p.add_argument("--body-mass-kg", type=float, default=None)
+    p.add_argument("--body-foot-length-m", type=float, default=None)
+    p.add_argument("--body-foot-width-m", type=float, default=None)
+    p.add_argument(
+        "--body-neutral-calibration-s",
+        type=float,
+        default=3.0,
+        help=(
+            "Upright neutral/T-pose dwell used to place the experimental body "
+            "floor at z=0 and fit supplied body dimensions (default: 3.0s)."
+        ),
+    )
+    p.add_argument(
+        "--anthropometric-table",
+        type=Path,
+        default=None,
+        help="Optional custom versioned anthropometric segment table YAML.",
+    )
 
-    p.add_argument("--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos")
+    p.add_argument(
+        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+    )
     pico_transport = p.add_mutually_exclusive_group()
     pico_transport.add_argument("--pico-adb", action="store_true")
     pico_transport.add_argument("--pico-wifi", action="store_true")
@@ -716,7 +1235,9 @@ def _validate_args(args: argparse.Namespace) -> None:
         args.start_button = "A"
         log.info("--manual-control set: using PICO A as start/stop button.")
     if args.clap_control and args.skip_feetech:
-        raise SystemExit("--clap-control needs real Feetech widths; drop --skip-feetech.")
+        raise SystemExit(
+            "--clap-control needs real Feetech widths; drop --skip-feetech."
+        )
     if args.clap_control and args.manual_control:
         raise SystemExit("--clap-control and --manual-control are mutually exclusive.")
     if args.tracking_loss_timeout_s <= 0:
@@ -731,6 +1252,16 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
+    if not 0 <= getattr(args, "viser_port", 8003) <= 65535:
+        raise SystemExit("--viser-port must be between 0 and 65535.")
+    if getattr(args, "viser_queue_size", 2) <= 0:
+        raise SystemExit("--viser-queue-size must be greater than zero.")
+    if getattr(args, "minimum_free_gb", 2.0) < 0:
+        raise SystemExit("--minimum-free-gb cannot be negative.")
+    if getattr(args, "disk_check_interval_s", 5.0) <= 0:
+        raise SystemExit("--disk-check-interval-s must be greater than zero.")
+    if not str(getattr(args, "viser_host", "127.0.0.1")).strip():
+        raise SystemExit("--viser-host must not be empty.")
 
 
 def main() -> None:
@@ -738,9 +1269,38 @@ def main() -> None:
     _validate_args(args)
     if args.output_dir is None:
         args.output_dir = _default_output_dir()
+    minimum_free_bytes = int(args.minimum_free_gb * 1024**3)
+    check_disk_space(args.output_dir, minimum_free_bytes=minimum_free_bytes)
+    profiler = StageProfiler()
     play_sounds = not args.no_sounds
 
     camera_names = _selected_camera_names(args)
+    capture_profile = resolve_capture_profile(args.fps, args.cam_fps, len(camera_names))
+    if capture_profile.status != "supported":
+        log.warning(
+            "Capture profile %s is %s: %s",
+            capture_profile.name,
+            capture_profile.status,
+            capture_profile.evidence,
+        )
+    requested_output_dir = Path(args.output_dir)
+    recovered_sessions = recover_interrupted_sessions(requested_output_dir.parent)
+    for recovered_path in recovered_sessions:
+        log.warning(
+            "Preserved interrupted capture as incomplete forensic evidence: %s",
+            recovered_path.name,
+        )
+    capture_session = CaptureSession(
+        requested_output_dir,
+        capture_profile,
+        configuration_hashes=[hash_configuration("rig", args.rig_config)],
+        calibration_hashes=[
+            hash_configuration("controller_tcp", args.controller_tcp_calibration),
+            hash_configuration("session", args.session_calibration),
+            hash_configuration("body_profile", args.body_profile),
+        ],
+    )
+    args.output_dir = capture_session.staging_root
     robot_metadata = _robot_metadata(args.robot)
     calibration_metadata, calibration_source = _recording_tcp_calibration_metadata(
         robot_metadata=robot_metadata,
@@ -749,17 +1309,31 @@ def main() -> None:
     )
     log.info("Controller->TCP setup: %s", calibration_source)
     try:
-        spatial_session_metadata = session_calibration_metadata(args.session_calibration)
+        spatial_session_metadata = session_calibration_metadata(
+            args.session_calibration
+        )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(f"Invalid session calibration: {exc}") from exc
+    body_estimator = build_body_estimator(args)
+    profile_skeleton = (
+        ProfileConstrainedSkeleton(body_estimator.profile)
+        if body_estimator is not None
+        else None
+    )
     log.info("--- Tracking setup ---")
     calibration = ControllerTcpCalibration(
         left=IDENTITY_POSE7.astype(np.float32).copy(),
         right=IDENTITY_POSE7.astype(np.float32).copy(),
         source=None,
     )
-    tracker = build_tracker(args, calibration)
+    tracker = build_tracker(
+        args,
+        calibration,
+        reset_workspace_on_x=body_estimator is None,
+        level_workspace_on_reset=body_estimator is not None,
+    )
     if args.session_calibration is not None:
+        assert spatial_session_metadata is not None
         session_device = str(spatial_session_metadata.get("tracking_device") or "")
         if session_device and session_device != args.device:
             raise SystemExit(
@@ -768,7 +1342,9 @@ def main() -> None:
             )
         set_workspace = getattr(tracker, "set_workspace_from_device_pose", None)
         if set_workspace is None:
-            raise SystemExit("Selected tracking backend cannot apply a table calibration.")
+            raise SystemExit(
+                "Selected tracking backend cannot apply a table calibration."
+            )
         set_workspace(session_table_from_device(args.session_calibration), locked=True)
     tracker.start()
 
@@ -787,6 +1363,10 @@ def main() -> None:
         laptop_cam_name="laptop",
     )
     cam_names = [spec["name"] for spec in camera_specs]
+    # Rerun may launch an external viewer process. Spawn it before OpenCV opens
+    # V4L descriptors so that viewer lifetime cannot keep cameras busy after
+    # the recorder exits.
+    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
     cameras = connect_cameras(
         camera_specs,
         fps=args.cam_fps,
@@ -794,7 +1374,6 @@ def main() -> None:
         height=args.cam_height,
         zero_non_laptop=False,
     )
-    rerun = _RecordingRerun(cam_names, args.fps) if args.rerun else None
 
     log.info("--- Feetech setup ---")
     gripper_pair = connect_feetech(args)
@@ -823,6 +1402,32 @@ def main() -> None:
         vcodec=args.vcodec,
     )
     log.info("Dataset created at: %s", dataset.root)
+    tracking_sidecar = TrackingSidecarWriter(dataset.root)
+    robot_viewer: RecorderRobotSink | None = None
+    if args.viser:
+        robot_viewer = QueuedRecorderRobotViewer(
+            RecorderRobotViewerConfig(
+                robot=args.robot,
+                device=args.device,
+                host=args.viser_host,
+                port=args.viser_port,
+                rig_config=args.rig_config,
+                home_pose=args.viser_home_pose,
+                scene=args.viser_scene,
+                anchor_mode=args.viser_anchor,
+                anchor_z=args.viser_anchor_z,
+                queue_size=args.viser_queue_size,
+            )
+        )
+    world_calibration = HandumiWorldCalibration.identity(
+        source_frame=f"{args.device}_right_handed_source",
+        qualified=False,
+    )
+    neutral_calibration_metadata: dict | None = None
+    neutral_calibration_artifacts: list[dict] = []
+    tracking_workspace = (
+        "table" if spatial_session_metadata is not None else "hmd_recentered"
+    )
 
     stop_event = threading.Event()
 
@@ -840,30 +1445,43 @@ def main() -> None:
     clap_detector = DoubleClapDetector() if args.clap_control else None
     restart_active = False
     try:
-        while (args.num_episodes <= 0 or recorded < args.num_episodes) and not stop_event.is_set():
+        while (
+            args.num_episodes <= 0 or recorded < args.num_episodes
+        ) and not stop_event.is_set():
             ep_num = dataset.num_episodes + 1
             ep_total = "inf" if args.num_episodes <= 0 else str(args.num_episodes)
             log.info("--- Episode %d/%s ---", ep_num, ep_total)
             if rerun is not None:
-                rerun.set_status("WAITING", f"Episode {ep_num}/{ep_total}: waiting to start")
+                rerun.set_status(
+                    "WAITING", f"Episode {ep_num}/{ep_total}: waiting to start"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "WAITING", f"episode {ep_num}/{ep_total}"
+                )
             if args.clap_control:
                 assert clap_detector is not None
                 if restart_active:
                     restart_active = False
                     log.info("  Restarting episode %d immediately ...", ep_num)
                     if rerun is not None:
-                        rerun.set_status("RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now")
+                        rerun.set_status(
+                            "RESTARTED", f"Episode {ep_num}/{ep_total}: restarting now"
+                        )
                 else:
-                    log.info("  Double-squeeze right gripper to start episode %d ...", ep_num)
+                    log.info(
+                        "  Double-squeeze right gripper to start episode %d ...", ep_num
+                    )
                     if not _wait_for_clap(
                         grippers, clap_detector, stop_event, side="right"
                     ):
                         break
                     # A calibrated table workspace is locked and ignores this
                     # legacy HMD recenter; uncalibrated sessions retain it.
-                    reset_workspace = getattr(tracker, "reset_workspace", None)
-                    if reset_workspace is not None:
-                        reset_workspace()
+                    if body_estimator is None:
+                        reset_workspace = getattr(tracker, "reset_workspace", None)
+                        if reset_workspace is not None:
+                            reset_workspace()
             elif args.manual_control:
                 action = wait_for_manual_start(
                     getattr(tracker, "xrt"),
@@ -875,7 +1493,11 @@ def main() -> None:
                 if action == "finish":
                     break
             elif args.start_button == "enter":
-                input(f"  Press ENTER to start recording episode {ep_num} ...")
+                if not _wait_for_enter(
+                    stop_event,
+                    f"  Press ENTER to start recording episode {ep_num} ...",
+                ):
+                    break
             elif args.device == "pico":
                 if not wait_for_start_button(
                     getattr(tracker, "xrt"),
@@ -885,54 +1507,192 @@ def main() -> None:
                 ):
                     break
             else:
-                raise SystemExit("--start-button other than enter currently requires --device pico.")
+                raise SystemExit(
+                    "--start-button other than enter currently requires --device pico."
+                )
 
             if not _wait_for_tracking(tracker, stop_event):
                 break
+            if profile_skeleton is not None and not profile_skeleton.calibrated:
+                assert body_estimator is not None
+                if spatial_session_metadata is None:
+                    if rerun is not None:
+                        rerun.set_status(
+                            "CALIBRATING",
+                            "Stand upright: fitting experimental body profile and floor",
+                        )
+                    if robot_viewer is not None:
+                        robot_viewer.set_recording_state(
+                            "CALIBRATING", "neutral/profile capture"
+                        )
+                    neutral, neutral_capture = _capture_profile_neutral_calibration(
+                        tracker,
+                        body_estimator.profile,
+                        duration_s=args.body_neutral_calibration_s,
+                        stop_event=stop_event,
+                    )
+                    world_calibration = neutral.world
+                    neutral_frames = [
+                        canonical_body_from_packet(
+                            packet, calibration=world_calibration
+                        )
+                        for packet in neutral_capture.packets
+                    ]
+                    neutral_calibration_metadata = neutral.metadata()
+                    set_workspace = getattr(
+                        tracker, "set_workspace_from_device_pose", None
+                    )
+                    if not callable(set_workspace):
+                        raise SystemExit(
+                            "Selected tracking backend cannot apply the calibrated body world."
+                        )
+                    world_pose = world_calibration.world_from_source
+                    set_workspace(
+                        np.concatenate(
+                            (world_pose.position, world_pose.quaternion)
+                        ).astype(np.float32),
+                        locked=True,
+                    )
+                    tracking_workspace = "profile_neutral_ground"
+                    log.info(
+                        "Experimental profile-assisted floor locked at source z=%.3f m; "
+                        "Rerun ground is z=0.",
+                        neutral.source_ground_height_m,
+                    )
+                else:
+                    alignment_sample = tracker.latest()
+                    world_calibration = _body_calibration_from_workspace(
+                        alignment_sample.workspace_from_device_pose,
+                        device=args.device,
+                        qualified=False,
+                    )
+                    # A table calibration owns the rigid frame. Capture only the
+                    # neutral geometry used by the profile-constrained skeleton.
+                    neutral, neutral_capture = _capture_profile_neutral_calibration(
+                        tracker,
+                        body_estimator.profile,
+                        duration_s=args.body_neutral_calibration_s,
+                        stop_event=stop_event,
+                    )
+                    neutral_frames = [
+                        canonical_body_from_packet(
+                            packet, calibration=world_calibration
+                        )
+                        for packet in neutral_capture.packets
+                    ]
+                    neutral_calibration_metadata = neutral.metadata()
+                try:
+                    profile_skeleton.calibrate(neutral_frames)
+                except ValueError as exc:
+                    raise SystemExit(f"Body profile fitting failed: {exc}") from exc
+                tracking_sidecar.set_frame_calibration(
+                    world_calibration.metadata(),
+                    reason="initial_profile_neutral_calibration",
+                )
+                _, artifact_reference = persist_neutral_calibration_capture(
+                    dataset.root,
+                    neutral_capture,
+                    neutral,
+                    body_estimator.profile,
+                    applied_world=world_calibration,
+                    profile_skeleton=profile_skeleton.metadata(),
+                    frame_epoch=tracking_sidecar.frame_epoch,
+                    frame_epoch_reason="initial_profile_neutral_calibration",
+                    neutral_world_applied=spatial_session_metadata is None,
+                )
+                neutral_calibration_artifacts.append(artifact_reference)
+            _discard_tracking_backlog(tracker)
+            if body_estimator is not None:
+                if profile_skeleton is None or not profile_skeleton.calibrated:
+                    alignment_sample = tracker.latest()
+                    world_calibration = _body_calibration_from_workspace(
+                        alignment_sample.workspace_from_device_pose,
+                        device=args.device,
+                        qualified=False,
+                    )
+                log.info(
+                    "Body/controller visualization locked to %s.",
+                    tracking_workspace,
+                )
+                body_estimator.reset()
+                tracking_sidecar.set_frame_calibration(
+                    world_calibration.metadata(),
+                    reason="recording_world_calibration",
+                )
+            tracking_sidecar.start_episode(dataset.num_episodes)
             log_say(f"Recording episode {ep_num}", play_sounds=play_sounds)
             if rerun is not None:
-                rerun.set_status("RECORDING", f"Episode {ep_num}/{ep_total} is being recorded")
-            n_frames, status = record_episode(
-                dataset=dataset,
-                cameras=cameras,
-                cam_names=cam_names,
-                tracker=tracker,
-                grippers=grippers,
-                episode_time_s=args.episode_time_s,
-                fps=args.fps,
-                task=args.task,
-                cam_width=args.cam_width,
-                cam_height=args.cam_height,
-                stop_event=stop_event,
-                manual_control=args.manual_control,
-                start_button=args.start_button,
-                repeat_button=args.repeat_button,
-                finish_button=args.finish_button,
-                start_threshold=args.start_threshold,
-                clap_detector=clap_detector,
-                tracking_loss_timeout_s=args.tracking_loss_timeout_s,
-                sync_lag_s=args.sync_lag_s,
-                max_sync_skew_s=args.max_sync_skew_s,
-                camera_stale_timeout_s=args.camera_stale_timeout_s,
-                gripper_stale_timeout_s=args.gripper_stale_timeout_s,
-                sensor_loss_timeout_s=args.sensor_loss_timeout_s,
-                rerun=rerun,
-            )
+                rerun.set_status(
+                    "RECORDING", f"Episode {ep_num}/{ep_total} is being recorded"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "RECORDING", f"episode {ep_num}/{ep_total}"
+                )
+            try:
+                n_frames, status = record_episode(
+                    dataset=dataset,
+                    cameras=cameras,
+                    cam_names=cam_names,
+                    tracker=tracker,
+                    grippers=grippers,
+                    episode_time_s=args.episode_time_s,
+                    fps=args.fps,
+                    task=args.task,
+                    cam_width=args.cam_width,
+                    cam_height=args.cam_height,
+                    stop_event=stop_event,
+                    manual_control=args.manual_control,
+                    start_button=args.start_button,
+                    repeat_button=args.repeat_button,
+                    finish_button=args.finish_button,
+                    start_threshold=args.start_threshold,
+                    clap_detector=clap_detector,
+                    tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                    sync_lag_s=args.sync_lag_s,
+                    max_sync_skew_s=args.max_sync_skew_s,
+                    camera_stale_timeout_s=args.camera_stale_timeout_s,
+                    gripper_stale_timeout_s=args.gripper_stale_timeout_s,
+                    sensor_loss_timeout_s=args.sensor_loss_timeout_s,
+                    tracking_sidecar=tracking_sidecar,
+                    world_calibration=world_calibration,
+                    profile_skeleton=profile_skeleton,
+                    body_estimator=body_estimator,
+                    rerun=rerun,
+                    robot_viewer=robot_viewer,
+                    profiler=profiler,
+                    capture_session=capture_session,
+                    minimum_free_bytes=minimum_free_bytes,
+                    disk_check_interval_s=args.disk_check_interval_s,
+                )
+            except BaseException:
+                tracking_sidecar.finish_episode(status="interrupted", provider=tracker)
+                raise
             if status == "repeat":
-                log.warning("Episode restart requested (%d frames discarded).", n_frames)
+                log.warning(
+                    "Episode restart requested (%d frames discarded).", n_frames
+                )
                 log_say("Restart recording", play_sounds=play_sounds)
                 if rerun is not None:
                     rerun.set_status(
                         "RESTARTED",
                         f"Episode {ep_num}/{ep_total}: {n_frames} frames discarded; restarting",
                     )
+                if robot_viewer is not None:
+                    robot_viewer.set_recording_state(
+                        "RESTARTED", f"{n_frames} frames discarded"
+                    )
                 dataset.clear_episode_buffer()
+                tracking_sidecar.finish_episode(status="discarded", provider=tracker)
                 restart_active = True
                 continue
             if n_frames == 0 or status in {
+                "frame_epoch_changed",
                 "tracking_lost",
                 "sensor_unhealthy",
                 "interrupted",
+                "storage_failure",
+                "profile_unmaintained",
             }:
                 log.warning("Episode discarded (%s, %d frames).", status, n_frames)
                 log_say("Episode discarded", play_sounds=play_sounds)
@@ -941,38 +1701,103 @@ def main() -> None:
                         "DISCARDED",
                         f"Episode {ep_num}/{ep_total}: {status} after {n_frames} frames",
                     )
+                if robot_viewer is not None:
+                    robot_viewer.set_recording_state(
+                        "DISCARDED", f"{status} after {n_frames} frames"
+                    )
                 dataset.clear_episode_buffer()
+                tracking_sidecar.finish_episode(status="discarded", provider=tracker)
+                if status == "frame_epoch_changed":
+                    if profile_skeleton is not None:
+                        profile_skeleton.invalidate()
+                    world_calibration = HandumiWorldCalibration.identity(
+                        source_frame=f"{args.device}_right_handed_source",
+                        qualified=False,
+                    )
+                    if spatial_session_metadata is not None:
+                        log.error(
+                            "The tracking source frame changed after table calibration; "
+                            "stop and create a new spatial session calibration."
+                        )
+                        break
                 if status in {"finish", "interrupted"}:
                     break
                 continue
-            dataset.save_episode()
+            try:
+                with profiler.measure("video_encoding_dataset_episode_write"):
+                    dataset.save_episode()
+            except OSError as exc:
+                if exc.errno == errno.ENOSPC:
+                    raise CaptureStorageError(
+                        "storage exhausted while closing episode; partial data is not complete"
+                    ) from exc
+                raise
+            tracking_sidecar.finish_episode(status="recorded", provider=tracker)
             recorded += 1
             log.info("Episode %d saved (%d frames).", ep_num, n_frames)
-            log_say(f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds)
+            log_say(
+                f"Episode {ep_num} saved, {n_frames} frames", play_sounds=play_sounds
+            )
             if rerun is not None:
                 rerun.set_status(
                     "SAVED", f"Episode {ep_num}/{ep_total}: {n_frames} frames saved"
+                )
+            if robot_viewer is not None:
+                robot_viewer.set_recording_state(
+                    "SAVED", f"episode {ep_num}/{ep_total}; {n_frames} frames"
                 )
             if status == "finish":
                 break
     finally:
         escape_listener.stop()
         if rerun is not None:
-            rerun.set_status("STOPPED", f"Recording stopped: {recorded} episode(s) saved")
+            rerun.set_status(
+                "STOPPED", f"Recording stopped: {recorded} episode(s) saved"
+            )
+        if robot_viewer is not None:
+            robot_viewer.set_recording_state("STOPPED", f"{recorded} episode(s) saved")
         log_say("Stop recording", play_sounds=play_sounds, blocking=True)
         log.info("--- Finalising ---")
         finalization_error: BaseException | None = None
         try:
-            dataset.finalize()
+            with profiler.measure("dataset_finalization"):
+                dataset.finalize()
             root = Path(dataset.root)
+            body_metadata = canonical_body_metadata(
+                transforms=[world_calibration.metadata()]
+            )
+            com_estimator_metadata = (
+                body_estimator.metadata()
+                if body_estimator is not None
+                else {
+                    "schema": "handumi_kinematic_com_v1",
+                    "enabled": False,
+                    "reason": "body_profile_not_supplied",
+                }
+            )
+            if profile_skeleton is not None:
+                com_estimator_metadata["profile_constrained_skeleton"] = (
+                    profile_skeleton.metadata()
+                )
+            if neutral_calibration_metadata is not None:
+                body_metadata["neutral_calibration"] = neutral_calibration_metadata
+            if neutral_calibration_artifacts:
+                body_metadata["neutral_calibration_artifacts"] = (
+                    neutral_calibration_artifacts
+                )
+            body_metadata["estimator_version"] = (
+                com_estimator_metadata["schema"]
+                if body_estimator is not None
+                else "not_run"
+            )
+            body_metadata["com_estimator"] = com_estimator_metadata
+            body_tracking_schema = body_metadata.pop("tracking_schema")
             updated_info = _update_info_json(
                 root,
                 {
                     "recording_device": args.device,
                     "tracking_schema": HANDUMI_TRACKING_SCHEMA,
-                    "tracking_workspace": (
-                        "table" if spatial_session_metadata is not None else "hmd_recentered"
-                    ),
+                    "tracking_workspace": tracking_workspace,
                     "state_semantics": HANDUMI_STATE_SEMANTICS,
                     "capture_schema": HANDUMI_CAPTURE_SCHEMA,
                     "sync_lag_s": args.sync_lag_s,
@@ -989,6 +1814,28 @@ def main() -> None:
                     "controller_tcp_calibration": calibration_metadata,
                     "spatial_session_calibration": spatial_session_metadata,
                     "target_robot": robot_metadata,
+                    "robot_viewer": (
+                        {
+                            "enabled": True,
+                            "robot": args.robot,
+                            "host": args.viser_host,
+                            "port": args.viser_port,
+                            "anchor_mode": args.viser_anchor,
+                            "home_pose": args.viser_home_pose,
+                            "scene": args.viser_scene,
+                            "status": robot_viewer.status().__dict__,
+                            "raw_recording_robot_agnostic": True,
+                        }
+                        if robot_viewer is not None
+                        else {"enabled": False}
+                    ),
+                    "body_tracking_schema": body_tracking_schema,
+                    "canonical_body": body_metadata,
+                    "tracking_sidecar": {
+                        "schema": "handumi_tracking_sidecar_v1",
+                        "manifest": "raw/tracking/manifest.json",
+                        "frame_epochs": tracking_sidecar.frame_epoch_metadata(),
+                    },
                 },
             )
             if updated_info is not None:
@@ -1001,30 +1848,61 @@ def main() -> None:
             )
             _validate_finalized_lerobot_dataset(root)
             log.info("LeRobot v3 integrity validation passed.")
+            viewer_failures: list[str] = []
+            if robot_viewer is not None:
+                viewer_status = robot_viewer.status()
+                if viewer_status.last_error:
+                    viewer_failures.append(viewer_status.last_error)
+            capture_session.viewer_failures.extend(viewer_failures)
             if args.push_to_hub:
                 dataset.push_to_hub(
                     license=args.dataset_license,
                     tags=["HandUMI"],
-                    **card_kwargs,
+                    **card_kwargs,  # pyright: ignore[reportArgumentType]
                 )
+            with profiler.measure("checksum_generation"):
+                capture_session.complete(profiler)
         except BaseException as exc:
             finalization_error = exc
             log.exception("Dataset finalization failed; do not upload this dataset.")
+            try:
+                capture_session.reject(
+                    profiler,
+                    reason=f"finalization_failed:{type(exc).__name__}",
+                )
+            except BaseException:
+                log.exception(
+                    "Could not promote the failed staging directory to rejected; "
+                    "its incomplete state remains preserved."
+                )
         finally:
+            if robot_viewer is not None:
+                robot_viewer.close()
+            if rerun is not None:
+                rerun.close()
             disconnect_cameras(cameras)
             if grippers is not None:
                 grippers.stop()
             if gripper_pair is not None:
                 gripper_pair.close()
+            tracking_sidecar.close()
             tracker.stop()
         if finalization_error is not None:
             raise finalization_error
-        log.info("Done. Recorded %d episode(s). Dataset at: %s", recorded, dataset.root)
+        log.info(
+            "Done. Recorded %d episode(s). Dataset at: %s",
+            recorded,
+            requested_output_dir,
+        )
         log_say("Exiting", play_sounds=play_sounds)
 
 
 def build_tracker(
-    args: argparse.Namespace, calibration, *, reset_workspace_on_x: bool = True
+    args: argparse.Namespace,
+    calibration,
+    *,
+    reset_workspace_on_x: bool = True,
+    level_workspace_on_reset: bool = False,
 ) -> TrackingProvider:
     if args.device == "pico":
         transport = "wifi" if args.pico_wifi else "adb"
@@ -1042,9 +1920,13 @@ def build_tracker(
         sync_port=args.sync_port if args.sync_port is not None else base.sync_port,
         connect_retry_s=base.connect_retry_s,
         frame_stale_timeout_s=base.frame_stale_timeout_s,
+        packet_queue_size=base.packet_queue_size,
     )
     return MetaQuestTrackingProvider(
-        config=config, calibration=calibration, reset_workspace_on_x=reset_workspace_on_x
+        config=config,
+        calibration=calibration,
+        reset_workspace_on_x=reset_workspace_on_x,
+        level_workspace_on_reset=level_workspace_on_reset,
     )
 
 
@@ -1071,7 +1953,7 @@ def connect_feetech(args: argparse.Namespace) -> FeetechGripperPair | None:
 
 
 def _wait_for_clap(
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
     clap_detector: DoubleClapDetector,
     stop_event: threading.Event,
     *,
@@ -1090,7 +1972,7 @@ def _wait_for_clap(
 
 
 def _latest_gripper_widths(
-    grippers: FeetechGripperSampler | FeetechGripperPair | None,
+    grippers: FeetechGripperSampler | GripperWidthSource | None,
 ) -> GripperWidths:
     if grippers is None:
         return zero_gripper_widths()
@@ -1134,7 +2016,7 @@ def _selected_camera_names(args: argparse.Namespace) -> list[str]:
 
 def _capture_sources_metadata(
     camera_specs: list[dict[str, object]],
-    cameras: list[object | None],
+    cameras: Sequence[object | None],
     grippers: object | None,
 ) -> dict[str, object]:
     """Store source enablement once instead of repeating it on every row."""
@@ -1148,7 +2030,9 @@ def _capture_sources_metadata(
     }
 
 
-def _robot_metadata(name: str, config_dir: Path = ROBOT_CONFIG_DIR) -> dict[str, object]:
+def _robot_metadata(
+    name: str, config_dir: Path = ROBOT_CONFIG_DIR
+) -> dict[str, object]:
     path = config_dir / f"{name}.yaml"
     if not path.exists():
         available = ", ".join(sorted(item.stem for item in config_dir.glob("*.yaml")))
@@ -1178,7 +2062,9 @@ def _recording_tcp_calibration_metadata(
         raise SystemExit(f"Robot {robot!r} has invalid configuration metadata.")
 
     configured = configuration.get("controller_tcp_calibrations") or {}
-    configured_path_value = configured.get(device) if isinstance(configured, dict) else None
+    configured_path_value = (
+        configured.get(device) if isinstance(configured, dict) else None
+    )
     associated_with_robot_tool = configured_path_value is not None
     if explicit_path is not None:
         calibration_path = explicit_path
@@ -1226,9 +2112,7 @@ def _validate_unique_camera_ids(
     camera_ids: list[int | str],
 ) -> None:
     duplicates = {
-        camera_id
-        for camera_id in camera_ids
-        if camera_ids.count(camera_id) > 1
+        camera_id for camera_id in camera_ids if camera_ids.count(camera_id) > 1
     }
     if duplicates:
         mappings = ", ".join(
@@ -1346,10 +2230,14 @@ def _validate_finalized_lerobot_dataset(root: Path) -> None:
         if isinstance(feature, dict) and feature.get("dtype") == "video"
     ]
     missing_videos = [
-        key for key in video_keys if not list((root / "videos" / key).glob("chunk-*/*.mp4"))
+        key
+        for key in video_keys
+        if not list((root / "videos" / key).glob("chunk-*/*.mp4"))
     ]
     if missing_videos:
-        raise RuntimeError(f"Dataset is missing videos for: {', '.join(missing_videos)}.")
+        raise RuntimeError(
+            f"Dataset is missing videos for: {', '.join(missing_videos)}."
+        )
 
 
 def _camera_arg(value: str) -> int | str:

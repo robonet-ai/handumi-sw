@@ -14,23 +14,31 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from handumi.cameras.base import CameraSample
+from handumi.body.model import CanonicalBodyFrame
 from handumi.feetech import GripperWidths
 from handumi.scripts.record import (
+    _RecordingRerun,
+    _body_calibration_from_workspace,
+    _wait_for_enter,
     _capture_sources_metadata,
     _default_output_dir,
     _EscapeStopListener,
     _recording_tcp_calibration_metadata,
     _robot_metadata,
     _selected_camera_names,
+    _discard_tracking_backlog,
     _validate_args,
     _validate_finalized_lerobot_dataset,
     _validate_unique_camera_ids,
     _wait_for_clap,
     _wait_for_tracking,
+    build_features,
     _write_dataset_readme,
+    build_body_estimator,
     build_observation,
     record_episode,
 )
+from handumi.teleop.recording_viewer import RecorderRobotViewerStatus
 from handumi.tracking.base import ControllerPairSample
 from handumi.tracking.gestures import DoubleClapDetector
 
@@ -93,6 +101,77 @@ class _FakeDataset:
         self.frames.clear()
 
 
+class TrackingBacklogTest(unittest.TestCase):
+    def test_pre_episode_packets_are_drained_without_a_sidecar_write(self):
+        provider = mock.Mock()
+        provider.drain_packets.return_value = [object(), object(), object()]
+
+        self.assertEqual(_discard_tracking_backlog(provider), 3)
+        provider.drain_packets.assert_called_once_with()
+
+    def test_provider_without_native_packet_stream_is_unchanged(self):
+        self.assertEqual(_discard_tracking_backlog(object()), 0)
+
+
+class BodyWorkspaceAlignmentTest(unittest.TestCase):
+    def test_body_positions_and_ground_use_the_controller_workspace(self):
+        angle = np.pi / 4.0
+        workspace = np.array(
+            [1.0, 2.0, 3.0, 0.0, np.sin(angle), 0.0, np.cos(angle)],
+            dtype=np.float32,
+        )
+        calibration = _body_calibration_from_workspace(
+            workspace,
+            device="meta",
+            qualified=False,
+        )
+
+        source_ground_point = np.array([0.4, -0.2, 0.0])
+        aligned = calibration.apply_position(source_ground_point)
+        np.testing.assert_allclose(
+            np.dot(calibration.ground_plane[:3], aligned) + calibration.ground_plane[3],
+            0.0,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            calibration.world_from_source.position,
+            workspace[:3],
+        )
+
+
+class AsyncRecordingRerunTest(unittest.TestCase):
+    def test_slow_viewer_drops_stale_frames_without_blocking_recording(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class _SlowStream:
+            def set_status(self, state, detail):
+                pass
+
+            def log_frame(self, *args, **kwargs):
+                started.set()
+                release.wait(timeout=2.0)
+
+        stream = _SlowStream()
+        with mock.patch(
+            "handumi.scripts.record.initialize_rerun",
+            return_value=stream,
+        ):
+            viewer = _RecordingRerun([], fps=30)
+
+        sample = ControllerPairSample.empty("meta")
+        widths = _widths(0.0, 0.0)
+        viewer.log({}, sample, widths)
+        self.assertTrue(started.wait(timeout=1.0))
+        for _ in range(10):
+            viewer.log({}, sample, widths)
+
+        self.assertLessEqual(viewer.pending_frames, 2)
+        self.assertGreater(viewer.dropped_frames, 0)
+        release.set()
+        viewer.close()
+
+
 class _HealthyTracker:
     device = "meta"
 
@@ -122,6 +201,28 @@ class _StaleCamera:
             capture_time_ns=target_time_ns - 1_000_000_000,
             sequence=1,
         )
+
+
+class _FakeTrackingSidecar:
+    def drain_provider(self, provider) -> int:
+        return 0
+
+    def nearest_packet(self, target_time_ns: int):
+        return None
+
+    def consume_frame_epoch_change(self) -> object | None:
+        return None
+
+
+class _FakeBodyEstimator:
+    def __init__(self):
+        self.calls = 0
+
+    def estimate(self, frame: CanonicalBodyFrame) -> CanonicalBodyFrame:
+        self.calls += 1
+        frame.whole_com[:] = [0.1, 0.2, 0.3]
+        frame.whole_com_valid[0] = 1
+        return frame
 
 
 def _clap_sequence() -> list[GripperWidths]:
@@ -241,6 +342,14 @@ class RecordArgumentValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "--manual-control"):
             _validate_args(args)
 
+    def test_viser_network_and_queue_values_are_validated(self):
+        with self.assertRaisesRegex(SystemExit, "--viser-port"):
+            _validate_args(self._args(viser_port=65536))
+        with self.assertRaisesRegex(SystemExit, "--viser-queue-size"):
+            _validate_args(self._args(viser_queue_size=0))
+        with self.assertRaisesRegex(SystemExit, "--viser-host"):
+            _validate_args(self._args(viser_host="  "))
+
 
 class RobotMetadataTest(unittest.TestCase):
     def test_snapshots_robot_config_and_hash(self):
@@ -252,8 +361,14 @@ class RobotMetadataTest(unittest.TestCase):
             metadata = _robot_metadata("piper", config_dir)
 
         self.assertEqual(metadata["name"], "piper")
-        self.assertEqual(metadata["configuration"]["kind"], "piper")
-        self.assertEqual(len(metadata["sha256"]), 64)
+        configuration = metadata["configuration"]
+        self.assertIsInstance(configuration, dict)
+        assert isinstance(configuration, dict)
+        self.assertEqual(configuration["kind"], "piper")
+        sha256 = metadata["sha256"]
+        self.assertIsInstance(sha256, str)
+        assert isinstance(sha256, str)
+        self.assertEqual(len(sha256), 64)
 
     def test_robot_tool_tcp_setup_is_snapshotted_with_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,8 +420,12 @@ calibration:
         self.assertEqual(metadata["source_robot"], "piper")
         self.assertEqual(metadata["source_gripper"], "piper_parallel_v1")
         self.assertEqual(metadata["controller_mount"], "handumi_v1")
-        self.assertEqual(len(metadata["sha256"]), 64)
-        self.assertTrue(str(metadata["source_path"]).endswith("meta_controller_tcp.yaml"))
+        sha256 = metadata["sha256"]
+        assert isinstance(sha256, str)
+        self.assertEqual(len(sha256), 64)
+        self.assertTrue(
+            str(metadata["source_path"]).endswith("meta_controller_tcp.yaml")
+        )
         self.assertIn("configured piper/meta", source)
 
 
@@ -399,6 +518,27 @@ class EscapeStopListenerTest(unittest.TestCase):
             listener.stop()
             os.close(master_fd)
             os.close(slave_fd)
+
+
+class WaitForEnterTest(unittest.TestCase):
+    def test_returns_true_when_newline_arrives(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b"\n")
+            self.assertTrue(_wait_for_enter(threading.Event(), "start", fd=read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_returns_false_when_stop_is_already_set(self):
+        read_fd, write_fd = os.pipe()
+        stop = threading.Event()
+        stop.set()
+        try:
+            self.assertFalse(_wait_for_enter(stop, "start", fd=read_fd))
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
 
 
 class WaitForTrackingTest(unittest.TestCase):
@@ -495,6 +635,65 @@ class RecordEpisodeClapControlTest(unittest.TestCase):
 
 
 class RecordEpisodeTrackingGateTest(unittest.TestCase):
+    def test_subsecond_episode_is_not_rejected_as_rate_evidence(self):
+        dataset = _FakeDataset()
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=0.002,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+        )
+
+        self.assertGreater(n_frames, 0)
+        self.assertEqual(status, "recorded")
+
+    def test_frame_epoch_change_discards_before_writing_a_row(self):
+        dataset = _FakeDataset()
+
+        class _ChangedEpochSidecar(_FakeTrackingSidecar):
+            def consume_frame_epoch_change(self):
+                return type(
+                    "Event",
+                    (),
+                    {"index": 2, "reason": "tracking_transport_reconnected"},
+                )()
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=1.0,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            tracking_sidecar=_ChangedEpochSidecar(),
+        )
+
+        self.assertEqual((n_frames, status), (0, "frame_epoch_changed"))
+        self.assertEqual(dataset.frames, [])
+
     def test_sustained_tracking_loss_discards_episode(self):
         dataset = _FakeDataset()
         with (
@@ -560,8 +759,138 @@ class RecordEpisodeTrackingGateTest(unittest.TestCase):
         self.assertEqual(status, "sensor_unhealthy")
         self.assertGreater(n_frames, 0)
 
+    def test_aligned_body_frame_runs_estimator_before_dataset_write(self):
+        dataset = _FakeDataset()
+        estimator = _FakeBodyEstimator()
+        rendered = []
+
+        class _FakeRerun:
+            def log(self, cam_frames, sample, widths, *, body_frame=None):
+                rendered.append(body_frame)
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=0.003,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            tracking_sidecar=_FakeTrackingSidecar(),
+            body_estimator=estimator,
+            rerun=_FakeRerun(),
+        )
+        self.assertEqual(status, "recorded")
+        self.assertEqual(estimator.calls, n_frames)
+        self.assertEqual(len(rendered), n_frames)
+        self.assertTrue(n_frames > 0)
+        for frame in dataset.frames:
+            np.testing.assert_allclose(
+                frame["observation.body.whole_com"], [0.1, 0.2, 0.3]
+            )
+            self.assertEqual(frame["observation.body.whole_com_valid"][0], 1)
+        for frame in rendered:
+            np.testing.assert_allclose(frame.whole_com, [0.1, 0.2, 0.3])
+            self.assertEqual(frame.whole_com_valid[0], 1)
+
+    def test_robot_viewer_receives_the_aligned_row_tcp_and_gripper_sample(self):
+        dataset = _FakeDataset()
+
+        class _Viewer:
+            def __init__(self):
+                self.frames = []
+
+            def submit(self, frame):
+                self.frames.append(frame)
+                return True
+
+            def status(self):
+                return RecorderRobotViewerStatus(lifecycle="ready")
+
+        viewer = _Viewer()
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=_FakeGrippers([_widths(20.0, 60.0)]),
+            episode_time_s=0.003,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            robot_viewer=viewer,
+        )
+
+        self.assertEqual(status, "recorded")
+        self.assertEqual(len(viewer.frames), n_frames)
+        self.assertEqual(len(dataset.frames), n_frames)
+        for robot_frame, row in zip(viewer.frames, dataset.frames, strict=True):
+            np.testing.assert_allclose(
+                robot_frame.left_tcp_pose,
+                np.array([0, 0, 0, 0, 0, 0, 1], dtype=np.float32),
+            )
+            self.assertAlmostEqual(robot_frame.left_gripper_opening, 0.25)
+            self.assertAlmostEqual(robot_frame.right_gripper_opening, 0.75)
+            self.assertEqual(
+                robot_frame.sample_time_ns,
+                int(row["observation.tracking.aligned_time_ns"][0]),
+            )
+
+    def test_robot_viewer_sink_exception_does_not_stop_dataset_capture(self):
+        dataset = _FakeDataset()
+
+        class _FailingViewer:
+            def submit(self, frame):
+                raise RuntimeError("viewer worker unavailable")
+
+        n_frames, status = record_episode(
+            dataset=dataset,
+            cameras=[],
+            cam_names=[],
+            tracker=_HealthyTracker(),
+            grippers=None,
+            episode_time_s=0.003,
+            fps=1000,
+            task="test",
+            cam_width=64,
+            cam_height=48,
+            stop_event=threading.Event(),
+            manual_control=False,
+            start_button="enter",
+            repeat_button="B",
+            finish_button="Y",
+            start_threshold=0.75,
+            robot_viewer=_FailingViewer(),
+        )
+
+        self.assertEqual(status, "recorded")
+        self.assertEqual(len(dataset.frames), n_frames)
+        self.assertGreater(n_frames, 0)
+
 
 class BuildObservationTest(unittest.TestCase):
+    def test_features_add_body_without_changing_legacy_state_width(self):
+        features = build_features([], 64, 48, False)
+        self.assertEqual(features["observation.state"]["shape"], (16,))
+        self.assertEqual(features["action"]["shape"], (16,))
+        self.assertEqual(features["observation.body.joint_pose"]["shape"], (25, 7))
+
     def test_state_carries_widths_and_tracking_frame(self):
         obs = build_observation(ControllerPairSample.empty("meta"), _widths(11.0, 22.0))
         state = obs["observation.state"]
@@ -572,6 +901,50 @@ class BuildObservationTest(unittest.TestCase):
         self.assertIn("observation.tracking.left_device_controller_pose", obs)
         self.assertEqual(obs["observation.valid"].shape, (8,))
         self.assertNotIn("observation.tracking.left_tcp_pose", obs)
+
+
+class BodyEstimatorConfigurationTest(unittest.TestCase):
+    @staticmethod
+    def _args(**overrides):
+        values = {
+            "body_profile": None,
+            "body_height_m": None,
+            "body_mass_kg": None,
+            "body_foot_length_m": None,
+            "body_foot_width_m": None,
+            "anthropometric_table": None,
+        }
+        values.update(overrides)
+        return argparse.Namespace(**values)
+
+    def test_profile_is_optional_and_missing_values_do_not_invent_com(self):
+        self.assertIsNone(build_body_estimator(self._args()))
+
+    def test_direct_height_and_mass_enable_versioned_estimator(self):
+        estimator = build_body_estimator(
+            self._args(
+                body_height_m=1.80,
+                body_mass_kg=75.0,
+                body_foot_length_m=0.27,
+            )
+        )
+        self.assertIsNotNone(estimator)
+        assert estimator is not None
+        metadata = estimator.metadata()
+        self.assertEqual(metadata["schema"], "handumi_kinematic_com_v1")
+        self.assertEqual(metadata["profile"]["values"]["height_m"], 1.80)
+
+    def test_partial_or_conflicting_profiles_are_rejected(self):
+        with self.assertRaisesRegex(SystemExit, "provided together"):
+            build_body_estimator(self._args(body_height_m=1.80))
+        with self.assertRaisesRegex(SystemExit, "cannot be combined"):
+            build_body_estimator(
+                self._args(
+                    body_profile=Path("profile.yaml"),
+                    body_height_m=1.80,
+                    body_mass_kg=75.0,
+                )
+            )
 
 
 if __name__ == "__main__":

@@ -61,6 +61,13 @@ TRACKING_VALIDITY_NAMES: tuple[str, ...] = (
 )
 
 
+def canonical_body_features() -> dict[str, dict[str, Any]]:
+    """Load optional body feature definitions without a package import cycle."""
+    from handumi.body.model import canonical_body_features as _features
+
+    return _features()
+
+
 def raw_state_feature() -> dict[str, Any]:
     """Return the LeRobot feature metadata for raw state/action vectors."""
     return {
@@ -94,7 +101,9 @@ def raw_tracking_features() -> dict[str, Any]:
     """
     features: dict[str, Any] = {}
     for side in ("left", "right"):
-        features[f"observation.tracking.{side}_device_controller_pose"] = pose7_feature()
+        features[f"observation.tracking.{side}_device_controller_pose"] = (
+            pose7_feature()
+        )
         features[f"observation.tracking.{side}_tracked"] = scalar_feature("int64")
     features["observation.tracking.device_hmd_pose"] = pose7_feature()
     features["observation.tracking.workspace_from_device_pose"] = pose7_feature()
@@ -183,6 +192,7 @@ __all__ = [
     "TRACKING_VALIDITY_NAMES",
     "pose_to_state_vector",
     "camera_health_features",
+    "canonical_body_features",
     "capture_timing_features",
     "feetech_features",
     "pose7_feature",

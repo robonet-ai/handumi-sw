@@ -98,9 +98,7 @@ def _setup_openarm(options: RobotSetupOptions) -> None:
                 dbitrate=settings.dbitrate,
             )
     if options.calibrate_openarm_zero:
-        calibration_executable = shutil.which(
-            "openarm-can-zero-position-calibration"
-        )
+        calibration_executable = shutil.which("openarm-can-zero-position-calibration")
         if calibration_executable is None:
             raise SystemExit(
                 "Missing openarm-can-zero-position-calibration from OpenArm v1."
@@ -110,9 +108,7 @@ def _setup_openarm(options: RobotSetupOptions) -> None:
             "left": ("left_arm", settings.left_port),
         }
         if options.openarm_zero_side not in (*selected, "both"):
-            raise SystemExit(
-                f"Invalid OpenArm zero side: {options.openarm_zero_side}."
-            )
+            raise SystemExit(f"Invalid OpenArm zero side: {options.openarm_zero_side}.")
         side_names = (
             ("right", "left")
             if options.openarm_zero_side == "both"

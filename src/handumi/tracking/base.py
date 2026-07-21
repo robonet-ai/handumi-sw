@@ -112,7 +112,15 @@ class ControllerPairSample:
         }
 
 
-class TrackingProvider(Protocol):
+class TrackingSampleSource(Protocol):
+    device: str
+
+    def latest(self) -> ControllerPairSample:
+        """Return the latest normalized controller pair sample."""
+        ...
+
+
+class TrackingProvider(TrackingSampleSource, Protocol):
     device: str
 
     def start(self) -> None:
@@ -121,9 +129,31 @@ class TrackingProvider(Protocol):
     def stop(self) -> None:
         """Stop and release backend resources."""
 
+
+class LegacyControllerProviderAdapter:
+    """Explicitly retain the controller-only provider boundary during migration."""
+
+    def __init__(self, provider: TrackingProvider) -> None:
+        self.provider = provider
+        self.device = provider.device
+
+    def start(self) -> None:
+        self.provider.start()
+
+    def stop(self) -> None:
+        self.provider.stop()
+
     def latest(self) -> ControllerPairSample:
-        """Return the latest normalized controller pair sample."""
-        ...
+        return self.provider.latest()
+
+    def sample_at(self, target_time_ns: int) -> ControllerPairSample:
+        sampler = getattr(self.provider, "sample_at", None)
+        if callable(sampler):
+            sample = sampler(target_time_ns)
+            if not isinstance(sample, ControllerPairSample):
+                raise TypeError("tracking sample_at() returned an invalid sample")
+            return sample
+        return self.provider.latest()
 
 
 def as_pose7(value: object) -> np.ndarray:
@@ -151,6 +181,7 @@ def apply_tcp_calibration_pose7(
 
 __all__ = [
     "ControllerPairSample",
+    "LegacyControllerProviderAdapter",
     "TrackingProvider",
     "apply_tcp_calibration_pose7",
     "as_pose7",

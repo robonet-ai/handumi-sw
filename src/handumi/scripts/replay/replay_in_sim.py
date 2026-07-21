@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -44,7 +45,6 @@ from handumi.retargeting.handumi_to_robot import (
     raw_state_robot_target_pose7,
     retarget_anchors_from_raw_state,
 )
-from handumi.robots.kinematics import optimization_score_from_errors, pose_error_arrays
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 from handumi.robots.utils import pose_mul, quat_normalize
 
@@ -333,7 +333,7 @@ def _resolve_gripper_openings(
 
 def _resolved_controller_device(
     args: argparse.Namespace,
-    source_info: dict[str, object],
+    source_info: Mapping[str, object],
 ) -> str:
     if args.controller_device is not None:
         snapshot = _metadata_tcp_snapshot(source_info)
@@ -353,7 +353,7 @@ def _resolved_controller_device(
 
 def _resolved_retarget_mode(
     args: argparse.Namespace,
-    source_info: dict[str, object],
+    source_info: Mapping[str, object],
 ) -> str:
     """Choose geometry-preserving replay when the dataset has a table frame."""
     requested = str(args.retarget_mode)
@@ -364,7 +364,7 @@ def _resolved_retarget_mode(
 
 
 def _metadata_tcp_calibration(
-    source_info: dict[str, object],
+    source_info: Mapping[str, object],
 ) -> tuple[ControllerTcpCalibration, str] | None:
     snapshot = _metadata_tcp_snapshot(source_info)
     if not isinstance(snapshot, dict) or snapshot.get("applied_to_state") is True:
@@ -384,12 +384,14 @@ def _metadata_tcp_calibration(
     return calibration, source
 
 
-def _metadata_tcp_snapshot(source_info: dict[str, object]) -> dict[str, object] | None:
+def _metadata_tcp_snapshot(
+    source_info: Mapping[str, object],
+) -> dict[str, object] | None:
     snapshot = handumi_metadata(source_info).get("controller_tcp_calibration")
     return snapshot if isinstance(snapshot, dict) else None
 
 
-def _metadata_tcp_identity(source_info: dict[str, object]) -> dict[str, str]:
+def _metadata_tcp_identity(source_info: Mapping[str, object]) -> dict[str, str]:
     metadata = handumi_metadata(source_info)
     snapshot = _metadata_tcp_snapshot(source_info) or {}
     target_robot = metadata.get("target_robot")
@@ -415,7 +417,7 @@ def _is_trusted_tcp_snapshot(snapshot: dict[str, object]) -> bool:
 
 
 def _source_robot_from_metadata(
-    source_info: dict[str, object],
+    source_info: Mapping[str, object],
     *,
     fallback: str,
 ) -> str:
@@ -458,7 +460,9 @@ def _resolved_tcp_calibration(
     metadata_calibration = _metadata_tcp_calibration(source_info)
     if use_dataset:
         if metadata_calibration is None:
-            raise SystemExit("Dataset has no unapplied controller->TCP calibration snapshot.")
+            raise SystemExit(
+                "Dataset has no unapplied controller->TCP calibration snapshot."
+            )
         calibration, source = metadata_calibration
         identity = _metadata_tcp_identity(source_info)
         return TcpCalibrationSelection(
@@ -487,8 +491,7 @@ def _resolved_tcp_calibration(
         calibration = load_controller_tcp_calibration(configured_path)
         sha256 = controller_tcp_calibration_sha256(configured_path)
         source = (
-            f"configured {robot}/{controller_device}: {configured_path} "
-            f"sha256={sha256}"
+            f"configured {robot}/{controller_device}: {configured_path} sha256={sha256}"
         )
         return TcpCalibrationSelection(
             calibration=calibration,
@@ -533,9 +536,7 @@ def _pose7_from_mapping(value: object, *, name: str) -> np.ndarray:
             np.asarray(value["quaternion"], dtype=np.float32).reshape(4)
         )
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(
-            f"{name} must contain position[3] and quaternion[4]"
-        ) from exc
+        raise ValueError(f"{name} must contain position[3] and quaternion[4]") from exc
     return np.concatenate([position, quaternion]).astype(np.float32)
 
 
@@ -622,9 +623,13 @@ def _tcp_geometry_diagnostics(
     left = np.asarray(left_tcp_pose7, dtype=np.float32)
     right = np.asarray(right_tcp_pose7, dtype=np.float32)
     if left.ndim != 2 or right.ndim != 2 or left.shape != right.shape:
-        raise ValueError("left/right calibrated TCP trajectories must have equal 2-D shapes")
+        raise ValueError(
+            "left/right calibrated TCP trajectories must have equal 2-D shapes"
+        )
     if left.shape[1] < 3 or len(left) == 0:
-        raise ValueError("calibrated TCP trajectories must contain at least one position")
+        raise ValueError(
+            "calibrated TCP trajectories must contain at least one position"
+        )
     separation = np.linalg.norm(left[:, :3] - right[:, :3], axis=1)
     return {
         "offset_position_norm_m": np.asarray(
@@ -674,6 +679,11 @@ def _print_tcp_geometry_diagnostics(
 
 
 def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
+    from handumi.robots.kinematics import (
+        optimization_score_from_errors,
+        pose_error_arrays,
+    )
+
     runtime = load_embodiment(args.robot)
     states, fps, source_info, recorded_gripper_openings = load_episode_states(args)
     source_metadata = handumi_metadata(source_info)
@@ -822,9 +832,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
         )
     elif retarget_mode == "local-relative":
         world_map = (
-            VR_TO_ROBOT
-            if controller_device == "pico"
-            else np.eye(3, dtype=np.float32)
+            VR_TO_ROBOT if controller_device == "pico" else np.eye(3, dtype=np.float32)
         )
         left_adapter = local_frame_adapter(
             first_left_pose7,
@@ -1134,9 +1142,7 @@ def solve_episode(args: argparse.Namespace) -> dict[str, np.ndarray]:
             dtype=np.float32,
         ),
         "absolute_orientation": np.asarray([args.absolute_orientation]),
-        "initial_solve_iterations": np.asarray(
-            [initial_solve_count], dtype=np.int64
-        ),
+        "initial_solve_iterations": np.asarray([initial_solve_count], dtype=np.int64),
         "initial_max_position_error_m": np.asarray(
             [initial_max_position_error_m], dtype=np.float32
         ),
@@ -1162,18 +1168,27 @@ def save_rollout(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Pa
     if output is None:
         output = DEFAULT_OUT_DIR / f"episode_{args.episode:06d}_{args.robot}.npz"
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
+    # NumPy's stub reserves allow_pickle in **kwargs although the runtime API
+    # accepts arbitrary named arrays here.
+    np.savez_compressed(  # pyright: ignore[reportArgumentType]
+        file=output,
         repo_id=np.asarray([args.repo_id]),
         robot=np.asarray([args.robot]),
         episode=np.asarray([args.episode], dtype=np.int64),
-        **rollout,
+        **rollout,  # pyright: ignore[reportArgumentType]
     )
     print(f"[replay] saved: {output}")
     return output
 
 
-def _render_task_scene(server, args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> None:
+def _positions3(values: np.ndarray) -> tuple[tuple[float, float, float], ...]:
+    rows = np.asarray(values, dtype=np.float64).reshape(-1, 3)
+    return tuple((float(row[0]), float(row[1]), float(row[2])) for row in rows)
+
+
+def _render_task_scene(
+    server, args: argparse.Namespace, rollout: dict[str, np.ndarray]
+) -> None:
     if args.scene is None:
         return
     transforms = rollout["robot_from_table_pose7"]
@@ -1221,28 +1236,29 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     urdf = runtime.load_urdf(load_meshes=True)
     robot_view = ViserUrdf(server, urdf, root_node_name="/robot")
     _render_task_scene(server, args, rollout)
+    target_left = target_right = achieved_left = achieved_right = None
     if not args.hide_trajectories:
         server.scene.add_spline_catmull_rom(
             "/traj/target_left",
-            positions=rollout["target_left_pose7_robot_world"][:, :3],
+            positions=_positions3(rollout["target_left_pose7_robot_world"][:, :3]),
             color=(255, 190, 50),
             line_width=2.0,
         )
         server.scene.add_spline_catmull_rom(
             "/traj/target_right",
-            positions=rollout["target_right_pose7_robot_world"][:, :3],
+            positions=_positions3(rollout["target_right_pose7_robot_world"][:, :3]),
             color=(80, 220, 130),
             line_width=2.0,
         )
         server.scene.add_spline_catmull_rom(
             "/traj/achieved_left",
-            positions=rollout["achieved_left_pose7_robot_world"][:, :3],
+            positions=_positions3(rollout["achieved_left_pose7_robot_world"][:, :3]),
             color=(80, 160, 255),
             line_width=2.0,
         )
         server.scene.add_spline_catmull_rom(
             "/traj/achieved_right",
-            positions=rollout["achieved_right_pose7_robot_world"][:, :3],
+            positions=_positions3(rollout["achieved_right_pose7_robot_world"][:, :3]),
             color=(255, 90, 90),
             line_width=2.0,
         )
@@ -1265,8 +1281,16 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
     def draw(i: int) -> None:
         robot_view.update_cfg(rollout["qpos"][i])
         if not args.hide_trajectories:
-            target_left.position = tuple(rollout["target_left_pose7_robot_world"][i, :3])
-            target_right.position = tuple(rollout["target_right_pose7_robot_world"][i, :3])
+            assert target_left is not None
+            assert target_right is not None
+            assert achieved_left is not None
+            assert achieved_right is not None
+            target_left.position = tuple(
+                rollout["target_left_pose7_robot_world"][i, :3]
+            )
+            target_right.position = tuple(
+                rollout["target_right_pose7_robot_world"][i, :3]
+            )
             achieved_left.position = tuple(
                 rollout["achieved_left_pose7_robot_world"][i, :3]
             )

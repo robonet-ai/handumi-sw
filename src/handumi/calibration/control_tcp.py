@@ -21,7 +21,6 @@ import pandas as pd
 import yaml
 from scipy.spatial.transform import Rotation
 
-from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
 from handumi.robots.utils import IDENTITY_POSE7, pose_mul, quat_normalize
 
 DEFAULT_PARQUET = Path("pico_recording/data/chunk-000/file-000.parquet")
@@ -85,7 +84,9 @@ def missing_calibration_message(path: Path = DEFAULT_CALIBRATION) -> str:
     )
 
 
-def calibration_path_for_device(device: str, root: Path = DEFAULT_CALIBRATION_DIR) -> Path:
+def calibration_path_for_device(
+    device: str, root: Path = DEFAULT_CALIBRATION_DIR
+) -> Path:
     if device not in SUPPORTED_DEVICES:
         raise SystemExit(f"Invalid device {device!r}; use one of {SUPPORTED_DEVICES}")
     return root / f"{device}_controller_tcp.yaml"
@@ -160,6 +161,12 @@ def load_episode_poses(
     *,
     column: str | None = None,
 ) -> np.ndarray:
+    # Keep dataset loading lazy: tracking providers import this module for the
+    # calibration dataclass, while the dataset reader imports tracking types.
+    # Importing the raw schema at module load time therefore creates a clean-
+    # interpreter cycle for the standalone calibration CLI.
+    from handumi.dataset.raw import LEFT_POSE_SLICE, RIGHT_POSE_SLICE
+
     if not parquet.exists():
         raise SystemExit(missing_dataset_message(parquet))
     df = pd.read_parquet(parquet)
@@ -174,10 +181,15 @@ def load_episode_poses(
     ep = df[df["episode_index"] == episode].copy()
     if ep.empty:
         available = sorted(int(x) for x in df["episode_index"].dropna().unique())
-        raise SystemExit(f"Episode {episode} not found. Available episodes: {available}")
+        raise SystemExit(
+            f"Episode {episode} not found. Available episodes: {available}"
+        )
     sort_cols = [col for col in ("frame_index", "index") if col in ep.columns]
-    if sort_cols:
-        ep = ep.sort_values(sort_cols)
+    for sort_col in reversed(sort_cols):
+        # pandas-stubs does not preserve the narrowed DataFrame overload here.
+        ep = ep.sort_values(  # pyright: ignore[reportCallIssue]
+            by=sort_col, kind="stable"
+        )
     pose_slice = LEFT_POSE_SLICE if side == "left" else RIGHT_POSE_SLICE
     poses = np.stack(
         [
@@ -201,7 +213,7 @@ def load_csv_poses(csv_path: Path, side: str | None = None) -> np.ndarray:
         raise SystemExit(f"{csv_path} missing columns: {missing}")
     if df.empty:
         raise SystemExit(f"{csv_path} has no rows for side={side!r}")
-    poses = df[required].to_numpy(np.float32)
+    poses = np.asarray(df.loc[:, required], dtype=np.float32)
     return _continuous_pose7(poses)
 
 
@@ -229,7 +241,9 @@ def solve_pivot_offset(controller_poses: np.ndarray) -> PivotSolve:
 
     offset = solution[:3].astype(np.float32)
     pivot = solution[3:].astype(np.float32)
-    reconstructed = positions + np.einsum("nij,j->ni", rotations, offset.astype(np.float64))
+    reconstructed = positions + np.einsum(
+        "nij,j->ni", rotations, offset.astype(np.float64)
+    )
     residuals = (reconstructed - pivot.astype(np.float64)).astype(np.float32)
     errors = np.linalg.norm(residuals, axis=1)
     return PivotSolve(
@@ -350,8 +364,12 @@ def apply_controller_tcp_calibration(
     right_controller_pose: np.ndarray,
     calibration: ControllerTcpCalibration,
 ) -> tuple[np.ndarray, np.ndarray]:
-    left = np.stack([pose_mul(pose, calibration.left) for pose in left_controller_pose], axis=0)
-    right = np.stack([pose_mul(pose, calibration.right) for pose in right_controller_pose], axis=0)
+    left = np.stack(
+        [pose_mul(pose, calibration.left) for pose in left_controller_pose], axis=0
+    )
+    right = np.stack(
+        [pose_mul(pose, calibration.right) for pose in right_controller_pose], axis=0
+    )
     return _continuous_pose7(left), _continuous_pose7(right)
 
 

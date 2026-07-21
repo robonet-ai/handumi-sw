@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -74,9 +75,11 @@ def load_piper_can_settings(
     with rig_config.open("r", encoding="utf-8") as handle:
         rig: dict[str, Any] = yaml.safe_load(handle) or {}
 
-    can = (((rig.get("robots") or {}).get("piper") or {}).get("can") or {})
+    can = ((rig.get("robots") or {}).get("piper") or {}).get("can") or {}
     if not isinstance(can, dict):
-        raise SystemExit(f"Missing or invalid 'robots.piper.can' section in {rig_config}.")
+        raise SystemExit(
+            f"Missing or invalid 'robots.piper.can' section in {rig_config}."
+        )
     missing = [key for key in ("left_port", "right_port") if not can.get(key)]
     if missing:
         raise SystemExit(
@@ -99,7 +102,9 @@ def load_piper_can_settings(
     )
 
 
-def piper_arm_joint_indices(actuated_names: list[str] | tuple[str, ...], side: str) -> list[int]:
+def piper_arm_joint_indices(
+    actuated_names: list[str] | tuple[str, ...], side: str
+) -> list[int]:
     """Return the six Piper arm-joint indices for ``side`` in URDF order."""
     if side not in SIDE_NAMES:
         raise ValueError(f"expected side in {SIDE_NAMES}, got {side!r}")
@@ -118,7 +123,9 @@ def q_to_piper_mdeg(
     """Convert full robot ``q`` in radians to Piper SDK milli-degree joints."""
     q_arr = np.asarray(q, dtype=np.float64).reshape(-1)
     return {
-        side: np.rint(q_arr[piper_arm_joint_indices(actuated_names, side)] * RAD_TO_MDEG)
+        side: np.rint(
+            q_arr[piper_arm_joint_indices(actuated_names, side)] * RAD_TO_MDEG
+        )
         .astype(np.int64)
         .reshape(ARM_JOINT_COUNT)
         for side in SIDE_NAMES
@@ -136,7 +143,9 @@ def piper_mdeg_to_q(
     q = np.asarray(base_q, dtype=np.float32).copy()
     for side, values in (("left", left_mdeg), ("right", right_mdeg)):
         indices = piper_arm_joint_indices(actuated_names, side)
-        q[indices] = np.asarray(values, dtype=np.float32)[:ARM_JOINT_COUNT] * MDEG_TO_RAD
+        q[indices] = (
+            np.asarray(values, dtype=np.float32)[:ARM_JOINT_COUNT] * MDEG_TO_RAD
+        )
     return q
 
 
@@ -169,10 +178,13 @@ class PiperSdkArm:
         gripper_effort: int,
     ) -> None:
         try:
-            from piper_sdk import C_PiperInterface_V2
+            # Source-only hardware dependency; runtime validation below keeps
+            # the untyped package confined to this adapter.
+            from piper_sdk import C_PiperInterface_V2  # pyright: ignore[reportMissingImports]
         except ModuleNotFoundError as exc:
             raise RuntimeError(
-                "Missing piper_sdk. Install real Piper support with: uv sync --extra piper"
+                "Missing piper_sdk. From the source release run: "
+                "uv sync --group piper-source"
             ) from exc
 
         self.port = port
@@ -257,7 +269,9 @@ class PiperJointStreamer:
             side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
         }
         self._targets = {side: cmd.copy() for side, cmd in self._commanded.items()}
-        self._gripper_targets: dict[str, int | None] = {side: None for side in self.arms}
+        self._gripper_targets: dict[str, int | None] = {
+            side: None for side in self.arms
+        }
         self._thread = threading.Thread(
             target=self._run,
             name="handumi-piper-can-streamer",
@@ -287,16 +301,18 @@ class PiperJointStreamer:
         with self._lock:
             for side, target in targets.items():
                 if side in self._targets:
-                    self._targets[side] = (
-                        np.asarray(target, dtype=np.int64)[:ARM_JOINT_COUNT].copy()
-                    )
+                    self._targets[side] = np.asarray(target, dtype=np.int64)[
+                        :ARM_JOINT_COUNT
+                    ].copy()
 
-    def set_gripper_targets_microm(self, targets: dict[str, int | None]) -> None:
+    def set_gripper_targets_microm(self, targets: Mapping[str, int | None]) -> None:
         self.raise_if_failed()
         with self._lock:
             for side, target in targets.items():
                 if side in self._gripper_targets:
-                    self._gripper_targets[side] = None if target is None else max(0, int(target))
+                    self._gripper_targets[side] = (
+                        None if target is None else max(0, int(target))
+                    )
 
     def latest_commands(self) -> dict[str, np.ndarray]:
         with self._lock:
@@ -311,7 +327,9 @@ class PiperJointStreamer:
         return held
 
     def feedback_mdeg(self) -> dict[str, np.ndarray]:
-        return {side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()}
+        return {
+            side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
+        }
 
     def max_command_error_mdeg(self) -> float:
         with self._lock:
@@ -426,7 +444,10 @@ class PiperCanEnvironment:
     def connect(self) -> None:
         if self.arms:
             return
-        for side, port in (("left", self.settings.left_port), ("right", self.settings.right_port)):
+        for side, port in (
+            ("left", self.settings.left_port),
+            ("right", self.settings.right_port),
+        ):
             log.info("Connecting Piper %s on %s.", side, port)
             self.arms[side] = self.arm_factory(
                 port,
@@ -467,9 +488,7 @@ class PiperCanEnvironment:
             )
             log.info("Piper home reached.")
         finally:
-            self.streamer.set_max_joint_speed_deg_s(
-                self.settings.max_joint_speed_deg_s
-            )
+            self.streamer.set_max_joint_speed_deg_s(self.settings.max_joint_speed_deg_s)
 
     def set_q(self, q: np.ndarray, actuated_names: list[str] | tuple[str, ...]) -> None:
         self.set_targets(q_to_piper_mdeg(q, actuated_names))
@@ -499,7 +518,9 @@ class PiperCanEnvironment:
         return self.streamer.hold_current_commands()
 
     def feedback_mdeg(self) -> dict[str, np.ndarray]:
-        return {side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()}
+        return {
+            side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
+        }
 
     def raise_if_failed(self) -> None:
         if self.streamer is not None:
@@ -513,7 +534,9 @@ class PiperCanEnvironment:
             for arm in self.arms.values():
                 try:
                     arm.disconnect()
-                except Exception as exc:  # pragma: no cover - defensive hardware cleanup
+                except (
+                    Exception
+                ) as exc:  # pragma: no cover - defensive hardware cleanup
                     log.warning("Failed to disconnect Piper %s: %s", arm.port, exc)
             self.arms.clear()
             self.streamer = None

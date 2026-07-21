@@ -8,6 +8,8 @@ remain available for later retargeting to any supported embodiment.
 
 Confirm that:
 
+- `handumi-preflight` passes for the exact device, camera, calibration, output,
+  and viewer profile used by the recording command.
 - Both gripper widths respond correctly from closed to fully open.
 - Both controllers report valid tracking.
 - Camera intrinsics and controller-camera mounts still match the hardware.
@@ -35,9 +37,44 @@ handumi-record \
 Use `--device pico` and a PICO-created `--session-calibration` for PICO. Add
 `--push-to-hub` only after confirming the pilot locally.
 
-Do not connect or configure a robot arm for this step. A target embodiment can
-be selected later during conversion or replay without modifying the raw
-recording.
+To record canonical full-body CoM/contact estimates, supply a measured body
+profile. See [Body Tracking and Kinematic CoM](workflows/body_tracking.md).
+With `--rerun`, the aligned body/CoM frame stored in each row is visualized
+beside the unchanged controller, camera, gripper, and recorder-status views.
+See [Body and Trajectory Visualization](workflows/visualization.md) for live
+layers, masks, colors, and offline replay.
+
+To record while viewing a Piper model in Viser, enable both recorder-owned
+viewers in the same process:
+
+```bash
+handumi-record \
+  --device meta \
+  --robot piper \
+  --repo-id your-name/handumi-demo \
+  --output-dir outputs/datasets/handumi-demo \
+  --task "pick and place" \
+  --session-calibration outputs/calibration/session.yaml \
+  --wrist-cameras --workspace-camera \
+  --rerun --viser --viser-anchor episode-start \
+  --clap-control
+```
+
+This path still opens exactly one tracker, camera set, and Feetech connection.
+The aligned TCP/gripper sample used for each dataset row is copied to a bounded
+IK/Viser worker; the raw recording remains robot-agnostic. Slow rendering drops
+stale viewer frames, and Viser or IK failures are reported without stopping
+dataset capture. Viser binds to `127.0.0.1` by default. Binding it to a LAN
+interface with `--viser-host` is an explicit trusted-network decision.
+
+For Meta full-body capture, use `--session-calibration` to place controllers,
+TCPs, body, and ground in the same calibrated table frame. Without a session
+calibration, body-enabled recording freezes a common HMD-recentered frame for
+visual consistency, but that fallback is not a calibrated table frame.
+
+Do not connect a physical robot arm for this step. The `--robot` option used by
+`--viser` selects only a simulated model; an embodiment can also be selected
+later during conversion or replay without modifying the raw recording.
 
 ## Controls
 

@@ -35,6 +35,7 @@ from handumi.calibration.spatial import (
     solve_table_device,
     write_yaml,
 )
+from handumi.cameras.base import CameraSample
 from handumi.cameras.opencv import OpenCVCameraDevice
 from handumi.config import DEFAULT_RIG_CONFIG, load_rig_section
 from handumi.robots.utils import IDENTITY_POSE7, pose7_to_mat
@@ -52,6 +53,7 @@ MIN_CORNERS = 12
 MAX_SYNC_ERROR_MS = 20.0
 PICO_MAX_SYNC_ERROR_MS = 80.0
 AUTO_CAPTURE_INTERVAL_S = 2.0
+CAMERA_STALE_TIMEOUT_S = 1.0
 MIN_POSE_ROTATION_DEG = 8.0
 STABLE_HOLD_S = 0.25
 STABLE_TRANSLATION_M = 0.010
@@ -90,7 +92,9 @@ def _board_from_rig(path: Path) -> CharucoBoardSpec:
     return CharucoBoardSpec.from_dict(section.get("board"))
 
 
-def _camera(path: Path, name: str, fps: int, width: int, height: int) -> OpenCVCameraDevice:
+def _camera(
+    path: Path, name: str, fps: int, width: int, height: int
+) -> OpenCVCameraDevice:
     cameras = load_rig_section(path, "cameras")
     entry = cameras.get(name)
     if not isinstance(entry, dict) or "index_or_path" not in entry:
@@ -168,7 +172,9 @@ def _pose_is_distinct(pose: np.ndarray, accepted: list[np.ndarray]) -> bool:
     return True
 
 
-def _image_view_signature(detection: CharucoDetection, shape: tuple[int, ...]) -> np.ndarray:
+def _image_view_signature(
+    detection: CharucoDetection, shape: tuple[int, ...]
+) -> np.ndarray:
     points = detection.image_points.reshape(-1, 2)
     height, width = shape[:2]
     low = points.min(axis=0)
@@ -185,7 +191,9 @@ def _image_view_signature(detection: CharucoDetection, shape: tuple[int, ...]) -
 
 
 def _image_view_is_distinct(signature: np.ndarray, accepted: list[np.ndarray]) -> bool:
-    return not accepted or all(np.linalg.norm(signature - previous) >= 0.05 for previous in accepted)
+    return not accepted or all(
+        np.linalg.norm(signature - previous) >= 0.05 for previous in accepted
+    )
 
 
 def _controller_is_stable(pose: np.ndarray, reference: np.ndarray) -> bool:
@@ -196,9 +204,24 @@ def _controller_is_stable(pose: np.ndarray, reference: np.ndarray) -> bool:
         Rotation.from_matrix(anchor[:3, :3].T @ current[:3, :3]).magnitude()
     )
     return bool(
-        translation_m <= STABLE_TRANSLATION_M
-        and rotation_deg <= STABLE_ROTATION_DEG
+        translation_m <= STABLE_TRANSLATION_M and rotation_deg <= STABLE_ROTATION_DEG
     )
+
+
+def _assert_fresh_camera_sample(
+    sample: CameraSample,
+    *,
+    now_ns: int | None = None,
+    timeout_s: float = CAMERA_STALE_TIMEOUT_S,
+) -> None:
+    """Stop calibration instead of reusing a frame after a camera disconnect."""
+    current_ns = time.monotonic_ns() if now_ns is None else now_ns
+    age_s = max(0.0, (current_ns - sample.capture_time_ns) / 1e9)
+    if age_s > timeout_s:
+        raise SystemExit(
+            f"Camera stream stalled: latest frame is {age_s:.2f}s old. "
+            "Reconnect the camera and restart calibration; no calibration was saved."
+        )
 
 
 def _capture(
@@ -225,12 +248,15 @@ def _capture(
     try:
         while len(detections) < requested_views:
             sample = camera.sample_at()
+            _assert_fresh_camera_sample(sample)
             detection = detect_charuco(sample.image, board, min_corners=MIN_CORNERS)
             pair = None if pair_at is None else pair_at(sample.capture_time_ns)
             sync_ms = None if pair is None else pair[1]
             valid = detection is not None and (pair_at is None or pair is not None)
             signature = (
-                None if detection is None else _image_view_signature(detection, sample.image.shape)
+                None
+                if detection is None
+                else _image_view_signature(detection, sample.image.shape)
             )
             now = time.monotonic()
             stable = valid
@@ -240,7 +266,9 @@ def _capture(
                     stable_pose = None
                     stable_since = now
                     stable = False
-                elif stable_pose is None or not _controller_is_stable(current_pose, stable_pose):
+                elif stable_pose is None or not _controller_is_stable(
+                    current_pose, stable_pose
+                ):
                     stable_pose = current_pose.copy()
                     stable_since = now
                     stable = False
@@ -251,7 +279,8 @@ def _capture(
                 distinct = (
                     _pose_is_distinct(pair[0], poses)
                     if pair is not None
-                    else signature is not None and _image_view_is_distinct(signature, image_signatures)
+                    else signature is not None
+                    and _image_view_is_distinct(signature, image_signatures)
                 )
             preview = draw_detection(sample.image, detection)
             corners = 0 if detection is None else detection.count
@@ -259,7 +288,9 @@ def _capture(
             lines = [
                 *instructions,
                 *(
-                    (f"Siguiente vista: {view_prompts[len(detections) % len(view_prompts)]}",)
+                    (
+                        f"Siguiente vista: {view_prompts[len(detections) % len(view_prompts)]}",
+                    )
                     if view_prompts
                     else ()
                 ),
@@ -274,8 +305,7 @@ def _capture(
                 sync_text = "n/a" if sync_ms is None else f"{sync_ms:.1f} ms"
                 lines.insert(
                     1,
-                    f"{sync_label}-camera sync {sync_text} "
-                    f"(max {max_sync_ms:.0f} ms)",
+                    f"{sync_label}-camera sync {sync_text} (max {max_sync_ms:.0f} ms)",
                 )
             cv2.imshow(title, _overlay(preview, lines, valid and stable and distinct))
             key = cv2.waitKey(1) & 0xFF
@@ -298,20 +328,29 @@ def _capture(
                     log.warning("Auto capture skipped: move to a more distinct view.")
                     continue
                 if detection_gate is not None and not detection_gate(detection):
-                    log.warning("Auto capture skipped: ChArUco pose reprojection failed.")
+                    log.warning(
+                        "Auto capture skipped: ChArUco pose reprojection failed."
+                    )
                     continue
                 detections.append(detection)
                 if pair is not None:
                     poses.append(pair[0])
                 elif signature is not None:
                     image_signatures.append(signature)
-                log.info("Accepted view %d/%d (%d corners).", len(detections), requested_views, corners)
+                log.info(
+                    "Accepted view %d/%d (%d corners).",
+                    len(detections),
+                    requested_views,
+                    corners,
+                )
     finally:
         cv2.destroyWindow(title)
     return detections, poses
 
 
-def _reprojection_gate(intrinsics: CameraIntrinsics) -> Callable[[CharucoDetection], bool]:
+def _reprojection_gate(
+    intrinsics: CameraIntrinsics,
+) -> Callable[[CharucoDetection], bool]:
     def valid(detection: CharucoDetection) -> bool:
         try:
             _, error_px = estimate_board_pose(detection, intrinsics)
@@ -361,9 +400,7 @@ def _tracking_pairer(
     def pair_at(capture_time_ns: int) -> tuple[np.ndarray, float] | None:
         sample_at = getattr(tracker, "sample_at", None)
         sample = (
-            sample_at(capture_time_ns)
-            if sample_at is not None
-            else tracker.latest()
+            sample_at(capture_time_ns) if sample_at is not None else tracker.latest()
         )
         tracked = bool(
             getattr(sample, f"{side}_device_tracked")
@@ -417,7 +454,9 @@ def _connect_tracker(args: argparse.Namespace) -> TrackingProvider:
             return tracker
         time.sleep(0.1)
     tracker.stop()
-    raise SystemExit(f"{args.device} tracking did not start streaming within 15 seconds.")
+    raise SystemExit(
+        f"{args.device} tracking did not start streaming within 15 seconds."
+    )
 
 
 def cmd_inspect(args: argparse.Namespace) -> None:
@@ -459,7 +498,9 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
     finally:
         camera.disconnect()
     if len(detections) < args.views:
-        raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
+        raise SystemExit(
+            f"Only {len(detections)} views captured; requested {args.views}."
+        )
     calibrate = calibrate_pinhole if args.camera == "workspace" else calibrate_fisheye
     intrinsics = calibrate(args.camera, detections, (args.width, args.height))
     if intrinsics.mean_error_px > args.max_mean_error_px:
@@ -479,7 +520,11 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
             f"Rectification coverage {valid_coverage:.1%} is below 80%; "
             "capture more varied views. Calibration not saved."
         )
-    spatial = load_yaml(args.output) if args.output.exists() else new_spatial_calibration(board)
+    spatial = (
+        load_yaml(args.output)
+        if args.output.exists()
+        else new_spatial_calibration(board)
+    )
     if CharucoBoardSpec.from_dict(spatial.get("board")) != board:
         raise SystemExit(
             f"Board configuration differs from existing {args.output}; use a new output file."
@@ -490,7 +535,12 @@ def cmd_intrinsics(args: argparse.Namespace) -> None:
         "captured_at": _now_iso(),
     }
     write_yaml(args.output, spatial)
-    log.info("Saved %s intrinsics to %s (mean %.3f px).", args.camera, args.output, intrinsics.mean_error_px)
+    log.info(
+        "Saved %s intrinsics to %s (mean %.3f px).",
+        args.camera,
+        args.output,
+        intrinsics.mean_error_px,
+    )
 
 
 def cmd_mount(args: argparse.Namespace) -> None:
@@ -498,7 +548,9 @@ def cmd_mount(args: argparse.Namespace) -> None:
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
     camera_name = f"{args.side}_wrist"
     intrinsics = _intrinsics(spatial, camera_name)
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(
+        args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height
+    )
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -526,7 +578,9 @@ def cmd_mount(args: argparse.Namespace) -> None:
         camera.disconnect()
         tracker.stop()
     if len(detections) < args.views:
-        raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
+        raise SystemExit(
+            f"Only {len(detections)} views captured; requested {args.views}."
+        )
     controller_poses, board_poses = _board_poses_with_gate(
         detections, controller_poses, intrinsics
     )
@@ -545,7 +599,12 @@ def cmd_mount(args: argparse.Namespace) -> None:
         "captured_at": _now_iso(),
     }
     write_yaml(args.spatial, spatial)
-    log.info("Saved %s mount to %s (RMS %.2f mm).", args.side, args.spatial, metrics["translation_rms_mm"])
+    log.info(
+        "Saved %s mount to %s (RMS %.2f mm).",
+        args.side,
+        args.spatial,
+        metrics["translation_rms_mm"],
+    )
 
 
 def _calibrate_workspace(
@@ -581,7 +640,9 @@ def _calibrate_workspace(
     finally:
         camera.disconnect()
     if len(detections) < views:
-        raise SystemExit(f"Only {len(detections)} workspace views captured; requested {views}.")
+        raise SystemExit(
+            f"Only {len(detections)} workspace views captured; requested {views}."
+        )
     board_poses: list[np.ndarray] = []
     for detection in detections:
         board_pose, error_px = estimate_board_pose(detection, intrinsics)
@@ -605,9 +666,13 @@ def cmd_session(args: argparse.Namespace) -> None:
     intrinsics = _intrinsics(spatial, camera_name)
     mount = (spatial.get("controller_camera") or {}).get(args.side)
     if not isinstance(mount, dict):
-        raise SystemExit(f"Missing {args.side} controller-camera mount in {args.spatial}.")
+        raise SystemExit(
+            f"Missing {args.side} controller-camera mount in {args.spatial}."
+        )
     controller_camera = pose7_from_dict(mount["controller_from_camera"])
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(
+        args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height
+    )
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -635,7 +700,9 @@ def cmd_session(args: argparse.Namespace) -> None:
         camera.disconnect()
         tracker.stop()
     if len(detections) < args.views:
-        raise SystemExit(f"Only {len(detections)} views captured; requested {args.views}.")
+        raise SystemExit(
+            f"Only {len(detections)} views captured; requested {args.views}."
+        )
     controller_poses, board_poses = _board_poses_with_gate(
         detections, controller_poses, intrinsics
     )
@@ -687,7 +754,9 @@ def cmd_workspace(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
     session = _load_session(args.session)
     if session.get("spatial_calibration_sha256") != calibration_hash(spatial):
-        raise SystemExit("Session calibration references a different spatial calibration hash.")
+        raise SystemExit(
+            "Session calibration references a different spatial calibration hash."
+        )
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
     session.setdefault("table_from_camera", {})["workspace"] = _calibrate_workspace(
         args,
@@ -706,12 +775,18 @@ def cmd_verify(args: argparse.Namespace) -> None:
     expected = session.get("spatial_calibration_sha256")
     actual = calibration_hash(spatial)
     if expected != actual:
-        raise SystemExit("Session calibration references a different spatial calibration hash.")
+        raise SystemExit(
+            "Session calibration references a different spatial calibration hash."
+        )
     metrics = session.get("metrics") or {}
     print(f"session: {args.session}")
     print(f"spatial_sha256: {actual}")
-    print(f"translation_rms_mm: {float(metrics.get('translation_rms_mm', float('nan'))):.3f}")
-    print(f"rotation_rms_deg: {float(metrics.get('rotation_rms_deg', float('nan'))):.3f}")
+    print(
+        f"translation_rms_mm: {float(metrics.get('translation_rms_mm', float('nan'))):.3f}"
+    )
+    print(
+        f"rotation_rms_deg: {float(metrics.get('rotation_rms_deg', float('nan'))):.3f}"
+    )
     print("hash and schema: OK")
     if args.metadata_only:
         return
@@ -721,11 +796,15 @@ def cmd_verify(args: argparse.Namespace) -> None:
     intrinsics = _intrinsics(spatial, camera_name)
     mount = (spatial.get("controller_camera") or {}).get(args.side)
     if not isinstance(mount, dict):
-        raise SystemExit(f"Missing {args.side} controller-camera mount in {args.spatial}.")
+        raise SystemExit(
+            f"Missing {args.side} controller-camera mount in {args.spatial}."
+        )
     controller_camera = pose7_to_mat(
         pose7_from_dict(mount["controller_from_camera"])
     ).astype(np.float64)
-    table_from_device = session.get("table_from_device") or session.get("table_from_quest")
+    table_from_device = session.get("table_from_device") or session.get(
+        "table_from_quest"
+    )
     if not isinstance(table_from_device, dict):
         raise SystemExit("Session calibration is missing table_from_device.")
     if session.get("tracking_device") not in (None, args.device):
@@ -735,7 +814,9 @@ def cmd_verify(args: argparse.Namespace) -> None:
         )
     table_device = pose7_to_mat(pose7_from_dict(table_from_device)).astype(np.float64)
     board_table = pose7_to_mat(board_from_table_pose(board)).astype(np.float64)
-    camera = _camera(args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height)
+    camera = _camera(
+        args.rig_config, camera_name, args.fps, intrinsics.width, intrinsics.height
+    )
     tracker = _connect_tracker(args)
     max_sync_ms = _sync_limit_ms(args)
     camera.connect()
@@ -824,9 +905,7 @@ def _init_rerun_view(
     )
 
     camera_views = [
-        rrb.Spatial2DView(
-            origin=f"/table/cameras/{camera_name}", name=camera_name
-        )
+        rrb.Spatial2DView(origin=f"/table/cameras/{camera_name}", name=camera_name)
         for camera_name in camera_names
     ]
     right_column = (
@@ -916,7 +995,9 @@ def _log_camera_model(
     )
 
 
-def _log_camera_pose(rr, name: str, table_camera: np.ndarray, *, static: bool = False) -> None:
+def _log_camera_pose(
+    rr, name: str, table_camera: np.ndarray, *, static: bool = False
+) -> None:
     rr.log(
         f"table/cameras/{name}",
         rr.Transform3D(
@@ -934,10 +1015,14 @@ def cmd_visualize(args: argparse.Namespace) -> None:
     spatial = _load_spatial(args.spatial)
     session = _load_session(args.session)
     if session.get("spatial_calibration_sha256") != calibration_hash(spatial):
-        raise SystemExit("Session calibration references a different spatial calibration hash.")
+        raise SystemExit(
+            "Session calibration references a different spatial calibration hash."
+        )
 
     board = CharucoBoardSpec.from_dict(spatial.get("board"))
-    table_from_device = session.get("table_from_device") or session.get("table_from_quest")
+    table_from_device = session.get("table_from_device") or session.get(
+        "table_from_quest"
+    )
     if not isinstance(table_from_device, dict):
         raise SystemExit("Session calibration is missing table_from_device.")
     if session.get("tracking_device") not in (None, args.device):
@@ -1062,9 +1147,7 @@ def cmd_visualize(args: argparse.Namespace) -> None:
                     if len(points) >= 2:
                         rr.log(
                             f"table/tracking/{side}/trail",
-                            rr.LineStrips3D(
-                                [points], colors=[color], radii=0.003
-                            ),
+                            rr.LineStrips3D([points], colors=[color], radii=0.003),
                         )
 
             elapsed = time.perf_counter() - loop_start
@@ -1107,14 +1190,22 @@ def parse_args() -> argparse.Namespace:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    inspect = sub.add_parser("inspect-board", help="Check board detection and orientation.")
-    inspect.add_argument("--camera", choices=("left_wrist", "right_wrist", "workspace"), default="left_wrist")
+    inspect = sub.add_parser(
+        "inspect-board", help="Check board detection and orientation."
+    )
+    inspect.add_argument(
+        "--camera",
+        choices=("left_wrist", "right_wrist", "workspace"),
+        default="left_wrist",
+    )
     inspect.add_argument("--width", type=int, default=640)
     inspect.add_argument("--height", type=int, default=480)
     inspect.set_defaults(func=cmd_inspect)
 
     intrinsics = sub.add_parser("intrinsics", help="Calibrate one camera.")
-    intrinsics.add_argument("--camera", choices=("left_wrist", "right_wrist", "workspace"), required=True)
+    intrinsics.add_argument(
+        "--camera", choices=("left_wrist", "right_wrist", "workspace"), required=True
+    )
     intrinsics.add_argument("--views", type=int, default=10)
     intrinsics.add_argument("--width", type=int, default=640)
     intrinsics.add_argument("--height", type=int, default=480)
@@ -1122,14 +1213,18 @@ def parse_args() -> argparse.Namespace:
     intrinsics.add_argument("--output", type=Path, default=DEFAULT_SPATIAL)
     intrinsics.set_defaults(func=cmd_intrinsics)
 
-    mount = sub.add_parser("mount", help="Calibrate controller-to-wrist-camera extrinsics.")
+    mount = sub.add_parser(
+        "mount", help="Calibrate controller-to-wrist-camera extrinsics."
+    )
     mount.add_argument("--side", choices=("left", "right"), required=True)
     mount.add_argument("--views", type=int, default=8)
     mount.add_argument("--max-rms-mm", type=float, default=8.0)
     mount.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     mount.set_defaults(func=cmd_mount)
 
-    session = sub.add_parser("session", help="Set the table frame for this tracking session.")
+    session = sub.add_parser(
+        "session", help="Set the table frame for this tracking session."
+    )
     session.add_argument("--side", choices=("left", "right"), required=True)
     session.add_argument("--views", type=int, default=5)
     session.add_argument("--workspace-views", type=int, default=3)
@@ -1144,7 +1239,8 @@ def parse_args() -> argparse.Namespace:
     session.set_defaults(func=cmd_session)
 
     workspace = sub.add_parser(
-        "workspace", help="Calibrate only the fixed workspace camera for a saved session."
+        "workspace",
+        help="Calibrate only the fixed workspace camera for a saved session.",
     )
     workspace.add_argument("--views", type=int, default=3)
     workspace.add_argument("--max-rms-mm", type=float, default=8.0)
@@ -1152,7 +1248,9 @@ def parse_args() -> argparse.Namespace:
     workspace.add_argument("--session", type=Path, default=DEFAULT_SESSION)
     workspace.set_defaults(func=cmd_workspace)
 
-    verify = sub.add_parser("verify", help="Validate session/spatial identity and metrics.")
+    verify = sub.add_parser(
+        "verify", help="Validate session/spatial identity and metrics."
+    )
     verify.add_argument("--spatial", type=Path, default=DEFAULT_SPATIAL)
     verify.add_argument("--session", type=Path, default=DEFAULT_SESSION)
     verify.add_argument("--side", choices=("left", "right"), default="left")

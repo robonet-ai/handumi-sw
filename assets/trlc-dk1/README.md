@@ -4,6 +4,9 @@ The single-arm follower URDF and meshes originate from the Apache-2.0
 [`robot-learning-co/trlc-dk1`](https://github.com/robot-learning-co/trlc-dk1)
 project.
 
+The complete upstream license and derivative-work notices are bundled in
+`LICENSE.trlc-dk1`.
+
 HandUMI uses `TRLC-DK1-Bimanual.urdf`, which contains two namespaced copies
 of the follower under a shared world link.
 

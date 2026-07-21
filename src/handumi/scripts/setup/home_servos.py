@@ -93,8 +93,12 @@ def _home_side(
     protocol_version: int,
     interval_s: float,
 ) -> None:
-    print(f"\n=== Homing {side} servo: port={port}, servo_id={calibration.servo_id} ===")
-    with FeetechBus(port=port, baudrate=baudrate, protocol_version=protocol_version) as bus:
+    print(
+        f"\n=== Homing {side} servo: port={port}, servo_id={calibration.servo_id} ==="
+    )
+    with FeetechBus(
+        port=port, baudrate=baudrate, protocol_version=protocol_version
+    ) as bus:
         try:
             bus.disable_torque(calibration.servo_id)
         except RuntimeError as exc:
@@ -123,7 +127,9 @@ def _home_side(
             )
 
 
-def _watch_until_enter(bus: FeetechBus, servo_id: int, prompt: str, interval_s: float) -> int:
+def _watch_until_enter(
+    bus: FeetechBus, servo_id: int, prompt: str, interval_s: float
+) -> int:
     print(f"{prompt}. Press ENTER to capture and centre.")
     latest = bus.read_position(servo_id)
     while True:
@@ -137,7 +143,9 @@ def _watch_until_enter(bus: FeetechBus, servo_id: int, prompt: str, interval_s: 
             return latest
 
 
-def _side_port(config: FeetechConfig, calibration: GripperCalibration, side: str) -> str:
+def _side_port(
+    config: FeetechConfig, calibration: GripperCalibration, side: str
+) -> str:
     port = calibration.port or config.port
     if not port:
         raise SystemExit(f"{side} Feetech port is not configured.")

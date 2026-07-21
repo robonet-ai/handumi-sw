@@ -1,0 +1,1 @@
+"""Visualization test fixtures."""

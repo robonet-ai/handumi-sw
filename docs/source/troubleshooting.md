@@ -50,6 +50,11 @@ If left/right motion is swapped, correct the mapping in `configs/rig.yaml`;
 do not compensate by reversing calibration values. If a camera appears twice,
 test the first `/dev/video*` node associated with that physical device.
 
+HandUMI rejects an encoder more than 15% outside its cached closed/open span.
+This usually means the servo was homed after the cache was written. The
+recorder fails closed instead of flattening the chart at 0 or maximum width;
+recalibrate that side and verify a smooth full stroke with `monitor`.
+
 ## Recording Is Rejected
 
 Inspect `meta/handumi_quality.json`. The common causes are tracking loss, stale cameras, synchronization errors, frozen poses, large motion jumps, or an episode that is too short.

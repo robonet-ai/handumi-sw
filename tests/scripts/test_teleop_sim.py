@@ -49,7 +49,9 @@ class SampleStateTest(unittest.TestCase):
 
 class TeleopSimCameraSelectionTest(unittest.TestCase):
     def test_no_viser_flag_is_parsed(self):
-        with mock.patch("sys.argv", ["handumi-teleop-sim", "--device", "meta", "--no-viser"]):
+        with mock.patch(
+            "sys.argv", ["handumi-teleop-sim", "--device", "meta", "--no-viser"]
+        ):
             self.assertTrue(parse_args().no_viser)
 
     def test_context_camera_is_between_wrist_views(self):
@@ -195,9 +197,7 @@ class TeleopSimStartTest(unittest.TestCase):
         }
         tracked = {"left": True, "right": True}
 
-        self.assertFalse(
-            _tracking_ready_for_sides(poses, tracked, ("left", "right"))
-        )
+        self.assertFalse(_tracking_ready_for_sides(poses, tracked, ("left", "right")))
         self.assertTrue(_tracking_ready_for_sides(poses, tracked, ("left",)))
 
     def test_auto_start_flag_defaults_to_five_seconds(self):

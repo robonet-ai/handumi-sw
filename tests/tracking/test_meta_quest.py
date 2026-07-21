@@ -57,7 +57,7 @@ class MetaQuestConfigTest(unittest.TestCase):
             path.write_text(
                 "meta_quest:\n"
                 "  connection:\n"
-                "    quest_ip: 192.168.1.42\n"
+                "    quest_ip: 192.0.2.2\n"
                 "    tcp_port: 60000\n"
                 "    sync_port: 41000\n"
                 "  health:\n"
@@ -66,7 +66,7 @@ class MetaQuestConfigTest(unittest.TestCase):
             )
             config = MetaQuestConfig.from_yaml(path)
 
-        self.assertEqual(config.quest_ip, "192.168.1.42")
+        self.assertEqual(config.quest_ip, "192.0.2.2")
         self.assertEqual(config.tcp_port, 60000)
         self.assertEqual(config.sync_port, 41000)
         self.assertEqual(config.frame_stale_timeout_s, 0.5)
@@ -130,6 +130,43 @@ class ParseFrameTest(unittest.TestCase):
         self.assertTrue(
             np.allclose(frame.left.quaternion, [0.11, 0.22, 0.33, 0.44], atol=1e-6)
         )
+
+    def test_additive_body_payload_keeps_controller_consumer_semantics(self):
+        legacy = {
+            "seq": 42,
+            "ovrTimeNs": 123456789,
+            "hmdPosition": {"x": 0, "y": 1.7, "z": 0},
+            "hmdRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            "leftControllerPosition": {"x": -0.2, "y": 1.0, "z": 0.3},
+            "leftControllerRotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            "leftTracked": True,
+            "leftValid": True,
+            "buttonXPressed": True,
+        }
+        extended = {
+            **legacy,
+            "packetType": "body_pose",
+            "body": {
+                "active": True,
+                "jointCount": 84,
+                "joints": [{"index": 0, "locationFlags": 15}],
+            },
+        }
+
+        legacy_frame = parse_frame(legacy, pc_monotonic_ns=99)
+        extended_frame = parse_frame(extended, pc_monotonic_ns=99)
+
+        self.assertEqual(extended_frame.seq, legacy_frame.seq)
+        self.assertEqual(extended_frame.device_time_ns, legacy_frame.device_time_ns)
+        self.assertTrue(
+            np.array_equal(extended_frame.hmd.position, legacy_frame.hmd.position)
+        )
+        self.assertTrue(
+            np.array_equal(extended_frame.left.position, legacy_frame.left.position)
+        )
+        self.assertEqual(extended_frame.left.tracked, legacy_frame.left.tracked)
+        self.assertEqual(extended_frame.left.valid, legacy_frame.left.valid)
+        self.assertEqual(extended_frame.left.buttons, legacy_frame.left.buttons)
 
 
 class TrackingFreshnessTest(unittest.TestCase):
@@ -245,6 +282,26 @@ class TrackingFreshnessTest(unittest.TestCase):
         self.assertEqual(selected.frame.device_time_ns, 2_000)
         self.assertEqual(selected.aligned_time_ns, 102_000)
         self.assertTrue(selected.clock_synced)
+
+    def test_manifest_callback_does_not_replace_latest_controller_frame(self):
+        raw_messages = []
+        receiver = MetaQuestReceiver(
+            self.config,
+            on_raw_message=lambda packet, pc_ns, sequence: raw_messages.append(
+                (packet, pc_ns, sequence)
+            ),
+        )
+        existing = _tracked_frame()
+        with receiver._lock:
+            receiver._latest = existing
+
+        manifest = {"packetType": "session_manifest", "sessionId": "s1"}
+        receiver._handle_message(manifest)
+
+        self.assertIs(receiver.latest(), existing)
+        self.assertEqual(raw_messages[0][0], manifest)
+        self.assertEqual(raw_messages[0][2], 1)
+        self.assertEqual(receiver.session_manifest(), manifest)
 
 
 class PipeSmokeTest(unittest.TestCase):

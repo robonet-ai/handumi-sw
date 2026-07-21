@@ -69,6 +69,7 @@ Thumbs.db
 external_dependencies/
 outputs/
 datasets/
+artifacts/
 configs/rig.yaml
 docs/build/
 

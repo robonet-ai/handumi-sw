@@ -50,7 +50,9 @@ class WriteGripperJointsTest(unittest.TestCase):
     def test_zero_widths_fall_back_to_constant(self):
         joints = np.zeros((3, 16), dtype=np.float32)
         _write_gripper_joints(
-            joints, states=_states(0.0, 0.0), runtime=_FakeRuntime(),
+            joints,
+            states=_states(0.0, 0.0),
+            runtime=_FakeRuntime(),
             args=_args(gripper=0.25),
         )
         self.assertTrue(np.allclose(joints[:, 6], 0.25 * 0.035))

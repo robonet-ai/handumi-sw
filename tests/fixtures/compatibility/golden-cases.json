@@ -1,0 +1,37 @@
+{
+  "schema": "handumi_compatibility_golden_v1",
+  "privacy": {
+    "participant_data": false,
+    "camera_imagery": false,
+    "device_ids": false,
+    "private_paths": false
+  },
+  "cases": [
+    {
+      "name": "controller-only-packet-and-dataset",
+      "packet": {"schema": "tracking_packet_v2", "sourceSchemaVersion": 2, "sequence": 1, "body": null},
+      "dataset": {"tracking_schema": "controller_raw_compact", "capture_schema": "synchronized_sources", "state_semantics": "workspace_controller_pose7_plus_gripper_widths", "body": null}
+    },
+    {
+      "name": "canonical-body-packet-and-dataset",
+      "packet": {"schema": "tracking_packet_v2", "sourceSchemaVersion": 2, "sequence": 2, "body": {"joint_count": 25, "provenance": "SYNTHETIC_TEST", "confidence": 1.0}},
+      "dataset": {"tracking_schema": "controller_raw_compact", "capture_schema": "synchronized_sources", "state_semantics": "workspace_controller_pose7_plus_gripper_widths", "body": {"joint_count": 25}}
+    },
+    {
+      "name": "masks-invalid-provenance-confidence",
+      "packet": {"schema": "tracking_packet_v2", "sourceSchemaVersion": 2, "body": {"joint_count": 25, "valid_mask": [1, 0], "confidence": [1.0, 0.0], "provenance": ["SYNTHETIC_TEST", "UNKNOWN"]}},
+      "dataset": {"tracking_schema": "controller_raw_compact", "capture_schema": "synchronized_sources", "state_semantics": "workspace_controller_pose7_plus_gripper_widths"}
+    },
+    {
+      "name": "optional-com-contact-support",
+      "dataset": {"tracking_schema": "controller_raw_compact", "capture_schema": "synchronized_sources", "state_semantics": "workspace_controller_pose7_plus_gripper_widths", "optional": {"com": null, "contact": null, "support": null}}
+    },
+    {
+      "name": "frame-epoch-change",
+      "dataset": {"tracking_schema": "controller_raw_compact", "capture_schema": "synchronized_sources", "state_semantics": "workspace_controller_pose7_plus_gripper_widths", "frame_epochs": [0, 1]}
+    },
+    {"name": "interrupted-episode", "session_status": "incomplete"},
+    {"name": "recoverable-staged-episode", "session_status": "recoverable-staged"},
+    {"name": "rejected-corrupt-episode", "session_status": "rejected"}
+  ]
+}

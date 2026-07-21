@@ -1,9 +1,28 @@
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from handumi.calibration.control_tcp import load_episode_poses
+
+
+def test_tcp_calibration_cli_starts_in_a_clean_interpreter():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "handumi.scripts.setup.calibrate_tcp_offset",
+            "--help",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Estimate controller->TCP translation" in result.stdout
 
 
 def _write_pose_dataset(path: Path, column: str) -> None:

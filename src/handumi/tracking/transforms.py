@@ -22,6 +22,7 @@ the rest of HandUMI uses (`retargeting.handumi_to_robot`).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -218,8 +219,10 @@ class MountingOffsets:
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "MountingOffsets":
         data = data or {}
-        return cls(left=_pose_from_dict(data.get("left")),
-                   right=_pose_from_dict(data.get("right")))
+        return cls(
+            left=_pose_from_dict(data.get("left")),
+            right=_pose_from_dict(data.get("right")),
+        )
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "MountingOffsets":
@@ -253,6 +256,175 @@ class WorkspaceCalibration:
         return self.workspace_from_quest.compose(pose_quest)
 
 
+@dataclass(frozen=True, init=False)
+class HandumiWorldCalibration:
+    """Gravity/heading/ground calibration for body dynamics.
+
+    The input pose must already be converted from any left-handed platform
+    convention into a right-handed source frame. This is deliberately separate
+    from :class:`WorkspaceCalibration`: body dynamics must never inherit the
+    legacy full-HMD inverse transform.
+    """
+
+    world_from_source: Pose
+    ground_plane: np.ndarray
+    source_frame: str
+    qualified: bool
+
+    def __init__(
+        self,
+        world_from_source: Pose,
+        ground_plane: npt.ArrayLike | None = None,
+        source_frame: str = "source_right_handed",
+        qualified: bool = False,
+    ) -> None:
+        plane = (
+            np.full(4, np.nan, dtype=np.float64)
+            if ground_plane is None
+            else np.asarray(ground_plane, dtype=np.float64).reshape(4)
+        )
+        if qualified:
+            normal_norm = float(np.linalg.norm(plane[:3]))
+            if normal_norm <= 1e-12:
+                raise ValueError("ground_plane normal must be non-zero")
+            plane = plane / normal_norm
+        object.__setattr__(self, "world_from_source", world_from_source)
+        object.__setattr__(self, "ground_plane", plane)
+        object.__setattr__(self, "source_frame", str(source_frame))
+        object.__setattr__(self, "qualified", bool(qualified))
+
+    @classmethod
+    def identity(
+        cls,
+        source_frame: str = "source_right_handed",
+        *,
+        qualified: bool = False,
+    ) -> "HandumiWorldCalibration":
+        return cls(
+            Pose.identity(),
+            ground_plane=(0.0, 0.0, 1.0, 0.0) if qualified else None,
+            source_frame=source_frame,
+            qualified=qualified,
+        )
+
+    @classmethod
+    def from_ground_heading(
+        cls,
+        *,
+        ground_origin: npt.ArrayLike,
+        ground_normal: npt.ArrayLike,
+        initial_heading: npt.ArrayLike,
+        source_frame: str = "source_right_handed",
+        qualified: bool = True,
+    ) -> "HandumiWorldCalibration":
+        """Build ``handumi_world`` with X heading, Y left, and Z gravity-up.
+
+        ``qualified=False`` is for profile/platform-assisted calibration that
+        is geometrically usable but has not passed independent ground-truth
+        validation.
+        """
+        origin = np.asarray(ground_origin, dtype=np.float64).reshape(3)
+        z_axis = np.asarray(ground_normal, dtype=np.float64).reshape(3)
+        z_norm = float(np.linalg.norm(z_axis))
+        if z_norm <= 1e-12:
+            raise ValueError("ground_normal must be non-zero")
+        z_axis /= z_norm
+        heading = np.asarray(initial_heading, dtype=np.float64).reshape(3)
+        x_axis = heading - z_axis * float(np.dot(heading, z_axis))
+        x_norm = float(np.linalg.norm(x_axis))
+        if x_norm <= 1e-12:
+            raise ValueError("initial_heading must not be parallel to ground_normal")
+        x_axis /= x_norm
+        y_axis = np.cross(z_axis, x_axis)
+        y_axis /= np.linalg.norm(y_axis)
+        # Columns are world axes expressed in source. Its transpose maps source
+        # vectors into world coordinates.
+        source_from_world = np.column_stack((x_axis, y_axis, z_axis))
+        world_from_source_rotation = source_from_world.T
+        rotation = matrix_to_quat(world_from_source_rotation)
+        translation = -(world_from_source_rotation @ origin)
+        world_from_source = Pose(translation, rotation)
+        return cls(
+            world_from_source,
+            ground_plane=(0.0, 0.0, 1.0, 0.0),
+            source_frame=source_frame,
+            qualified=qualified,
+        )
+
+    def apply_position(self, position: npt.ArrayLike) -> np.ndarray:
+        return self.world_from_source.position + quat_rotate(
+            self.world_from_source.quaternion, position
+        )
+
+    def apply_orientation(self, quaternion: npt.ArrayLike) -> np.ndarray:
+        return quat_normalize(
+            quat_multiply(self.world_from_source.quaternion, quaternion)
+        )
+
+    def apply_pose(self, pose: Pose) -> Pose:
+        return self.world_from_source.compose(pose)
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "source": self.source_frame,
+            "target": "handumi_world",
+            "translation_m": self.world_from_source.position.tolist(),
+            "quaternion_xyzw": self.world_from_source.quaternion.tolist(),
+            "ground_plane": self.ground_plane.tolist(),
+            "kind": "gravity_heading_ground_calibration",
+            "qualified": self.qualified,
+        }
+
+
+@dataclass(frozen=True)
+class NamedFrameTransform:
+    source: str
+    target: str
+    target_from_source: Pose
+    provenance: str = "calibrated"
+
+
+class FrameTransformGraph:
+    """Explicit rigid transforms among world, workspace, camera, and mocap frames."""
+
+    def __init__(self) -> None:
+        self._edges: dict[str, list[NamedFrameTransform]] = {}
+
+    def add(
+        self, transform: NamedFrameTransform, *, bidirectional: bool = True
+    ) -> None:
+        self._edges.setdefault(transform.source, []).append(transform)
+        if bidirectional:
+            self._edges.setdefault(transform.target, []).append(
+                NamedFrameTransform(
+                    source=transform.target,
+                    target=transform.source,
+                    target_from_source=transform.target_from_source.inverse(),
+                    provenance=transform.provenance,
+                )
+            )
+
+    def resolve(self, source: str, target: str) -> Pose:
+        if source == target:
+            return Pose.identity()
+        queue: deque[tuple[str, Pose]] = deque([(source, Pose.identity())])
+        visited = {source}
+        while queue:
+            frame, frame_from_source = queue.popleft()
+            for edge in self._edges.get(frame, []):
+                if edge.target in visited:
+                    continue
+                target_from_source = edge.target_from_source.compose(frame_from_source)
+                if edge.target == target:
+                    return target_from_source
+                visited.add(edge.target)
+                queue.append((edge.target, target_from_source))
+        raise KeyError(f"No transform path from {source!r} to {target!r}")
+
+    def transform_pose(self, pose: Pose, *, source: str, target: str) -> Pose:
+        return self.resolve(source, target).compose(pose)
+
+
 def apply_mounting_offset(controller_pose: Pose, offset: Pose) -> Pose:
     """Controller anchor pose -> gripper TCP pose (offset in controller frame)."""
     return controller_pose.compose(offset)
@@ -284,12 +456,16 @@ def _pose_from_dict(data: dict[str, Any] | None) -> Pose:
         return Pose.identity()
     position = data.get("position", [0.0, 0.0, 0.0])
     quaternion = data.get("quaternion", [0.0, 0.0, 0.0, 1.0])
-    return Pose(np.asarray(position, dtype=np.float64),
-                np.asarray(quaternion, dtype=np.float64))
+    return Pose(
+        np.asarray(position, dtype=np.float64), np.asarray(quaternion, dtype=np.float64)
+    )
 
 
 __all__ = [
     "MountingOffsets",
+    "FrameTransformGraph",
+    "HandumiWorldCalibration",
+    "NamedFrameTransform",
     "Pose",
     "WorkspaceCalibration",
     "apply_mounting_offset",

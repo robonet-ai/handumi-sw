@@ -39,7 +39,9 @@ JOINT_NAMES = [
 class FakeArm:
     def __init__(self, start=None):
         self.port = "fake"
-        self.current = np.zeros(6, dtype=np.int64) if start is None else np.asarray(start)
+        self.current = (
+            np.zeros(6, dtype=np.int64) if start is None else np.asarray(start)
+        )
         self.sent: list[np.ndarray] = []
         self.grippers: list[tuple[int, int]] = []
         self.closed = False

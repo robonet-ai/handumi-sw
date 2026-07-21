@@ -1,5 +1,11 @@
 # HandUMI - Software
 
+> **Research preview.** Full-body pose, center of mass, contact, support, and
+> profile-constrained skeleton outputs are experimental platform/model
+> estimates. They have not passed the repository's ground-truth validation
+> gates and must not be described as anatomically accurate,
+> synchronization-grade, or production-safety signals.
+
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://github.com/BrikHMP18/HandUMI"><img src="https://img.shields.io/badge/Hardware-HandUMI-4c8bf5.svg" alt="HandUMI hardware"></a>
@@ -15,6 +21,20 @@
 > **Collect once, retarget to many robots.** Record demonstrations with HandUMI
 > once, then retarget and reuse the same data across different bimanual arms
 > with parallel grippers, without recollecting demonstrations for each robot.
+
+## Documentation
+
+**[Read the HandUMI documentation](https://robonet-ai.github.io/handumi-sw/)**
+
+- [Installation](docs/source/getting_started/installation.md)
+- [Setup and calibration](docs/source/setup.md)
+- [Teleoperation](docs/source/teleoperation.md)
+- [Record demonstrations](docs/source/record.md)
+- [Quality assurance](docs/source/workflows/datasets.md)
+- [Body and trajectory visualization](docs/source/workflows/visualization.md)
+- [Troubleshooting](docs/source/troubleshooting.md)
+- [Research-preview release checklist](docs/source/development/release_checklist.md)
+- [Add a new robot embodiment](docs/source/development/new_embodiment.md)
 
 ## Quick Start
 
@@ -99,7 +119,12 @@ to contribute an integration. If you want support for a specific bimanual arm,
 
 ## Safety
 
-This is research software. Preview and validate trajectories before commanding physical robots, keep an emergency stop accessible, and enforce the robot's joint, velocity, acceleration, workspace, and collision limits.
+This is research software. Preview and independently validate trajectories
+before commanding physical robots, keep an emergency stop accessible, and
+enforce the robot's joint, velocity, acceleration, workspace, and collision
+limits. Do not use estimated body balance/contact state as a human-safety or
+robot-safety interlock. Headset camera and motion captures can identify people
+and environments; obtain consent and review datasets before sharing them.
 
 ## Credits
 

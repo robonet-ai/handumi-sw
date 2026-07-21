@@ -282,4 +282,75 @@ uv run pytest -q tests/tracking/test_transforms.py \
 ```
 :::
 
+## 6. Run the Recording Preflight
+
+Run one read-only preflight immediately before creating a dataset. For the
+Meta controller profile:
+
+```bash
+handumi-preflight \
+  --device meta \
+  --expected-package com.handumi.questapp \
+  --expected-version 0.2.1 \
+  --session-calibration outputs/calibration/session.yaml \
+  --controller-tcp-calibration configs/calibration/meta_controller_tcp.yaml \
+  --output-dir outputs/datasets
+```
+
+For the separate body diagnostic profile, require packet v2 and the measured
+profile explicitly:
+
+```bash
+handumi-preflight \
+  --device meta --require-body \
+  --expected-package com.handumi.questapp.bodyprobe \
+  --expected-version 0.1.2 \
+  --expected-protocol-version 2 \
+  --session-calibration outputs/calibration/session.yaml \
+  --body-profile configs/body_profile.yaml \
+  --controller-tcp-calibration configs/calibration/meta_controller_tcp.yaml \
+  --output-dir outputs/datasets
+```
+
+For PICO, start the pinned XRoboToolkit PC service first. The preflight reads an
+existing stream without restarting the service:
+
+```bash
+handumi-preflight \
+  --device pico --pico-mode mandos \
+  --expected-protocol-version 2 \
+  --session-calibration outputs/calibration/session.yaml \
+  --controller-tcp-calibration configs/calibration/pico_controller_tcp.yaml \
+  --output-dir outputs/datasets
+```
+
+The preflight verifies Quest/PICO transport, expected build/protocol fields,
+foreground HMD/controller tracking, body activation/calibration when required,
+clock diagnostics, camera identity/class/mode/frame production, duplicate
+camera identities and USB topology, Feetech identity/side/servo/motion/range,
+calibration files, dependencies, output writability/free space, and local
+Quest/Rerun/Viser process or port conflicts. It resolves symlinks and checks
+device class, so a stale wrist-camera path that now points to a serial adapter
+fails even though the path exists.
+
+Normal operation is read-only and never creates a dataset. To diagnose a USB
+re-enumeration interactively, first preview a remap:
+
+```bash
+handumi-preflight ... --interactive-remap
+```
+
+Only after reviewing the stable identity and USB path, opt into the atomic
+machine-local write:
+
+```bash
+handumi-preflight ... --interactive-remap --write-rig
+```
+
+The write updates only camera/Feetech assignments in ignored
+`configs/rig.yaml`; a failed replacement leaves the original intact. Rerun the
+read-only preflight after any remap. Encoder motion here is a connectivity
+check, not evidence that the full physical endpoint or 0–66 mm hardware gate
+passed.
+
 Next: [Record Demonstrations](record.md).

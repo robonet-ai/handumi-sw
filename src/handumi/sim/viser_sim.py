@@ -18,6 +18,9 @@ from pathlib import Path
 
 import numpy as np
 
+from handumi.sim.scene import SceneBody
+from handumi.utils.trajectory import TrajectoryTrail
+
 _logger = logging.getLogger(__name__)
 
 try:
@@ -29,9 +32,6 @@ except ImportError as e:
         "viser is required for simulation. Install project dependencies with: uv sync"
     ) from e
 
-from handumi.sim.scene import SceneBody
-from handumi.utils.trajectory import TrajectoryTrail
-
 # Same palette as the Rerun controller trails in teleop_sim.py, so
 # "which arm" reads the same color in both views.
 LEFT_TCP_COLOR = (240, 189, 63)  # mustard gold
@@ -41,7 +41,9 @@ _TCP_SPHERE_RADIUS_M = 0.012
 _DEFAULT_TCP_TRAIL_MAX_POINTS = 150
 
 
-def _rgba_to_viser_color(rgba: tuple[float, float, float, float]) -> tuple[int, int, int]:
+def _rgba_to_viser_color(
+    rgba: tuple[float, float, float, float],
+) -> tuple[int, int, int]:
     r, g, b = (int(round(c * 255)) for c in rgba[:3])
     return (r, g, b)
 
@@ -74,7 +76,9 @@ def _add_scene_geom(server: "viser.ViserServer", path: str, geom) -> None:
             wxyz=geom.local_quaternion_wxyz,
         )
     else:
-        _logger.warning("Unsupported scene geom kind %r at %s; skipping render.", geom.kind, path)
+        _logger.warning(
+            "Unsupported scene geom kind %r at %s; skipping render.", geom.kind, path
+        )
 
 
 def _add_scene_body(server: "viser.ViserServer", body: SceneBody):
@@ -191,7 +195,9 @@ class ViserSim:
             self._latest_tcp[side] = np.asarray(position, dtype=np.float32)
             self._condition.notify()
 
-    async def set_body_pose(self, name: str, position: np.ndarray, quaternion_wxyz: np.ndarray) -> None:
+    async def set_body_pose(
+        self, name: str, position: np.ndarray, quaternion_wxyz: np.ndarray
+    ) -> None:
         """Move a dynamic scene body prop (no-op if ``name`` wasn't configured
         as a scene body — see :attr:`ViserSim._scene_bodies`)."""
         with self._condition:
@@ -281,7 +287,10 @@ class ViserSim:
             )
             for side, color in (("left", LEFT_TCP_COLOR), ("right", RIGHT_TCP_COLOR))
         }
-        tcp_trails = {side: TrajectoryTrail(self._tcp_trail_max_points) for side in ("left", "right")}
+        tcp_trails = {
+            side: TrajectoryTrail(self._tcp_trail_max_points)
+            for side in ("left", "right")
+        }
         tcp_trail_handles = {
             side: server.scene.add_line_segments(
                 f"/tcp/{side}/trail",

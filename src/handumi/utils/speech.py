@@ -42,7 +42,8 @@ def say(text: str, *, blocking: bool = False) -> None:
             subprocess.run(cmd, check=True)
         else:
             subprocess.Popen(
-                cmd, creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0
+                cmd,
+                creationflags=subprocess.CREATE_NO_WINDOW if system == "Windows" else 0,
             )
     except FileNotFoundError:
         log.warning(
