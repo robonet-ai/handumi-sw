@@ -706,6 +706,7 @@ def record_episode(
     health_gate = SustainedHealthGate(sensor_loss_timeout_s)
     next_disk_check = time.monotonic()
 
+    elapsed = 0.0
     while True:
         loop_start = time.perf_counter()
         tracking_now_ns = time.monotonic_ns()

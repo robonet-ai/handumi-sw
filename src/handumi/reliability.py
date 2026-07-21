@@ -324,7 +324,8 @@ def hash_configuration(label: str, path: Path | None) -> dict[str, object]:
     return {"label": label, "present": True, "sha256": digest}
 
 
-def _source_commit() -> str:
+def source_commit() -> str:
+    """Return the checked-out source revision without exposing repository paths."""
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -356,7 +357,7 @@ class CaptureSession:
     profile: CaptureProfile
     configuration_hashes: list[dict[str, object]] = field(default_factory=list)
     calibration_hashes: list[dict[str, object]] = field(default_factory=list)
-    source_commit: str = field(default_factory=_source_commit)
+    source_commit: str = field(default_factory=source_commit)
     started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     viewer_failures: list[str] = field(default_factory=list)
@@ -508,7 +509,7 @@ def write_publishable_session_manifest(
                 )
     value: dict[str, object] = {
         "schema": SESSION_SCHEMA,
-        "source_commit": _source_commit(),
+        "source_commit": source_commit(),
         "runtime_versions": runtime_versions(),
         "configuration_hashes": configuration_hashes,
         "calibration_hashes": calibration_hashes,

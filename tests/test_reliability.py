@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -140,6 +141,26 @@ def test_short_software_soak_is_machine_readable_and_leak_bounded(tmp_path: Path
     assert isinstance(rows, int)
     assert rows >= 3
     assert result["maintained_requested_profile"] is True
+    assert result["source_commit"] != ""
+    assert result["command"] == {
+        "executable": "handumi-soak",
+        "arguments": [
+            "--duration-s",
+            "0.15",
+            "--dataset-hz",
+            "30",
+            "--camera-fps",
+            "30",
+            "--camera-count",
+            "3",
+            "--output",
+            "soak.json",
+        ],
+    }
+    profiling = cast(dict[str, object], result["profiling"])
+    stages = cast(dict[str, dict[str, int | float]], profiling["stages"])
+    assert stages["finalization"]["calls"] == 1
+    assert stages["checksum_generation"]["calls"] == 1
     assert json.loads(output.read_text())["schema"] == "handumi_software_soak_v1"
     time.sleep(0.02)
     assert {thread.ident for thread in threading.enumerate()} == before_threads

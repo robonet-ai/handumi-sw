@@ -16,6 +16,7 @@ from handumi.reliability import (
     atomic_write_json,
     process_resource_snapshot,
     resolve_capture_profile,
+    source_commit,
 )
 
 
@@ -85,8 +86,9 @@ def run_soak(
             )
             time.sleep(min(0.002, max(0.0, min(next_row, next_camera, deadline) - now)))
     finally:
-        for worker in workers.values():
-            worker.close()
+        with profiler.measure("finalization"):
+            for worker in workers.values():
+                worker.close()
     elapsed = time.monotonic() - started
     resource_end = process_resource_snapshot()
     for resource_name, end_value in resource_end.items():
@@ -94,9 +96,27 @@ def run_soak(
     achieved_hz = rows / elapsed
     minimum_rows = math.floor(duration_s * dataset_hz * 0.98)
     maintained = rows >= minimum_rows
+    with profiler.measure("checksum_generation"):
+        payload_sha256 = encoded.hexdigest()
     result: dict[str, object] = {
         "schema": "handumi_software_soak_v1",
         "classification": "software-only synthetic/headless; no Quest, camera, thermal, radio, or physical-hardware evidence",
+        "source_commit": source_commit(),
+        "command": {
+            "executable": "handumi-soak",
+            "arguments": [
+                "--duration-s",
+                str(duration_s),
+                "--dataset-hz",
+                str(dataset_hz),
+                "--camera-fps",
+                str(camera_fps),
+                "--camera-count",
+                str(camera_count),
+                "--output",
+                output.name,
+            ],
+        },
         "started_at": started_wall,
         "ended_at": datetime.now(UTC).isoformat(),
         "wall_clock_duration_s": elapsed,
@@ -111,7 +131,7 @@ def run_soak(
             "peak": resource_peak,
         },
         "profiling": profiler.snapshot(),
-        "payload_sha256": encoded.hexdigest(),
+        "payload_sha256": payload_sha256,
     }
     atomic_write_json(output, result)
     return result
