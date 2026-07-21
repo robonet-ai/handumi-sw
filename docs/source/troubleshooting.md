@@ -3,7 +3,7 @@
 ## Device or Port Missing
 
 ```bash
-handumi-setup-ports
+handumi setup ports
 lsusb
 ls /dev/ttyACM* /dev/ttyUSB*
 ```
@@ -21,7 +21,7 @@ ls /usr/lib/modules/$(uname -r)
 ```
 
 If the module tree does not match the running kernel, reboot after the system
-update, reconnect the adapter, and rerun `handumi-setup-ports`.
+update, reconnect the adapter, and rerun `handumi setup ports`.
 :::
 
 ## Quest Does Not Stream
@@ -42,8 +42,8 @@ adb reverse --list
 Confirm side/port mappings, home at mid-travel, then recalibrate:
 
 ```bash
-handumi-home-servos
-handumi-calibrate-grippers calibrate
+handumi servo home
+handumi calibrate grippers calibrate
 ```
 
 If left/right motion is swapped, correct the mapping in `configs/rig.yaml`;
@@ -60,8 +60,8 @@ If JAX reports `Unable to load cuPTI` but replay continues, force the supported
 CPU path for the command:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0
 ```

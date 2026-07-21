@@ -6,9 +6,8 @@ Episode control: timed by default (--episode-time-s), PICO buttons with
 start or stop/save; double-clap left while recording to restart the attempt).
 
 Spoken status announcements ("Recording episode 3", "Episode 3 saved, 812
-frames", ...) are on by default — pass --no-sounds to disable them. Without
---output-dir each run writes a fresh outputs/<YYYYMMDD_HHMMSS>/ folder
-(outputs/ is gitignored).
+frames", ...) are on by default — pass --no-sounds to disable them. The
+required DATASET argument selects the local output directory.
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ import threading
 import time
 import tty
 from dataclasses import dataclass
-from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
 
@@ -913,6 +911,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--help-advanced", action="store_true", help="Show every expert option.")
+    p.add_argument("dataset", type=Path, help="Local dataset directory.")
     p.add_argument("--device", choices=("pico", "meta"), default=None)
     p.add_argument(
         "--cameras",
@@ -926,38 +925,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_RIG_CONFIG,
         help=advanced("Machine-local cameras, Feetech, and Meta Quest configuration."),
     )
-    p.add_argument(
-        "--cam-ids",
-        nargs="+",
-        type=_camera_arg,
-        default=None,
-        help=advanced("Override physical camera IDs in logical camera order."),
-    )
-    p.add_argument(
-        "--wrist-cameras",
-        action="store_true",
-        help=advanced("Legacy alias selecting both wrist cameras."),
-    )
-    p.add_argument(
-        "--workspace-camera",
-        action="store_true",
-        help=advanced("Legacy flag adding the workspace camera."),
-    )
-    only_camera = p.add_mutually_exclusive_group()
-    only_camera.add_argument(
-        "--only-left-camera",
-        "--only-left-cameras",
-        dest="only_left_camera",
-        action="store_true",
-        help=advanced("Legacy single-camera selection."),
-    )
-    only_camera.add_argument(
-        "--only-right-camera",
-        "--only-right-cameras",
-        dest="only_right_camera",
-        action="store_true",
-        help=advanced("Legacy single-camera selection."),
-    )
     p.add_argument("--cam-width", type=int, default=None, help=advanced("Camera width."))
     p.add_argument("--cam-height", type=int, default=None, help=advanced("Camera height."))
     p.add_argument("--cam-fps", type=int, default=None, help=advanced("Camera capture FPS."))
@@ -966,30 +933,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--skip-feetech",
         action="store_true",
         default=None,
-        help="Record without gripper sensors and zero-fill their values.",
+        help=advanced("Record without gripper sensors and zero-fill their values."),
     )
-    p.add_argument("--repo-id", type=str, default="local/handumi_dataset")
-    p.add_argument("output", nargs="?", type=Path, help="Dataset output directory.")
     p.add_argument(
-        "--output",
-        "--output-dir",
-        dest="output_dir",
-        type=Path,
+        "--repo-id",
         default=None,
-        help="Dataset folder. Defaults to a fresh outputs/<YYYYMMDD_HHMMSS>/ "
-        "named after when recording started (outputs/ is gitignored).",
+        help=advanced("Dataset-card repository id; normally inferred from DATASET."),
     )
     p.add_argument(
         "--resume",
         action="store_true",
         help=(
-            "Append episodes to the finalized dataset at OUTPUT. "
-            "--num-episodes is the number of additional episodes to record."
+            "Append episodes to the finalized DATASET. "
+            "--episodes is the number of additional episodes to record."
         ),
     )
     p.add_argument("--task", type=str, default="HandUMI recording")
-    p.add_argument("--num-episodes", type=int, default=10)
-    p.add_argument("--episode-time-s", type=float, default=60.0)
+    p.add_argument("--episodes", dest="num_episodes", type=int, default=10)
+    p.add_argument(
+        "--episode-time-s", type=float, default=60.0, help=advanced("Maximum episode duration.")
+    )
     p.add_argument("--fps", type=int, default=None, help=advanced("Dataset row rate."))
     p.add_argument(
         "--tracking-loss-timeout-s",
@@ -1028,7 +991,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--encoder",
         choices=("auto", "cpu", "gpu"),
         default="auto",
-        help=(
+        help=advanced(
             "Video encoder policy. 'auto' probes hardware first and falls back "
             "to H.264 on CPU; 'gpu' requires a working hardware encoder."
         ),
@@ -1064,7 +1027,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help=(
+        help=advanced(
             "Explicit Controller-to-HandUMI-TCP override. Defaults to the "
             "robot/device setup and snapshots its tool identity in dataset metadata. "
             "Raw controller poses remain unchanged."
@@ -1074,15 +1037,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--session-calibration",
         type=Path,
         default=None,
-        help=(
-            "Tracking-device-to-table session calibration from handumi-calibrate-spatial. "
+        help=advanced(
+            "Tracking-device-to-table session calibration from "
+            "`handumi calibrate spatial`. "
             "Locks all episodes to the same table frame."
         ),
     )
     p.add_argument(
         "--robot",
         default=None,
-        help=(
+        help=advanced(
             "Intended robot embodiment. Snapshots configs/robots/<robot>.yaml in "
             "metadata; raw recordings remain robot-agnostic."
         ),
@@ -1116,8 +1080,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--dry-run",
-        "--print-config",
-        dest="dry_run",
         action="store_true",
         help="Resolve and print the recording plan without opening hardware.",
     )
@@ -1129,19 +1091,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
     """Apply CLI > resumed dataset > rig.yaml > built-in defaults."""
-    positional_output = getattr(args, "output", None)
-    option_output = getattr(args, "output_dir", None)
-    if positional_output is not None and option_output is not None:
-        if Path(positional_output) != Path(option_output):
-            raise SystemExit("Use either positional OUTPUT or --output-dir, not both.")
-    args.output_dir = option_output or positional_output
+    args.output_dir = Path(args.dataset)
+    args.cam_ids = None
+    if args.repo_id is None:
+        args.repo_id = f"local/{args.output_dir.name}"
 
     explicit = {
         name: getattr(args, name, None) is not None
         for name in (
             "device",
             "cameras",
-            "cam_ids",
             "cam_width",
             "cam_height",
             "cam_fps",
@@ -1153,15 +1112,6 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
             "controller_tcp_calibration",
         )
     }
-    legacy_camera_selection = any(
-        bool(getattr(args, name, False))
-        for name in (
-            "wrist_cameras",
-            "workspace_camera",
-            "only_left_camera",
-            "only_right_camera",
-        )
-    )
     args._explicit_recording = explicit
     args._resume_info = None
     args._resume_handumi = None
@@ -1181,11 +1131,7 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
         args._resume_info = info
         args._resume_handumi = handumi
         resume_values = _recording_values_from_dataset(info, handumi)
-        if (
-            not explicit["cam_ids"]
-            and not legacy_camera_selection
-            and resume_values.get("cam_ids") is not None
-        ):
+        if resume_values.get("cam_ids") is not None:
             args.cam_ids = list(resume_values["cam_ids"])
 
     rig = load_optional_rig_section(args.rig_config, "recording")
@@ -1199,8 +1145,6 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
 
     for name, fallback in _RECORDING_DEFAULTS.items():
         if getattr(args, name, None) is not None:
-            continue
-        if name == "cameras" and legacy_camera_selection:
             continue
         value = resume_values.get(name, rig_values.get(name, fallback))
         if name == "cameras":
@@ -1228,8 +1172,6 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
         if configured_session:
             args.session_calibration = Path(str(configured_session))
 
-    if args.output_dir is None:
-        args.output_dir = _default_output_dir()
     return args
 
 
@@ -1280,7 +1222,7 @@ def _recording_values_from_dataset(
 
 def _validate_args(args: argparse.Namespace) -> None:
     if bool(getattr(args, "resume", False)) and getattr(args, "output_dir", None) is None:
-        raise SystemExit("--resume requires an explicit --output-dir.")
+        raise SystemExit("--resume requires a DATASET directory.")
     if (
         getattr(args, "vcodec", None) not in (None, "auto")
         and getattr(args, "encoder", "auto") != "auto"
@@ -1831,41 +1773,8 @@ def _latest_gripper_widths(
     return grippers.read_normalized_widths()
 
 
-def _default_output_dir() -> Path:
-    """``outputs/<YYYYMMDD_HHMMSS>/`` named after the moment recording starts.
-
-    ``outputs/`` is gitignored — datasets never get committed by accident.
-    """
-    return Path("outputs") / datetime.now().strftime("%Y%m%d_%H%M%S")
-
-
 def _selected_camera_names(args: argparse.Namespace) -> list[str]:
-    selected = getattr(args, "cameras", None)
-    only_left = bool(getattr(args, "only_left_camera", False))
-    only_right = bool(getattr(args, "only_right_camera", False))
-    wrist = bool(getattr(args, "wrist_cameras", False))
-    workspace = bool(getattr(args, "workspace_camera", False))
-    if selected is not None and (only_left or only_right or wrist or workspace):
-        raise SystemExit("--cameras cannot be combined with legacy camera-selection flags.")
-    if selected is not None:
-        return list(selected)
-    if (only_left or only_right) and (wrist or workspace):
-        raise SystemExit(
-            "--only-left-camera/--only-right-camera cannot be combined with "
-            "--wrist-cameras or --workspace-camera."
-        )
-    if only_left:
-        return ["left_wrist"]
-    if only_right:
-        return ["right_wrist"]
-    if not wrist and not workspace:
-        return ["left_wrist", "right_wrist"]
-    names = []
-    if wrist:
-        names.extend(("left_wrist", "right_wrist"))
-    if workspace:
-        names.append("workspace")
-    return names
+    return list(args.cameras)
 
 
 def _capture_sources_metadata(
@@ -1972,7 +1881,7 @@ def _validate_unique_camera_ids(
         )
         raise SystemExit(
             f"Selected cameras must use distinct devices ({mappings}). "
-            "Fix the cameras section in configs/rig.yaml or pass matching --cam-ids."
+            "Fix the cameras section in configs/rig.yaml."
         )
 
 
@@ -2313,10 +2222,6 @@ def _validate_finalized_lerobot_dataset(root: Path) -> None:
     ]
     if missing_videos:
         raise RuntimeError(f"Dataset is missing videos for: {', '.join(missing_videos)}.")
-
-
-def _camera_arg(value: str) -> int | str:
-    return int(value) if value.isdigit() else value
 
 
 def _normalize_camera_list(value: object) -> list[str]:

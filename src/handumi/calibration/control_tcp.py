@@ -79,8 +79,10 @@ def missing_calibration_message(path: Path = DEFAULT_CALIBRATION) -> str:
     return (
         f"Missing controller->UMI TCP calibration: {path}\n"
         "Run pivot calibration once for each side, for example:\n"
-        "  uv run handumi-calibrate-tcp-offset --device pico pivot --side left -e EP_CAL_LEFT\n"
-        "  uv run handumi-calibrate-tcp-offset --device pico pivot --side right -e EP_CAL_RIGHT\n"
+        "  uv run handumi calibrate tcp --device pico pivot --side left "
+        "--episode EP_CAL_LEFT\n"
+        "  uv run handumi calibrate tcp --device pico pivot --side right "
+        "--episode EP_CAL_RIGHT\n"
         "For debug only, pass the explicit raw-controller flag in the caller."
     )
 

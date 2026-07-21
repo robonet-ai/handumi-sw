@@ -1,18 +1,18 @@
 # Replay a Local Recording in Simulation
 
-`handumi-replay-in-sim` retargets one raw HandUMI episode to a configured
+`handumi replay` retargets one raw HandUMI episode to a configured
 bimanual robot and displays the target and achieved TCP trajectories in Viser.
 The source recording remains robot agnostic: the robot model, IK profile, and
 table placement are selected when replay starts.
 
 ## Use a Local Dataset
 
-Pass the recording directory with `--dataset-root`. A local replay does not
-need `--repo-id` and does not download data:
+Pass the recording directory as `DATASET`. A local replay does not download
+data:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0
 ```
@@ -33,8 +33,8 @@ Recordings captured in the calibrated table workspace normally select
 new embodiment:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/20260714_224135 \
   --robot openarmv1 \
   --episode 0 \
   --retarget-mode absolute-table \
@@ -85,8 +85,8 @@ TRLC-DK1 currently supports bimanual kinematic replay in simulation. It does
 not yet provide a HandUMI real-hardware backend.
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/20260714_224135 \
   --robot trlc_dk1 \
   --episode 0 \
   --retarget-mode absolute-table \
@@ -109,9 +109,8 @@ Axol supports bimanual kinematic replay in simulation with the same automatic
 absolute-table flow:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --repo-id Autobrik/handumi-screws \
-  --dataset-root outputs/datasets/handumi-screws \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/datasets/handumi-screws \
   --robot axol \
   --episode 0
 ```
@@ -156,8 +155,8 @@ Use `--strict-ik` in automated validation. It exits when the maximum position
 or orientation error exceeds the selected thresholds:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --dataset-root outputs/20260714_224135 \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/20260714_224135 \
   --robot trlc_dk1 \
   --episode 0 \
   --headless \

@@ -533,7 +533,7 @@ class MetaQuestTrackingProvider:
         self.workspace_set = False
         self.workspace_locked = False
         # When False, controller buttons cannot reset the workspace (for
-        # example, handumi-teleop-sim owns its anchoring behavior).
+        # example, ``handumi teleop sim`` owns its anchoring behavior).
         self.reset_workspace_on_x = reset_workspace_on_x
         self._prev_reset = False
 

@@ -1,6 +1,6 @@
 kind: piper
 urdf: assets/piper/piper.urdf
-mjcf: assets/piper/piper.xml  # contact physics for handumi-teleop-sim --scene
+mjcf: assets/piper/piper.xml  # contact physics for `handumi teleop sim --scene`
 pkg_root: assets/piper
 mjcf_joint_prefix_map:
   left_: izq_

@@ -32,7 +32,7 @@ Run the guided setup. For a PICO rig without Feetech gripper sensing:
 
 ```bash
 uv sync --extra openarm
-uv run handumi-setup-hardware \
+uv run handumi setup \
   --robot openarmv1 \
   --device pico \
   --skip-feetech-map \
@@ -136,7 +136,7 @@ the emergency stop.
 For a rig mapped as right=`can0`, left=`can1`, calibrate the right arm first:
 
 ```bash
-uv run handumi-setup-hardware \
+uv run handumi setup \
   --robot openarmv1 \
   --device pico \
   --skip-can-map \
@@ -152,7 +152,7 @@ Type `CALIBRATE RIGHT` only after checking the physical arm. Wait for the
 calibrator to finish and disable the motors. Then repeat for the left arm:
 
 ```bash
-uv run handumi-setup-hardware \
+uv run handumi setup \
   --robot openarmv1 \
   --device pico \
   --skip-can-map \
@@ -180,7 +180,7 @@ Stop teleoperation, remove every object from the jaws, and calibrate the right
 gripper:
 
 ```bash
-uv run handumi-calibrate-openarm-grippers --side right
+uv run handumi calibrate openarm-grippers --side right
 ```
 
 After typing `CALIBRATE RIGHT J8`, manually close the jaws until they just
@@ -188,7 +188,7 @@ touch and press Enter, then manually open them fully and press Enter. Repeat for
 the left gripper:
 
 ```bash
-uv run handumi-calibrate-openarm-grippers --side left
+uv run handumi calibrate openarm-grippers --side left
 ```
 
 The independent endpoints are saved in
@@ -211,7 +211,7 @@ only after both arms have lateral clearance from the center structure.
 For both arms, PICO, the collision-safe default pose, and no Feetech sensors:
 
 ```bash
-uv run handumi-teleop-real \
+uv run handumi teleop real \
   --device pico \
   --robot openarmv1 \
   --side both \

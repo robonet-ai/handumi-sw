@@ -59,7 +59,7 @@ replay:
 
 # Replay leaves all actuated joints free by default, including the torso, so IK
 #can use the full mobile-manipulator workspace. Pass `--only-manipulation` to
-#`handumi-replay-in-sim` only when you want an arms-only replay: it applies
+# `handumi replay` only when you want an arms-only replay: it applies
 #`manipulation.lock_joints` from `configs/robots/r1lite.yaml` (torso by
 #default) and keeps those joints at `home_q`.
 

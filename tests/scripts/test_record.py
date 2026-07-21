@@ -19,7 +19,6 @@ from handumi.scripts.record import (
     StreamingEncodingError,
     _StrictStreamingEncoder,
     _capture_sources_metadata,
-    _default_output_dir,
     _EscapeStopListener,
     _recommended_encoder_threads,
     _recording_tcp_calibration_metadata,
@@ -154,13 +153,6 @@ def _left_clap_sequence() -> list[GripperWidths]:
     ]
 
 
-class DefaultOutputDirTest(unittest.TestCase):
-    def test_is_timestamped_under_outputs(self):
-        out = _default_output_dir()
-        self.assertEqual(out.parent, Path("outputs"))
-        self.assertRegex(out.name, r"^\d{8}_\d{6}$")
-
-
 class RecordingConfigurationTest(unittest.TestCase):
     @staticmethod
     def _write_rig(root: Path, recording: str = "") -> Path:
@@ -234,7 +226,7 @@ class RecordingConfigurationTest(unittest.TestCase):
         self.assertEqual(args.fps, 24)
         self.assertTrue(args.skip_feetech)
 
-    def test_legacy_camera_flags_still_override_rig_defaults(self):
+    def test_cli_camera_selection_overrides_rig_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             rig = self._write_rig(
@@ -242,43 +234,28 @@ class RecordingConfigurationTest(unittest.TestCase):
                 "recording:\n  cameras: [workspace]\n",
             )
             args = _resolve_recording_args(
-                parse_args(["--only-left-camera", "--rig-config", str(rig)])
+                parse_args(
+                    [str(root / "capture"), "--cameras", "left_wrist", "--rig-config", str(rig)]
+                )
             )
 
-        self.assertIsNone(args.cameras)
+        self.assertEqual(args.cameras, ["left_wrist"])
         self.assertEqual(_selected_camera_names(args), ["left_wrist"])
+
+    def test_redundant_camera_flags_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["outputs/capture", "--only-left-camera"])
 
 
 class CameraSelectionTest(unittest.TestCase):
-    @staticmethod
-    def _args(**overrides):
-        values = {
-            "wrist_cameras": False,
-            "workspace_camera": False,
-            "only_left_camera": False,
-            "only_right_camera": False,
-        }
-        values.update(overrides)
-        return argparse.Namespace(**values)
-
-    def test_defaults_to_both_wrist_cameras(self):
-        self.assertEqual(
-            _selected_camera_names(self._args()),
-            ["left_wrist", "right_wrist"],
-        )
-
-    def test_all_three_cameras_can_be_selected(self):
+    def test_resolved_camera_names_are_used_directly(self):
         self.assertEqual(
             _selected_camera_names(
-                self._args(wrist_cameras=True, workspace_camera=True)
+                argparse.Namespace(
+                    cameras=["left_wrist", "right_wrist", "workspace"]
+                )
             ),
             ["left_wrist", "right_wrist", "workspace"],
-        )
-
-    def test_only_right_camera(self):
-        self.assertEqual(
-            _selected_camera_names(self._args(only_right_camera=True)),
-            ["right_wrist"],
         )
 
     def test_duplicate_camera_devices_are_rejected(self):

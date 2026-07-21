@@ -14,7 +14,7 @@ Check:
 
 ```bash
 python --version
-handumi-record --help
+handumi record --help
 ```
 
 `install.sh` creates the virtual environment, runs `uv sync`, and builds the

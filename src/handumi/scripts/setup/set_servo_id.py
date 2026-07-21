@@ -120,7 +120,7 @@ def set_servo_id(args: argparse.Namespace, *, bus_cls=FeetechBus) -> None:
     if not new_present:
         raise SystemExit(
             f"Write finished, but ID {args.new_id} did not reply. "
-            "Power-cycle the servo and re-run handumi-setup-ports."
+            "Power-cycle the servo and re-run `handumi setup ports`."
         )
     if old_still_present:
         print(
@@ -128,7 +128,7 @@ def set_servo_id(args: argparse.Namespace, *, bus_cls=FeetechBus) -> None:
             "disconnect all but the target servo and verify again."
         )
     print("Servo ID updated.")
-    print("Next: run `handumi-setup-ports` and update `configs/rig.yaml`.")
+    print("Next: run `handumi setup ports` and update `configs/rig.yaml`.")
 
 
 def main() -> None:

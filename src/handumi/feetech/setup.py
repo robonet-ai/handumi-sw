@@ -173,7 +173,7 @@ def _scan_identified_feetech(
         )
     raise SystemExit(
         f"{port} tiene multiples Feetech IDs {ids}. "
-        "Conecta solo un servo o cambia IDs con handumi-set-servo-id."
+        "Conecta solo un servo o cambia IDs con `handumi servo set-id`."
     )
 
 
@@ -228,7 +228,7 @@ def ensure_feetech_serial_permissions(
         raise SystemExit(
             "Permisos seriales actualizados.\n"
             "Cierra sesion y vuelve a entrar, o reinicia la maquina, y corre de nuevo:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico"
+            "  uv run handumi setup --robot piper --device pico"
         )
 
     if blocked_ports:

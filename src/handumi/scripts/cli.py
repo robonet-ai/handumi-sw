@@ -5,27 +5,66 @@ from __future__ import annotations
 
 import importlib
 import sys
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Command:
+    module: str
+    description: str
 
 
 COMMANDS = {
-    "doctor": (
-        "handumi.scripts.doctor",
-        "Check installation and recording readiness",
+    ("doctor",): Command("handumi.scripts.doctor", "Check recording readiness"),
+    ("setup",): Command("handumi.scripts.setup.setup_hardware", "Run guided setup"),
+    ("setup", "ports"): Command(
+        "handumi.scripts.setup.setup_ports", "Identify cameras and serial ports"
     ),
-    "setup": ("handumi.scripts.setup.setup_hardware", "Run guided hardware setup"),
-    "record": ("handumi.scripts.record", "Record demonstrations"),
-    "validate": ("handumi.scripts.validate", "Validate recorded episodes"),
-    "replay": ("handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"),
-    "convert": ("handumi.scripts.conversion", "Convert data to a robot profile"),
+    ("record",): Command("handumi.scripts.record", "Record demonstrations"),
+    ("validate",): Command("handumi.scripts.validate", "Validate recorded episodes"),
+    ("replay",): Command(
+        "handumi.scripts.replay.replay_in_sim", "Replay a dataset in simulation"
+    ),
+    ("convert",): Command("handumi.scripts.conversion", "Convert data to a robot"),
+    ("teleop", "sim"): Command("handumi.scripts.teleop_sim", "Teleoperate in simulation"),
+    ("teleop", "real"): Command("handumi.scripts.teleop_real", "Teleoperate a real robot"),
+    ("camera", "pico"): Command("handumi.scripts.pico_camera", "Stream cameras to PICO"),
+    ("calibrate", "grippers"): Command(
+        "handumi.scripts.setup.calibrate_grippers", "Calibrate Feetech grippers"
+    ),
+    ("calibrate", "openarm-grippers"): Command(
+        "handumi.scripts.setup.calibrate_openarm_grippers",
+        "Calibrate OpenArm grippers",
+    ),
+    ("calibrate", "spatial"): Command(
+        "handumi.scripts.setup.calibrate_spatial", "Calibrate cameras and workspace"
+    ),
+    ("calibrate", "tcp"): Command(
+        "handumi.scripts.setup.calibrate_tcp_offset", "Calibrate controller-to-TCP"
+    ),
+    ("servo", "home"): Command("handumi.scripts.setup.home_servos", "Home Feetech servos"),
+    ("servo", "set-id"): Command(
+        "handumi.scripts.setup.set_servo_id", "Assign a Feetech servo ID"
+    ),
+    ("tracking", "pose"): Command(
+        "handumi.scripts.setup.print_controller_pose", "Print live controller poses"
+    ),
 }
 
 
-def _print_help() -> None:
-    print("usage: handumi <command> [options]\n")
-    print("Common workflow commands:")
-    width = max(len(command) for command in COMMANDS)
-    for command, (_, description) in COMMANDS.items():
-        print(f"  handumi {command:<{width}}  {description}")
+def _print_help(prefix: tuple[str, ...] = ()) -> None:
+    label_prefix = f"handumi {' '.join(prefix)}" if prefix else "handumi"
+    print(f"usage: {label_prefix} <command> [options]\n")
+    print("Commands:")
+    commands = {
+        path: command
+        for path, command in COMMANDS.items()
+        if path[: len(prefix)] == prefix and len(path) > len(prefix)
+    }
+    labels = [" ".join(path) for path in commands]
+    width = max(len(label) for label in labels)
+    for (path, command), label in zip(commands.items(), labels, strict=True):
+        print(f"  handumi {label:<{width}}  {command.description}")
     print("\nRun 'handumi <command> --help' for command-specific options.")
 
 
@@ -34,15 +73,34 @@ def main(argv: list[str] | None = None) -> None:
     if not values or values[0] in {"-h", "--help"}:
         _print_help()
         return
-    command, *rest = values
-    target = COMMANDS.get(command)
-    if target is None:
-        choices = ", ".join(COMMANDS)
-        raise SystemExit(f"Unknown HandUMI command {command!r}. Choose from: {choices}.")
-    module = importlib.import_module(target[0])
+    group = (values[0],)
+    group_exists = any(
+        path[:1] == group and len(path) > 1 for path in COMMANDS
+    ) and group not in COMMANDS
+    if group_exists and (len(values) == 1 or values[1] in {"-h", "--help"}):
+        _print_help(group)
+        return
+    match = next(
+        (
+            (path, command)
+            for path, command in sorted(
+                COMMANDS.items(), key=lambda item: len(item[0]), reverse=True
+            )
+            if tuple(values[: len(path)]) == path
+        ),
+        None,
+    )
+    if match is None:
+        requested = " ".join(values[:2])
+        raise SystemExit(
+            f"Unknown HandUMI command {requested!r}. Run 'handumi --help'."
+        )
+    path, command = match
+    rest = values[len(path) :]
+    module = importlib.import_module(command.module)
     previous_argv = sys.argv
     try:
-        sys.argv = [f"handumi {command}", *rest]
+        sys.argv = [f"handumi {' '.join(path)}", *rest]
         module.main()
     finally:
         sys.argv = previous_argv

@@ -158,9 +158,8 @@ For absolute-table replay, use a recorded validation episode and inspect the
 model in Viser:
 
 ```bash
-JAX_PLATFORMS=cpu uv run handumi-replay-in-sim \
-  --repo-id local/myrobot_validation \
-  --dataset-root outputs/myrobot_validation \
+JAX_PLATFORMS=cpu uv run handumi replay \
+  outputs/myrobot_validation \
   --episode 0 --robot myrobot --retarget-mode absolute-table --strict-ik
 ```
 

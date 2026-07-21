@@ -19,7 +19,7 @@ alignment must be checked each session.
 connected cameras and Feetech adapters:
 
 ```bash
-handumi-setup-ports
+handumi setup ports
 ```
 
 Reconnect one physical device at a time and assign its port under `cameras`
@@ -29,8 +29,8 @@ recording setup; configure them only for real-robot teleoperation.
 Set new Feetech IDs only when required:
 
 ```bash
-handumi-set-servo-id --port /dev/ttyUSB0 --new-id 0
-handumi-set-servo-id --port /dev/ttyUSB0 --new-id 1
+handumi servo set-id --port /dev/ttyUSB0 --new-id 0
+handumi servo set-id --port /dev/ttyUSB0 --new-id 1
 ```
 
 :::{dropdown} Hardware mapping details
@@ -51,22 +51,22 @@ portable project configuration.
 First confirm that both encoders change smoothly while opening and closing:
 
 ```bash
-handumi-calibrate-grippers monitor
+handumi calibrate grippers monitor
 ```
 
 Home each servo with the gripper held at **mid-travel**. This centers the
 encoder range and avoids crossing the 0/4095 wrap point:
 
 ```bash
-handumi-home-servos
-handumi-home-servos --side right  # one side only
+handumi servo home
+handumi servo home --side right  # one side only
 ```
 
 Then calibrate the physical opening width:
 
 ```bash
-handumi-calibrate-grippers calibrate
-handumi-calibrate-grippers calibrate --side right
+handumi calibrate grippers calibrate
+handumi calibrate grippers calibrate --side right
 ```
 
 For each side, enter the maximum opening in millimeters, place the gripper fully
@@ -112,10 +112,9 @@ Use `127.0.0.1:63901` for USB or the workstation IP with `--pico-wifi`.
 Smoke-test a short capture before calibration:
 
 ```bash
-handumi-record --device pico --skip-feetech \
-  --repo-id local/pico-smoke \
-  --output-dir outputs/datasets/pico-smoke \
-  --task "pico smoke" --num-episodes 1 --episode-time-s 10
+handumi record outputs/datasets/pico-smoke \
+  --device pico --skip-feetech \
+  --task "pico smoke" --episodes 1 --episode-time-s 10
 ```
 
 Healthy output reports `xrobotoolkit_sdk initialised` without repeated
@@ -130,9 +129,9 @@ and +Z up.
 ### Camera Intrinsics
 
 ```bash
-handumi-calibrate-spatial intrinsics --camera left_wrist
-handumi-calibrate-spatial intrinsics --camera right_wrist
-handumi-calibrate-spatial intrinsics --camera workspace
+handumi calibrate spatial intrinsics --camera left_wrist
+handumi calibrate spatial intrinsics --camera right_wrist
+handumi calibrate spatial intrinsics --camera workspace
 ```
 
 Move the board throughout each image and vary distance and inclination. The
@@ -151,15 +150,15 @@ Choose the tracking device explicitly. Global options such as `--device`,
 Meta Quest:
 
 ```bash
-handumi-calibrate-spatial --device meta mount --side left
-handumi-calibrate-spatial --device meta mount --side right
+handumi calibrate spatial --device meta mount --side left
+handumi calibrate spatial --device meta mount --side right
 ```
 
 PICO:
 
 ```bash
-handumi-calibrate-spatial --device pico --pico-mode mandos mount --side left
-handumi-calibrate-spatial --device pico --pico-mode mandos mount --side right
+handumi calibrate spatial --device pico --pico-mode mandos mount --side left
+handumi calibrate spatial --device pico --pico-mode mandos mount --side right
 ```
 
 PICO calibration relies on live XRoboToolkit snapshots, so hold the HandUMI
@@ -173,22 +172,22 @@ With the board still at its marked position and the headset fixed as it will be
 during recording, solve the table frame for the same tracking device.
 
 ```bash
-handumi-calibrate-spatial --device meta session --side left
-handumi-calibrate-spatial --device meta visualize
+handumi calibrate spatial --device meta session --side left
+handumi calibrate spatial --device meta visualize
 ```
 
 For PICO:
 
 ```bash
-handumi-calibrate-spatial --device pico --pico-mode mandos session --side left
-handumi-calibrate-spatial --device pico --pico-mode mandos visualize
+handumi calibrate spatial --device pico --pico-mode mandos session --side left
+handumi calibrate spatial --device pico --pico-mode mandos visualize
 ```
 
 Inspect all cameras and both TCP trails in Rerun. The table surface must align
 with `z=0`. If only the workspace-camera stage fails, retry it with:
 
 ```bash
-handumi-calibrate-spatial workspace
+handumi calibrate spatial workspace
 ```
 
 Remove the board without moving the table, cameras, or headset. Repeat the
@@ -218,12 +217,12 @@ Capture the left side:
 
 ```bash
 LEFT_RUN="outputs/tcp_pivot_left_$(date +%Y%m%d_%H%M%S)"
-handumi-record --device "$TRACKING_DEVICE" --skip-feetech --only-left-camera \
-  --repo-id local/tcp_pivot_left --output-dir "$LEFT_RUN" \
-  --task "tcp pivot left" --num-episodes 1 --episode-time-s 25 \
+handumi record "$LEFT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
+  --cameras left_wrist \
+  --task "tcp pivot left" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
-handumi-calibrate-tcp-offset pivot --device "$TRACKING_DEVICE" --side left \
+handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side left \
   --parquet "$LEFT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
@@ -232,12 +231,12 @@ Repeat for the right side:
 
 ```bash
 RIGHT_RUN="outputs/tcp_pivot_right_$(date +%Y%m%d_%H%M%S)"
-handumi-record --device "$TRACKING_DEVICE" --skip-feetech --only-right-camera \
-  --repo-id local/tcp_pivot_right --output-dir "$RIGHT_RUN" \
-  --task "tcp pivot right" --num-episodes 1 --episode-time-s 25 \
+handumi record "$RIGHT_RUN" --device "$TRACKING_DEVICE" --skip-feetech \
+  --cameras right_wrist \
+  --task "tcp pivot right" --episodes 1 --episode-time-s 25 \
   --tracking-loss-timeout-s 3 --no-sounds
 
-handumi-calibrate-tcp-offset pivot --device "$TRACKING_DEVICE" --side right \
+handumi calibrate tcp pivot --device "$TRACKING_DEVICE" --side right \
   --parquet "$RIGHT_RUN/data/chunk-000/file-000.parquet" --episode 0 \
   --output outputs/calibration/controller_tcp_candidate.yaml
 ```
@@ -246,7 +245,7 @@ handumi-calibrate-tcp-offset pivot --device "$TRACKING_DEVICE" --side right \
 Inspect the result:
 
 ```bash
-handumi-calibrate-tcp-offset inspect \
+handumi calibrate tcp inspect \
   outputs/calibration/controller_tcp_candidate.yaml
 ```
 

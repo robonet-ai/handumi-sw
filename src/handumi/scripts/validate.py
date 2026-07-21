@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from handumi.dataset import ensure_metadata, load_raw_episode
@@ -15,39 +16,39 @@ from handumi.dataset.quality import (
 from handumi.dataset.selection import resolve_dataset_selection
 
 
-DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
+def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
 
-
-def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run offline tracking, synchronization, and sensor-health checks.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "dataset",
-        nargs="?",
         help="Local dataset path or Hugging Face repo id.",
     )
-    parser.add_argument("--repo-id", default=None, help="Legacy Hub dataset flag.")
-    parser.add_argument("--root", type=Path, default=None)
-    parser.add_argument("--revision", default="main")
-    parser.add_argument("--source", default="observation.state")
+    parser.add_argument("--help-advanced", action="store_true", help="Show expert options.")
+    parser.add_argument("--revision", default="main", help=advanced("Hub dataset revision."))
+    parser.add_argument("--source", default="observation.state", help=advanced("Feature to validate."))
     parser.add_argument(
         "--episodes",
         default=None,
         help="Comma-separated source episode indices; defaults to every episode.",
     )
     parser.add_argument(
-        "--quality-config", type=Path, default=Path("configs/quality.yaml")
+        "--quality-config",
+        type=Path,
+        default=Path("configs/quality.yaml"),
+        help=advanced("Quality threshold configuration."),
     )
     parser.add_argument(
         "--report",
         type=Path,
         default=None,
-        help="Defaults to <root>/meta/handumi_quality.json.",
+        help=advanced("Defaults to DATASET/meta/handumi_quality.json."),
     )
     parser.add_argument(
-        "--fail-on-reject",
         "--strict",
         dest="fail_on_reject",
         action="store_true",
@@ -62,14 +63,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    raw_argv = list(sys.argv[1:])
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+    parser = build_parser(show_advanced=show_advanced)
+    if show_advanced:
+        parser.print_help()
+        return
+    args = parser.parse_args(raw_argv)
     try:
         selection = resolve_dataset_selection(
             args.dataset,
-            repo_id=args.repo_id,
-            root=args.root,
             revision=args.revision,
-            default_repo_id=DEFAULT_REPO_ID,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

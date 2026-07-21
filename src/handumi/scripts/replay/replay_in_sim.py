@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -49,7 +50,6 @@ from handumi.robots.kinematics import optimization_score_from_errors, pose_error
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, load_robot_config
 from handumi.robots.utils import pose_mul, quat_normalize
 
-DEFAULT_REPO_ID = "NONHUMAN-RESEARCH/handumi-dataset-v2"
 DEFAULT_OUT_DIR = Path("outputs/replay_in_sim")
 DEFAULT_DEPLOYMENT_CALIBRATION_DIR = Path("configs/calibration")
 GRIPPER_NORMALIZED_KEYS = (
@@ -69,38 +69,35 @@ class TcpCalibrationSelection:
     trusted_dataset_snapshot: bool
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
+
     parser = argparse.ArgumentParser(
         description="Replay a raw HandUMI LeRobot episode through bimanual IK."
     )
     parser.add_argument(
         "dataset",
-        nargs="?",
         help="Local dataset path or Hugging Face repo id.",
     )
-    parser.add_argument("--repo-id", default=None, help="Legacy Hub dataset flag.")
-    parser.add_argument(
-        "--dataset-root",
-        default=None,
-        help="Local dataset root. Defaults to outputs/datasets/<repo-id suffix>.",
-    )
-    parser.add_argument("--revision", default="main")
-    parser.add_argument("-e", "--episode", type=int, default=0)
+    parser.add_argument("--help-advanced", action="store_true", help="Show expert IK and calibration options.")
+    parser.add_argument("--revision", default="main", help=advanced("Hub dataset revision."))
+    parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
     parser.add_argument(
         "--source",
         choices=("observation.state", "action"),
         default="observation.state",
-        help="Raw 16D LeRobot feature to replay.",
+        help=advanced("Raw 16D LeRobot feature to replay."),
     )
-    parser.add_argument("--start-frame", type=int, default=0)
-    parser.add_argument("--max-frames", type=int, default=None)
-    parser.add_argument("--stride", type=int, default=1)
+    parser.add_argument("--start-frame", type=int, default=0, help=advanced("First source frame."))
+    parser.add_argument("--max-frames", type=int, default=None, help=advanced("Maximum frames to solve."))
+    parser.add_argument("--stride", type=int, default=1, help=advanced("Source frame stride."))
     parser.add_argument(
         "--retarget-mode",
         choices=("auto", "local-relative", "anchored", "absolute-table"),
         default="auto",
-        help=(
+        help=advanced(
             "auto selects absolute-table for datasets recorded in a calibrated table "
             "workspace, otherwise local-relative. local-relative replays frame-to-frame "
             "TCP SE(3) deltas in robot EE space. anchored preserves the older home + "
@@ -112,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--compose-source",
         choices=("commanded", "achieved"),
         default="commanded",
-        help=(
+        help=advanced(
             "For --retarget-mode local-relative, compose each adapted delta on "
             "the previous commanded target or previous achieved FK pose."
         ),
@@ -121,13 +118,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--translation-scale",
         type=float,
         default=1.0,
-        help="Scale local-relative translation deltas after frame adaptation.",
+        help=advanced("Scale local-relative translation deltas after frame adaptation."),
     )
     parser.add_argument(
         "--controller-device",
         choices=("pico", "meta"),
         default=None,
-        help=(
+        help=advanced(
             "Controller device. Defaults to handumi.recording_device in dataset "
             f"metadata, then {DEFAULT_CONTROLLER_DEVICE!r} for legacy datasets."
         ),
@@ -136,7 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help=(
+        help=advanced(
             "Explicit YAML with controller->HandUMI TCP transforms. Overrides both "
             "the robot/device configured calibration and dataset metadata."
         ),
@@ -144,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--use-dataset-tcp-calibration",
         action="store_true",
-        help=(
+        help=advanced(
             "Force the controller->TCP snapshot embedded in the dataset, including "
             "unidentified legacy snapshots, instead of normal precedence."
         ),
@@ -152,13 +149,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--raw-controller-debug",
         action="store_true",
-        help="Replay raw PICO controller poses without controller->TCP calibration.",
+        help=advanced("Replay raw PICO controller poses without controller->TCP calibration."),
     )
     parser.add_argument(
         "--deployment-calibration",
         type=Path,
         default=None,
-        help=(
+        help=advanced(
             "YAML containing robot_from_table for --retarget-mode absolute-table. "
             "Defaults to configs/calibration/{robot}_table.yaml."
         ),
@@ -167,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--absolute-orientation",
         choices=("relative-start", "table-absolute"),
         default="relative-start",
-        help=(
+        help=advanced(
             "Orientation policy for absolute-table. relative-start aligns each "
             "HandUMI tool frame to the robot home TCP at frame 0 while preserving "
             "all subsequent wrist rotations. table-absolute requires matching, "
@@ -178,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--initial-solve-iterations",
         type=int,
         default=12,
-        help=(
+        help=advanced(
             "Unrestricted IK iterations used to prepare the absolute-table start "
             "configuration before frame 0."
         ),
@@ -187,13 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--initial-position-tolerance-m",
         type=float,
         default=0.01,
-        help="Required maximum TCP position error before starting replay.",
+        help=advanced("Required maximum TCP position error before starting replay."),
     )
     parser.add_argument(
         "--gripper-max-width-m",
         type=float,
         default=None,
-        help=(
+        help=advanced(
             "Fallback physical opening mapped to fully open. Defaults to the robot "
             "configuration and is used only when recorded Feetech "
             "normalized fields are unavailable."
@@ -220,13 +217,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-ik-position-error-m",
         type=float,
         default=0.03,
-        help="Maximum acceptable per-frame TCP position error.",
+        help=advanced("Maximum acceptable per-frame TCP position error."),
     )
     parser.add_argument(
         "--table-clearance-warning-m",
         type=float,
         default=0.10,
-        help=(
+        help=advanced(
             "Warn when a table-calibrated episode never places either HandUMI TCP "
             "closer than this height to table z=0."
         ),
@@ -235,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-ik-rotation-error-deg",
         type=float,
         default=45.0,
-        help="Maximum acceptable per-frame TCP rotation error.",
+        help=advanced("Maximum acceptable per-frame TCP rotation error."),
     )
     parser.add_argument(
         "--strict-ik",
@@ -245,13 +242,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--only-manipulation",
         action="store_true",
-        help=(
+        help=advanced(
             "Lock manipulation.lock_joints from the robot yaml (e.g. torso). "
             "Default: all actuated joints remain free during replay."
         ),
     )
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("-o", "--output", type=Path, default=None)
+    parser.add_argument("--port", type=int, default=8080, help=advanced("Viser port."))
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -1305,15 +1302,18 @@ def show_viewer(args: argparse.Namespace, rollout: dict[str, np.ndarray]) -> Non
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    raw_argv = list(sys.argv[1:])
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+    parser = build_parser(show_advanced=show_advanced)
+    if show_advanced:
+        parser.print_help()
+        return
+    args = parser.parse_args(raw_argv)
     try:
         selection = resolve_dataset_selection(
             args.dataset,
-            repo_id=args.repo_id,
-            root=args.dataset_root,
             revision=args.revision,
-            default_repo_id=DEFAULT_REPO_ID,
         )
     except ValueError as exc:
         parser.error(str(exc))

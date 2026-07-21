@@ -62,7 +62,7 @@ def resolve_camera_ids(
     if cam_ids is not None:
         if camera_names is not None and len(cam_ids) != len(names):
             raise ValueError(
-                f"Expected {len(names)} --cam-ids values for {names}, got {len(cam_ids)}."
+                f"Expected {len(names)} camera IDs for {names}, got {len(cam_ids)}."
             )
         return cam_ids
     defaults = {"left_wrist": 0, "right_wrist": 2, "workspace": 4}

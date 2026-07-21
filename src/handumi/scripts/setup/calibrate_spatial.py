@@ -119,7 +119,7 @@ def _load_session(path: Path) -> dict:
     if not path.exists():
         raise SystemExit(
             f"Missing session calibration: {path}. Run "
-            "'handumi-calibrate-spatial --device <meta|pico> session "
+            "'handumi calibrate spatial --device <meta|pico> session "
             "--side <calibrated-side>' first."
         )
     data = load_yaml(path)

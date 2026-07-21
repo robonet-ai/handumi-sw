@@ -154,7 +154,7 @@ class ConversionTcpCalibrationTest(unittest.TestCase):
 class ConversionProfileTest(unittest.TestCase):
     def test_piper_profile_selects_replay_parity_defaults(self):
         parser = build_parser()
-        args = parser.parse_args(["--piper"])
+        args = parser.parse_args(["dataset", "--robot", "piper"])
 
         _resolve_cli_profile(parser, args)
 
@@ -168,14 +168,16 @@ class ConversionProfileTest(unittest.TestCase):
 
     def test_piper_profile_rejects_non_parity_retarget_mode(self):
         parser = build_parser()
-        args = parser.parse_args(["--piper", "--retarget-mode", "local-relative"])
+        args = parser.parse_args(
+            ["dataset", "--robot", "piper", "--retarget-mode", "local-relative"]
+        )
 
         with self.assertRaises(SystemExit):
             _resolve_cli_profile(parser, args)
 
     def test_default_profile_remains_axol_local_relative(self):
         parser = build_parser()
-        args = parser.parse_args([])
+        args = parser.parse_args(["dataset"])
 
         _resolve_cli_profile(parser, args)
 

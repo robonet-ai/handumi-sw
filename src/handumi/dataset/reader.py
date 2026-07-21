@@ -102,7 +102,7 @@ def validate_raw_state_metadata(info_or_root: dict[str, Any] | str | Path) -> No
     if actual != expected:
         raise ValueError(
             "Unsupported HandUMI raw layout. Re-record with the current "
-            f"handumi-record. Expected {expected}, got {actual}."
+            f"`handumi record`. Expected {expected}, got {actual}."
         )
 
 

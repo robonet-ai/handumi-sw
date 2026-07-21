@@ -25,7 +25,7 @@ close OBS or any viewer that owns a selected camera.
 Test video without enabling a robot:
 
 ```bash
-uv run handumi-pico-camera \
+uv run handumi camera pico \
   --camera /dev/video2 \
   --input-format mjpeg \
   --input-size 1280x720 \
@@ -53,7 +53,7 @@ three-camera layout places the context camera in the center and the wrist
 cameras at the sides:
 
 ```bash
-uv run handumi-pico-camera \
+uv run handumi camera pico \
   --camera /dev/video2 \
   --left-camera /dev/video4 \
   --right-camera /dev/video6

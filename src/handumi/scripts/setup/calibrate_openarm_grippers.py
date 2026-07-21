@@ -92,7 +92,7 @@ def main() -> None:
         f"travel={math.degrees(limits.travel_rad):.2f} deg."
     )
     print(f"Saved: {saved}")
-    print("The next handumi-teleop-real run will load these endpoints automatically.")
+    print("The next `handumi teleop real` run will load these endpoints automatically.")
 
 
 def calibrate_side_manually(

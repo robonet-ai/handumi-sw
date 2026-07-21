@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live HandUMI teleop for registered real-robot backends.
 
-This is the real-hardware sibling of ``handumi-teleop-sim``. The tracking and
+This is the real-hardware sibling of ``handumi teleop sim``. The tracking and
 retargeting semantics are intentionally the same: the current HandUMI TCP pose
 is anchored to the robot home TCP, then relative controller motion drives the
 IK target. The one IK solution ``q`` is the source of truth; the selected lazy
@@ -18,8 +18,8 @@ Usage
 -----
 ::
 
-    handumi-teleop-real --device pico --robot piper
-    handumi-teleop-real --device pico --robot piper --space-start
+    handumi teleop real --device pico --robot piper
+    handumi teleop real --device pico --robot piper --space-start
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -69,9 +70,13 @@ SIDE_CHOICES = ("left", "right", "both")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description="Teleoperate a supported physical robot with HandUMI."
     )
+    parser.add_argument("--help-advanced", action="store_true", help="Show expert hardware options.")
     parser.add_argument("--device", choices=("pico", "meta"), required=True)
     parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
     parser.add_argument(
@@ -111,11 +116,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Machine-local Feetech, tracking, and robot CAN configuration.",
     )
 
-    # Feetech flags, same names as handumi-record and handumi-teleop-sim.
+    # Feetech flags, same names as ``handumi record`` and ``handumi teleop sim``.
     parser.add_argument("--feetech-port", type=str, default=None)
     parser.add_argument("--skip-feetech", action="store_true")
 
-    # Tracking flags, same names as handumi-record (shared build_tracker).
+    # Tracking flags, same names as ``handumi record`` (shared build_tracker).
     parser.add_argument("--quest-ip", type=str, default=None)
     parser.add_argument("--tcp-port", type=int, default=None)
     parser.add_argument("--sync-port", type=int, default=None)
@@ -131,7 +136,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Validate but do not auto-repair CAN with sudo before connecting.",
     )
-    return parser.parse_args(argv)
+    if not show_advanced:
+        normal = {
+            "help",
+            "help_advanced",
+            "device",
+            "robot",
+            "side",
+            "space_start",
+            "no_sounds",
+        }
+        for action in parser._actions:
+            if action.dest not in normal:
+                action.help = argparse.SUPPRESS
+    else:
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(raw_argv)
 
 
 def _validate_args(args: argparse.Namespace) -> None:
@@ -182,7 +203,7 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
             f"{missing_text}.\n"
             f"Puertos Feetech actuales: {current_text}\n"
             "Remapea Feetech sin tocar CAN/PICO:\n"
-            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
+            f"  uv run handumi setup --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-pico "
             "--force-feetech-calibration"
         )
@@ -197,7 +218,7 @@ def _validate_feetech_ports_exist(feetech_config, *, robot: str = "piper") -> No
         raise SystemExit(
             f"No tengo permisos para abrir Feetech: {denied_text}.\n"
             "Corre primero:\n"
-            f"  uv run handumi-setup-hardware --robot {robot} --device pico "
+            f"  uv run handumi setup --robot {robot} --device pico "
             "--skip-can-map --skip-can-repair --skip-feetech-map --skip-pico"
         )
 

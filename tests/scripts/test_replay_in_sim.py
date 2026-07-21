@@ -342,7 +342,7 @@ calibration:
 def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
     from handumi.scripts.replay.replay_in_sim import build_parser
 
-    args = build_parser().parse_args([])
+    args = build_parser().parse_args(["dataset"])
 
     assert args.retarget_mode == "auto"
     assert args.hide_trajectories is False
@@ -358,7 +358,7 @@ def test_absolute_table_parser_defaults_prepare_start_and_align_tools():
 def test_hide_trajectories_parser_flag():
     from handumi.scripts.replay.replay_in_sim import build_parser
 
-    args = build_parser().parse_args(["--hide-trajectories"])
+    args = build_parser().parse_args(["dataset", "--hide-trajectories"])
 
     assert args.hide_trajectories is True
 

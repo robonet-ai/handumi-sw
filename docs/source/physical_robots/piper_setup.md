@@ -20,7 +20,7 @@ Run the guided hardware setup:
 
 ```bash
 uv sync --extra piper
-handumi-setup-hardware --robot piper --device meta \
+handumi setup --robot piper --device meta \
   --skip-feetech-map --skip-feetech-calibration
 ```
 
@@ -47,14 +47,14 @@ and communication is stable.
 Start with simulation and the same robot profile:
 
 ```bash
-handumi-teleop-sim --device meta --robot piper --space-start
+handumi teleop sim --device meta --robot piper --space-start
 ```
 
 After tracking, calibration, and simulated motion behave correctly, validate
 one physical arm first:
 
 ```bash
-handumi-teleop-real --device meta --robot piper --side right
+handumi teleop real --device meta --robot piper --side right
 ```
 
 Keep the emergency stop reachable and confirm that the right controller moves
@@ -62,8 +62,8 @@ only the right arm. Stop and correct the CAN mapping if the wrong side moves.
 Validate the left side separately before enabling both arms:
 
 ```bash
-handumi-teleop-real --device meta --robot piper --side left
-handumi-teleop-real --device meta --robot piper --side both
+handumi teleop real --device meta --robot piper --side left
+handumi teleop real --device meta --robot piper --side both
 ```
 
 For shared controls, safety behavior, and tracking semantics, continue with

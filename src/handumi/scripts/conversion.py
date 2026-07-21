@@ -16,15 +16,12 @@ Usage
 ::
 
     # Axol embodiment (output defaults to NONHUMAN-RESEARCH/handumi-dataset-v2-axol)
-    handumi-convert \
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
-        --robot axol
+    handumi convert NONHUMAN-RESEARCH/handumi-dataset-v2 --robot axol
 
     # Piper embodiment, custom output repo-id, push to hub afterwards
-    handumi-convert \
-        --repo-id NONHUMAN-RESEARCH/handumi-dataset-v2 \
+    handumi convert NONHUMAN-RESEARCH/handumi-dataset-v2 \
         --robot piper \
-        --output-repo-id NONHUMAN-RESEARCH/my-piper-dataset \
+        --output NONHUMAN-RESEARCH/my-piper-dataset \
         --push-to-hub
 """
 
@@ -81,7 +78,10 @@ class ConversionTcpCalibrationSelection:
 # ---------------------------------------------------------------------------
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(*, show_advanced: bool = False) -> argparse.ArgumentParser:
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
+
     parser = argparse.ArgumentParser(
         description=(
             "Convert a PICO/HandUMI LeRobot dataset to an embodiment-specific "
@@ -96,46 +96,25 @@ def build_parser() -> argparse.ArgumentParser:
     ds = parser.add_argument_group("Dataset I/O")
     ds.add_argument(
         "dataset",
-        nargs="?",
         help="Local source dataset path or Hugging Face repo id.",
     )
     ds.add_argument(
-        "--repo-id",
-        default=None,
-        help="Legacy Hugging Face source dataset flag.",
-    )
-    ds.add_argument(
-        "--root",
+        "--output",
         default=None,
         help=(
-            "Local root of the source dataset. "
-            "Defaults to outputs/datasets/<repo-name>."
-        ),
-    )
-    ds.add_argument(
-        "--output-repo-id",
-        default=None,
-        help=(
-            "HuggingFace repo-id for the converted dataset. "
-            "Defaults to <source-repo-id>-<embodiment> "
-            "(e.g. NONHUMAN-RESEARCH/handumi-dataset-v2-piper). "
-            "The local output directory is always outputs/datasets/<output-repo-name>."
+            "Local output path or Hugging Face repository id. Defaults to a "
+            "robot-suffixed dataset under outputs/datasets/."
         ),
     )
     ds.add_argument(
         "--revision",
         default="main",
-        help="Git revision of the source dataset.",
+        help=advanced("Git revision of the source dataset."),
     )
     ds.add_argument(
         "--source",
         default="observation.state",
-        help="Raw 16D HandUMI feature column to convert.",
-    )
-    ds.add_argument(
-        "--column",
-        default=None,
-        help="Deprecated alias for --source.",
+        help=advanced("Raw 16D HandUMI feature column to convert."),
     )
     ds.add_argument(
         "--episodes",
@@ -157,90 +136,77 @@ def build_parser() -> argparse.ArgumentParser:
     ds.add_argument(
         "--push-to-hub",
         action="store_true",
-        help="Push the resulting dataset to the HuggingFace Hub after writing.",
+        help=advanced("Push the resulting dataset to the Hugging Face Hub."),
     )
     ds.add_argument(
         "--hub-token",
         default=None,
-        help="HuggingFace API token (uses HF_TOKEN env var if not set).",
+        help=advanced("Hugging Face token; defaults to HF_TOKEN."),
     )
     ds.add_argument(
         "--quality-config",
         type=Path,
         default=Path("configs/quality.yaml"),
-        help="Offline episode-acceptance thresholds.",
+        help=advanced("Offline episode-acceptance thresholds."),
     )
     ds.add_argument(
         "--skip-quality-filter",
         action="store_true",
-        help="Convert rejected episodes too; intended only for debugging.",
+        help=advanced("Convert rejected episodes too; debugging only."),
     )
 
     # ------------------------------------------------------------------
     # Embodiment selection
     # ------------------------------------------------------------------
     emb = parser.add_argument_group("Embodiment")
-    embodiment_selection = emb.add_mutually_exclusive_group()
-    embodiment_selection.add_argument(
+    emb.add_argument(
         "--robot",
         dest="embodiment",
         choices=EMBODIMENT_NAMES,
-        default=None,
+        default="axol",
         help="Target robot; loads its validated retargeting profile.",
-    )
-    embodiment_selection.add_argument(
-        "--embodiment",
-        dest="embodiment",
-        choices=EMBODIMENT_NAMES,
-        default=None,
-        help=argparse.SUPPRESS,
-    )
-    embodiment_selection.add_argument(
-        "--piper",
-        action="store_true",
-        help=argparse.SUPPRESS,
     )
 
     # ------------------------------------------------------------------
     # Shared IK parameters
     # ------------------------------------------------------------------
     ik = parser.add_argument_group("Shared IK parameters")
-    ik.add_argument("--scale", type=float, default=1.0)
+    ik.add_argument("--scale", type=float, default=1.0, help=advanced("Legacy global scale."))
     ik.add_argument(
         "--axis-map",
         default=None,
-        help=(
+        help=advanced(
             "PICO delta → robot delta mapping, e.g. z,x,y or z,y,-x.  "
             "Defaults to the selected embodiment's validated mapping."
         ),
     )
-    ik.add_argument("--left-only", action="store_true")
-    ik.add_argument("--right-only", action="store_true")
+    ik.add_argument("--left-only", action="store_true", help=advanced("Solve only the left arm."))
+    ik.add_argument("--right-only", action="store_true", help=advanced("Solve only the right arm."))
     ik.add_argument(
         "--gripper",
         type=float,
         default=1.0,
-        help="Fallback gripper opening in [0, 1], used only when the recording "
+        help=advanced("Fallback gripper opening in [0, 1], used only when the recording "
         "carries no Feetech widths (e.g. --skip-feetech). Otherwise the "
-        "recorded opening drives the finger joints frame by frame.",
+        "recorded opening drives the finger joints frame by frame."),
     )
     ik.add_argument(
         "--gripper-max-width-m",
         type=float,
         default=None,
-        help="HandUMI full opening (m) that maps to the robot gripper fully "
+        help=advanced("HandUMI full opening (m) that maps to the robot gripper fully "
         "open; defaults to the selected robot configuration. Recorded normalized "
-        "Feetech values take precedence in replay-parity conversion.",
+        "Feetech values take precedence in replay-parity conversion."),
     )
-    ik.add_argument("--pos-weight", type=float, default=None)
-    ik.add_argument("--ori-weight", type=float, default=None)
-    ik.add_argument("--max-joint-delta", type=float, default=None)
-    ik.add_argument("--max-reach", type=float, default=None)
+    ik.add_argument("--pos-weight", type=float, default=None, help=advanced("IK position weight."))
+    ik.add_argument("--ori-weight", type=float, default=None, help=advanced("IK orientation weight."))
+    ik.add_argument("--max-joint-delta", type=float, default=None, help=advanced("IK joint step limit."))
+    ik.add_argument("--max-reach", type=float, default=None, help=advanced("Workspace reach limit."))
     ik.add_argument(
         "--retarget-mode",
         choices=("local-relative", "anchored", "absolute-table"),
         default=None,
-        help=(
+        help=advanced(
             "Retargeting mode shared with replay_in_sim.py. Defaults to "
             "absolute-table for --robot piper and local-relative otherwise."
         ),
@@ -249,19 +215,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--compose-source",
         choices=("commanded", "achieved"),
         default="commanded",
-        help="For local-relative mode, compose on previous target or achieved FK.",
+        help=advanced("For local-relative mode, compose on previous target or achieved FK."),
     )
     ik.add_argument(
         "--translation-scale",
         type=float,
         default=1.0,
-        help="Scale local-relative translation deltas after frame adaptation.",
+        help=advanced("Scale local-relative translation deltas after frame adaptation."),
     )
     ik.add_argument(
         "--controller-device",
         choices=("pico", "meta"),
         default=None,
-        help=(
+        help=advanced(
             "Override the source tracking device. Defaults to dataset metadata, "
             f"then {DEFAULT_CONTROLLER_DEVICE!r} for legacy datasets."
         ),
@@ -270,18 +236,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override the source robot/device Controller->TCP calibration.",
+        help=advanced("Override the source robot/device Controller->TCP calibration."),
     )
     ik.add_argument(
         "--raw-controller-debug",
         action="store_true",
-        help="Use raw controller poses directly, without controller->TCP calibration.",
+        help=advanced("Use raw controller poses without Controller->TCP calibration."),
     )
     ik.add_argument(
         "--deployment-calibration",
         type=Path,
         default=None,
-        help=(
+        help=advanced(
             "YAML containing robot_from_table for absolute-table conversion. "
             "Defaults to configs/calibration/<robot>_table.yaml."
         ),
@@ -290,19 +256,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--absolute-orientation",
         choices=("relative-start", "table-absolute"),
         default="relative-start",
-        help="Absolute-table tool orientation policy used by replay.",
+        help=advanced("Absolute-table tool orientation policy used by replay."),
     )
-    ik.add_argument("--initial-solve-iterations", type=int, default=12)
-    ik.add_argument("--initial-position-tolerance-m", type=float, default=0.01)
-    ik.add_argument("--max-ik-position-error-m", type=float, default=0.03)
-    ik.add_argument("--max-ik-rotation-error-deg", type=float, default=45.0)
-    ik.add_argument("--table-clearance-warning-m", type=float, default=0.10)
+    ik.add_argument("--initial-solve-iterations", type=int, default=12, help=advanced("Initial unrestricted IK iterations."))
+    ik.add_argument("--initial-position-tolerance-m", type=float, default=0.01, help=advanced("Initial TCP tolerance."))
+    ik.add_argument("--max-ik-position-error-m", type=float, default=0.03, help=advanced("Maximum TCP position error."))
+    ik.add_argument("--max-ik-rotation-error-deg", type=float, default=45.0, help=advanced("Maximum TCP rotation error."))
+    ik.add_argument("--table-clearance-warning-m", type=float, default=0.10, help=advanced("Table-clearance warning threshold."))
     ik.add_argument(
         "--strict-ik",
         action="store_true",
-        help="Reject an episode when replay IK fidelity thresholds are exceeded.",
+        help=advanced("Reject an episode when IK thresholds are exceeded."),
     )
 
+    parser.add_argument(
+        "--help-advanced", action="store_true", help="Show expert IK and calibration options."
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -326,20 +295,38 @@ def _default_output_repo_id(source_repo_id: str, embodiment: str) -> str:
     return f"{repo_id}-{embodiment}"
 
 
+def _resolve_conversion_output(
+    value: str | None,
+    *,
+    source_repo_id: str,
+    embodiment: str,
+) -> tuple[str, Path]:
+    if value is None:
+        repo_id = _default_output_repo_id(source_repo_id, embodiment)
+        return repo_id, dataset_root_from_repo_id(repo_id)
+
+    candidate = Path(value).expanduser()
+    looks_local = (
+        value.startswith((".", "/", "~", "outputs/"))
+        or candidate.exists()
+        or candidate.parent.exists()
+    )
+    if looks_local:
+        return f"local/{candidate.name}", candidate
+    return value, dataset_root_from_repo_id(value)
+
+
 def _resolve_cli_profile(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
 ) -> None:
     """Resolve robot-specific conversion defaults before loading any data."""
-    requested_robot = args.embodiment or "axol"
-    args.piper = bool(args.piper or requested_robot == "piper")
-    args.embodiment = "piper" if args.piper else requested_robot
+    args.piper = args.embodiment == "piper"
     if args.piper:
         if args.retarget_mode not in (None, "absolute-table"):
             parser.error("--robot piper requires --retarget-mode absolute-table.")
         args.retarget_mode = "absolute-table"
     else:
-        args.embodiment = args.embodiment or "axol"
         args.retarget_mode = args.retarget_mode or "local-relative"
 
     if args.retarget_mode == "absolute-table":
@@ -737,7 +724,7 @@ def _write_gripper_joints(
 
     ``state[14]``/``state[15]`` carry the left/right opening in meters;
     normalized by --gripper-max-width-m and scaled to each finger's URDF
-    range (same mapping handumi-teleop-sim renders). Recordings without Feetech
+    range (same mapping ``handumi teleop sim`` renders). Recordings without Feetech
     (widths all zero) fall back to the constant --gripper opening.
     """
     widths_m = np.asarray(states, dtype=np.float32)[
@@ -781,7 +768,7 @@ def _solve_with_replay_pipeline(
         solve_episode as solve_replay_episode,
     )
 
-    replay_args = build_replay_parser().parse_args([])
+    replay_args = build_replay_parser().parse_args([str(args.root)])
     replay_args.repo_id = args.repo_id
     replay_args.dataset_root = args.root
     replay_args.revision = args.revision
@@ -1026,25 +1013,25 @@ def _write_converted_dataset_readme(
 
 
 def main() -> None:
-    parser = build_parser()
-    args = parser.parse_args()
+    raw_argv = list(sys.argv[1:])
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+    parser = build_parser(show_advanced=show_advanced)
+    if show_advanced:
+        parser.print_help()
+        return
+    args = parser.parse_args(raw_argv)
     _resolve_cli_profile(parser, args)
     args.ik_reports = []
 
     if args.left_only and args.right_only:
         parser.error("Use only one of --left-only or --right-only.")
-    if args.column is not None:
-        args.source = args.column
-
     from handumi.dataset.selection import resolve_dataset_selection
 
     try:
         selection = resolve_dataset_selection(
             args.dataset,
-            repo_id=args.repo_id,
-            root=args.root,
             revision=args.revision,
-            default_repo_id="NONHUMAN-RESEARCH/handumi-dataset-v2",
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -1056,10 +1043,11 @@ def main() -> None:
     # ------------------------------------------------------------------
     source_repo_id = args.repo_id
     source_root = selection.root
-    output_repo_id = args.output_repo_id or _default_output_repo_id(
-        source_repo_id, args.embodiment
+    output_repo_id, output_root = _resolve_conversion_output(
+        args.output,
+        source_repo_id=source_repo_id,
+        embodiment=args.embodiment,
     )
-    output_root = dataset_root_from_repo_id(output_repo_id)
 
     print(
         "Conversion plan\n"
@@ -1102,7 +1090,7 @@ def main() -> None:
         parser.error(
             f"Could not determine total_episodes from "
             f"{source_root / 'meta' / 'info.json'}. "
-            "Check --repo-id, --root, and --revision."
+            "Check DATASET and --revision."
         )
 
     try:

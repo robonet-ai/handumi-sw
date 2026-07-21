@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from handumi.config import DEFAULT_RIG_CONFIG
@@ -24,7 +25,11 @@ from handumi.tracking.pico import prepare_pico_adb_session
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--help-advanced", action="store_true", help="Show expert setup options.")
     parser.add_argument("--robot", choices=REAL_BACKEND_NAMES, default="piper")
     parser.add_argument("--device", choices=("pico", "meta"), default="pico")
     parser.add_argument("--rig-config", type=Path, default=DEFAULT_RIG_CONFIG)
@@ -97,13 +102,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Use an explicit Controller-to-TCP calibration file.",
     )
     parser.add_argument(
-        "--check-only",
         "--check",
         dest="check_only",
         action="store_true",
         help="Print the read-only readiness checklist without changing hardware.",
     )
-    return parser.parse_args(argv)
+    if not show_advanced:
+        normal = {"help", "help_advanced", "robot", "device", "check_only"}
+        for action in parser._actions:
+            if action.dest not in normal:
+                action.help = argparse.SUPPRESS
+    else:
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(raw_argv)
 
 
 def main() -> None:
@@ -161,7 +173,7 @@ def main() -> None:
         )
 
     print("\nSetup listo. Prueba:")
-    command = f"  uv run handumi-teleop-real --device {args.device} --robot {args.robot}"
+    command = f"  uv run handumi teleop real --device {args.device} --robot {args.robot}"
     if args.controller_tcp_calibration is not None:
         command += f" --controller-tcp-calibration {calibration_path}"
     print(command)
@@ -185,7 +197,7 @@ def ensure_feetech_calibration(args: argparse.Namespace) -> None:
     if answer not in ("", "y", "yes", "s", "si"):
         raise SystemExit(
             "Feetech calibration pendiente. Puedes correr despues:\n"
-            "  uv run handumi-setup-hardware --robot piper --device pico --skip-can-map"
+            "  uv run handumi setup --robot piper --device pico --skip-can-map"
         )
 
     results = {"left": current.left, "right": current.right}

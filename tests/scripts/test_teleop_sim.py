@@ -1,7 +1,6 @@
 import argparse
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import numpy as np
 
@@ -15,7 +14,6 @@ from handumi.scripts.teleop_sim import (
     parse_args,
     _resolve_camera_usage,
     _sample_state,
-    _selected_camera_names,
     _start_sides,
     _tracking_ready_for_sides,
     _tracking_world_map,
@@ -49,20 +47,24 @@ class SampleStateTest(unittest.TestCase):
 
 class TeleopSimCameraSelectionTest(unittest.TestCase):
     def test_no_viser_flag_is_parsed(self):
-        with mock.patch("sys.argv", ["handumi-teleop-sim", "--device", "meta", "--no-viser"]):
-            self.assertTrue(parse_args().no_viser)
+        self.assertTrue(parse_args(["--device", "meta", "--no-viser"]).no_viser)
 
-    def test_context_camera_is_between_wrist_views(self):
+    def test_cameras_are_parsed_in_requested_order(self):
         self.assertEqual(
-            _selected_camera_names(context_camera=True),
+            parse_args(
+                [
+                    "--device",
+                    "meta",
+                    "--cameras",
+                    "left_wrist,workspace,right_wrist",
+                ]
+            ).cameras,
             ["left_wrist", "workspace", "right_wrist"],
         )
 
-    def test_context_camera_flag_is_parsed(self):
-        with mock.patch(
-            "sys.argv", ["handumi-teleop-sim", "--device", "meta", "--context-camera"]
-        ):
-            self.assertTrue(parse_args().context_camera)
+    def test_legacy_context_camera_flag_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            parse_args(["--device", "meta", "--context-camera"])
 
     def test_duplicate_camera_devices_are_rejected(self):
         with self.assertRaisesRegex(SystemExit, "distinct devices"):
@@ -70,19 +72,15 @@ class TeleopSimCameraSelectionTest(unittest.TestCase):
                 ["left_wrist", "workspace", "right_wrist"], [2, 2, 4]
             )
 
-    def test_default_uses_both_wrist_cameras(self):
-        self.assertEqual(
-            _selected_camera_names(context_camera=False),
-            ["left_wrist", "right_wrist"],
-        )
+    def test_default_defers_camera_selection_to_the_rig(self):
+        self.assertIsNone(parse_args(["--device", "meta"]).cameras)
 
 
 class ResolveCameraUsageTest(unittest.TestCase):
     def _args(self, **overrides) -> argparse.Namespace:
         base = dict(
             no_rerun=False,
-            context_camera=False,
-            cam_ids=None,
+            cameras=None,
             skip_cameras=False,
         )
         base.update(overrides)
@@ -103,13 +101,8 @@ class ResolveCameraUsageTest(unittest.TestCase):
         _resolve_camera_usage(args)
         self.assertTrue(args.skip_cameras)
 
-    def test_no_rerun_with_context_camera_is_rejected(self):
-        args = self._args(no_rerun=True, context_camera=True)
-        with self.assertRaisesRegex(SystemExit, "only shown in Rerun"):
-            _resolve_camera_usage(args)
-
-    def test_no_rerun_with_explicit_cam_ids_is_rejected(self):
-        args = self._args(no_rerun=True, cam_ids=[0, 2])
+    def test_no_rerun_with_explicit_cameras_is_rejected(self):
+        args = self._args(no_rerun=True, cameras=["left_wrist", "workspace"])
         with self.assertRaisesRegex(SystemExit, "only shown in Rerun"):
             _resolve_camera_usage(args)
 
@@ -201,10 +194,7 @@ class TeleopSimStartTest(unittest.TestCase):
         self.assertTrue(_tracking_ready_for_sides(poses, tracked, ("left",)))
 
     def test_auto_start_flag_defaults_to_five_seconds(self):
-        with mock.patch(
-            "sys.argv", ["handumi-teleop-sim", "--device", "pico", "--auto-start"]
-        ):
-            args = parse_args()
+        args = parse_args(["--device", "pico", "--auto-start"])
 
         self.assertTrue(args.auto_start)
         self.assertEqual(args.auto_start_delay_s, 5.0)

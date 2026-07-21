@@ -20,9 +20,9 @@ Usage
 -----
 ::
 
-    handumi-print-controller-pose --device meta
-    handumi-print-controller-pose --device meta --quest-ip 192.168.1.42
-    handumi-print-controller-pose --device pico --pico-mode mandos
+    handumi tracking pose --device meta
+    handumi tracking pose --device meta --quest-ip 192.168.1.42
+    handumi tracking pose --device pico --pico-mode mandos
 """
 
 from __future__ import annotations

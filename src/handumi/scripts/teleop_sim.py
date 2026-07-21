@@ -5,7 +5,7 @@ Nothing is recorded. The same pipeline the post-hoc replay uses runs live:
 
     TrackingProvider.latest()                (PICO or Meta Quest)
       -> controller->TCP calibration          configs/calibration/<device>_controller_tcp.yaml
-      -> anchored retargeting                (same as handumi-replay-in-sim)
+      -> anchored retargeting                (same as ``handumi replay``)
       -> bimanual IK                          robots/kinematics.py
       -> Viser                                robot follows your hands
 
@@ -39,9 +39,9 @@ Usage
 -----
 ::
 
-    handumi-teleop-sim --device meta
-    handumi-teleop-sim --device meta --quest-ip 127.0.0.1 --no-browser
-    handumi-teleop-sim --device pico --pico-mode mandos
+    handumi teleop sim --device meta
+    handumi teleop sim --device meta --quest-ip 127.0.0.1 --no-browser
+    handumi teleop sim --device pico --pico-mode mandos
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ from handumi.retargeting.handumi_to_robot import (
 )
 from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_home_q
 from handumi.robots.utils import IDENTITY_POSE7
-from handumi.scripts.record import build_tracker, connect_feetech
+from handumi.scripts.record import _camera_list_arg, build_tracker, connect_feetech
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.teleop.core import TeleopController
 from handumi.tracking.transforms import Pose
@@ -100,28 +100,39 @@ _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
 SIDE_CHOICES = ("left", "right", "both")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    show_advanced = "--help-advanced" in raw_argv
+    raw_argv = [value for value in raw_argv if value != "--help-advanced"]
+
+    def advanced(text: str) -> str:
+        return text if show_advanced else argparse.SUPPRESS
+
     p = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=(
+            "Preview live HandUMI tracking through a robot profile in Viser and "
+            "Rerun; nothing is recorded."
+        )
     )
+    p.add_argument("--help-advanced", action="store_true", help="Show expert hardware options.")
     p.add_argument("--device", choices=("pico", "meta"), required=True)
     p.add_argument("--robot", choices=EMBODIMENT_NAMES, default="piper")
     p.add_argument(
         "--home-pose",
         default=None,
-        help="Override a legacy named home pose. Omit to use the robot home_q.",
+        help=advanced("Override a named home pose."),
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
-    p.add_argument("--port", type=int, default=8003, help="Viser port.")
-    p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--port", type=int, default=8003, help=advanced("Viser port."))
+    p.add_argument("--fps", type=int, default=30, help=advanced("Control frequency."))
     p.add_argument(
-        "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
+        "--duration-s", type=float, default=0.0, help=advanced("0 runs until Ctrl+C.")
     )
     p.add_argument(
         "--translation-scale",
         type=float,
         default=1.0,
-        help="Scale HandUMI translation deltas before applying them to the robot TCP.",
+        help=advanced("Scale HandUMI translation deltas."),
     )
     p.add_argument("--no-browser", action="store_true", help="Don't auto-open Viser.")
     p.add_argument(
@@ -150,7 +161,7 @@ def parse_args() -> argparse.Namespace:
         "--auto-start-delay-s",
         type=float,
         default=5.0,
-        help="Seconds of continuous valid tracking required by --auto-start.",
+        help=advanced("Stable-tracking seconds required by --auto-start."),
     )
     p.add_argument(
         "--scene",
@@ -163,58 +174,55 @@ def parse_args() -> argparse.Namespace:
         "--anchor-z",
         type=float,
         default=None,
-        help="Table-anchor ritual: anchor with the gripper TIP RESTING ON THE "
+        help=advanced("Table-anchor ritual: anchor with the gripper TIP RESTING ON THE "
         "TABLE, and that pose maps to this robot-world height (meters) instead "
         "of the arm's home TCP — absolute heights then match for the whole "
         "session (real tip touches the table exactly when the sim tip does). "
         "0.0 = table at the arm-base plane. Omit for the default relative "
-        "mapping (anchor pose -> home TCP).",
+        "mapping (anchor pose -> home TCP)."),
     )
     p.add_argument(
         "--controller-tcp-calibration",
         type=Path,
         default=None,
-        help="Override the robot/device Controller->TCP setup calibration.",
+        help=advanced("Override the robot/device Controller->TCP calibration."),
     )
 
     p.add_argument(
         "--rig-config",
         type=Path,
         default=DEFAULT_RIG_CONFIG,
-        help="Machine-local cameras, Feetech, and Meta Quest configuration.",
+        help=advanced("Machine-local hardware configuration."),
     )
 
-    # Camera + Feetech flags, same names as handumi-record.
-    p.add_argument("--cam-ids", nargs="+", type=_camera_arg, default=None)
     p.add_argument(
-        "--context-camera",
-        "--workspace-camera",
-        dest="context_camera",
-        action="store_true",
-        help=(
-            "Add the workspace/context camera from --rig-config to Rerun, "
-            "between the left and right wrist views."
-        ),
+        "--cameras",
+        type=_camera_list_arg,
+        default=None,
+        help="Cameras shown in Rerun; defaults to both wrist cameras.",
     )
-    p.add_argument("--cam-width", type=int, default=640)
-    p.add_argument("--cam-height", type=int, default=480)
-    p.add_argument("--cam-fps", type=int, default=30)
-    p.add_argument("--skip-cameras", action="store_true")
-    p.add_argument("--feetech-port", type=str, default=None)
-    p.add_argument("--skip-feetech", action="store_true")
+    p.add_argument("--cam-width", type=int, default=640, help=advanced("Camera width."))
+    p.add_argument("--cam-height", type=int, default=480, help=advanced("Camera height."))
+    p.add_argument("--cam-fps", type=int, default=30, help=advanced("Camera FPS."))
+    p.add_argument("--skip-cameras", action="store_true", help=advanced("Disable camera views."))
+    p.add_argument("--feetech-port", type=str, default=None, help=advanced("Feetech port override."))
+    p.add_argument("--skip-feetech", action="store_true", help=advanced("Disable Feetech."))
 
-    # Tracking flags, same names as handumi-record (shared build_tracker).
-    p.add_argument("--quest-ip", type=str, default=None)
-    p.add_argument("--tcp-port", type=int, default=None)
-    p.add_argument("--sync-port", type=int, default=None)
+    # Tracking flags, same names as ``handumi record`` (shared build_tracker).
+    p.add_argument("--quest-ip", type=str, default=None, help=advanced("Quest IP override."))
+    p.add_argument("--tcp-port", type=int, default=None, help=advanced("Quest TCP port."))
+    p.add_argument("--sync-port", type=int, default=None, help=advanced("Quest sync port."))
     p.add_argument(
-        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos"
+        "--pico-mode", choices=("mandos", "object", "whole-body"), default="mandos", help=advanced("PICO tracking mode.")
     )
     pico_transport = p.add_mutually_exclusive_group()
-    pico_transport.add_argument("--pico-adb", action="store_true")
-    pico_transport.add_argument("--pico-wifi", action="store_true")
-    p.add_argument("--skip-adb-check", action="store_true")
-    return p.parse_args()
+    pico_transport.add_argument("--pico-adb", action="store_true", help=advanced("Use PICO ADB."))
+    pico_transport.add_argument("--pico-wifi", action="store_true", help=advanced("Use PICO Wi-Fi."))
+    p.add_argument("--skip-adb-check", action="store_true", help=advanced("Skip ADB checks."))
+    if show_advanced:
+        p.print_help()
+        raise SystemExit(0)
+    return p.parse_args(raw_argv)
 
 
 class KeyboardSpaceListener:
@@ -231,7 +239,7 @@ class KeyboardSpaceListener:
             return
         self._thread = threading.Thread(
             target=self._run,
-            name="handumi-teleop-sim-space",
+            name="handumi-teleop-space",
             daemon=True,
         )
         self._thread.start()
@@ -317,10 +325,6 @@ class AutoStartCountdown:
         return ()
 
 
-def _camera_arg(value: str) -> int | str:
-    return int(value) if value.isdigit() else value
-
-
 def _enabled_sides(side: str) -> tuple[str, ...]:
     if side == "both":
         return ("left", "right")
@@ -359,10 +363,10 @@ def _resolve_camera_usage(args: argparse.Namespace) -> None:
     """
     if not args.no_rerun:
         return
-    if args.context_camera or args.cam_ids is not None:
+    if args.cameras is not None:
         raise SystemExit(
             "Cameras are only shown in Rerun. Remove --no-rerun, or drop "
-            "--context-camera/--workspace-camera and --cam-ids."
+            "--cameras."
         )
     if not args.skip_cameras:
         log.info("Rerun disabled; skipping cameras (they are only shown in Rerun).")
@@ -409,15 +413,6 @@ def _tracking_world_map(device: str) -> np.ndarray:
     return VR_TO_ROBOT if device == "pico" else np.eye(3, dtype=np.float32)
 
 
-def _selected_camera_names(context_camera: bool) -> list[str]:
-    """Return live-camera names in their intended Rerun grid order."""
-    names = ["left_wrist", "right_wrist"]
-    if context_camera:
-        # The order is also the visual order of the Rerun camera row.
-        names.insert(1, "workspace")
-    return names
-
-
 def _validate_unique_camera_ids(
     camera_names: list[str], camera_ids: list[int | str]
 ) -> None:
@@ -432,7 +427,7 @@ def _validate_unique_camera_ids(
     )
     raise SystemExit(
         f"Selected cameras must use distinct devices ({mappings}). "
-        "Fix the cameras section in configs/rig.yaml or pass matching --cam-ids."
+        "Fix the cameras section in configs/rig.yaml."
     )
 
 
@@ -575,10 +570,8 @@ def main() -> None:
     cameras: list = []
     cam_names: list[str] = []
     if not args.skip_cameras:
-        camera_names = _selected_camera_names(args.context_camera)
-        cam_ids = resolve_camera_ids(
-            args.cam_ids, args.rig_config, camera_names=camera_names
-        )
+        camera_names = args.cameras or ["left_wrist", "right_wrist"]
+        cam_ids = resolve_camera_ids(None, args.rig_config, camera_names=camera_names)
         _validate_unique_camera_ids(camera_names, cam_ids)
         camera_specs, _ = build_camera_specs(
             cam_ids,

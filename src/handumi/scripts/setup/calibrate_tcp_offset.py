@@ -148,11 +148,11 @@ def add_device_arg(parser: argparse.ArgumentParser) -> None:
 
 def add_common_input_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--parquet", type=Path, default=DEFAULT_PARQUET)
-    parser.add_argument("-e", "--episode", type=int)
+    parser.add_argument("--episode", type=int)
     parser.add_argument("--csv", type=Path, help="CSV with x,y,z,qx,qy,qz,qw and optional side")
     parser.add_argument("--column", help="Override parquet pose column")
     parser.add_argument("--side", choices=SIDES, required=True)
-    parser.add_argument("-o", "--output", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
     add_device_arg(parser)
 
 
@@ -195,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = sub.add_parser("inspect", help="Print a calibration YAML.")
     inspect.add_argument("path", type=Path, nargs="?")
-    inspect.add_argument("-o", "--output", type=Path, default=None)
+    inspect.add_argument("--output", type=Path, default=None)
     add_device_arg(inspect)
     inspect.set_defaults(func=inspect_main)
     return parser

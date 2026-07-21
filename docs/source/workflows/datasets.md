@@ -5,8 +5,8 @@ replay, then run automated validation and inspect the captured signals.
 
 ## 1. Replay and Inspect
 
-For local recordings, pass only the local root; `--repo-id` is unnecessary and
-no dataset is downloaded:
+For local recordings, pass the local root as `DATASET`; no dataset is
+downloaded:
 
 ```bash
 JAX_PLATFORMS=cpu handumi replay \
@@ -23,8 +23,8 @@ Choose the target robot explicitly. Piper is a currently available example:
 
 ```bash
 TARGET_ROBOT=piper
-handumi-replay-in-sim \
-  --repo-id your-name/handumi-demo \
+handumi replay \
+  your-name/handumi-demo \
   --robot "$TARGET_ROBOT"
 ```
 
@@ -40,7 +40,7 @@ Table-calibrated datasets preserve recorded bimanual geometry automatically.
 For an explicit geometry-preserving replay:
 
 ```bash
-handumi-replay-in-sim --repo-id your-name/handumi-demo \
+handumi replay your-name/handumi-demo \
   --robot "$TARGET_ROBOT" \
   --retarget-mode absolute-table \
   --deployment-calibration "configs/calibration/${TARGET_ROBOT}_table.yaml"
@@ -64,7 +64,7 @@ bimanual separation, table-to-robot transform, and IK errors.
 :::
 
 Offline playback of a dataset on physical arms is not currently exposed.
-`handumi-teleop-real` consumes live HandUMI motion and is not a recorded-dataset
+`handumi teleop real` consumes live HandUMI motion and is not a recorded-dataset
 replay command.
 
 ## 2. Run Automated Validation
@@ -111,7 +111,7 @@ for the selected robot, and converts the replay result to physical Piper command
 JAX_PLATFORMS=cpu handumi convert \
   outputs/datasets/handumi-demo \
   --robot piper \
-  --output-repo-id your-name/handumi-demo-piper
+  --output your-name/handumi-demo-piper
 ```
 
 The Piper state has 14 physical commands: six replay arm joints in radians

@@ -26,7 +26,7 @@ handumi record outputs/datasets/handumi-demo \
   --session-calibration outputs/calibration/session.yaml \
   --cameras left_wrist,right_wrist,workspace \
   --rerun --clap-control \
-  --num-episodes 3 \
+  --episodes 3 \
   --episode-time-s 30
 ```
 
@@ -49,11 +49,11 @@ recording configuration:
 
 ```bash
 handumi record outputs/datasets/handumi-demo --resume \
-  --num-episodes 20 \
+  --episodes 20 \
   --task "pick and place"
 ```
 
-`--num-episodes` is the number of additional episodes, not the new total.
+`--episodes` is the number of additional episodes, not the new total.
 Resume requires an intact dataset from a previous graceful finalization and
 loads the device, cameras, FPS, image format, calibrations, Feetech state and
 robot profile from its `meta/info.json` snapshot. Explicit incompatible
@@ -124,7 +124,7 @@ handumi validate \
   outputs/datasets/handumi-demo --strict
 ```
 
-Review `meta/handumi_quality.json`. Fix rejected captures before increasing `--num-episodes`.
+Review `meta/handumi_quality.json`. Fix rejected captures before increasing `--episodes`.
 
 Hard rejection checks include insufficient duration, excessive tracking loss,
 unhealthy cameras or encoders, synchronization errors, frozen source
@@ -142,5 +142,5 @@ Common additions:
 - `--encoder gpu`: require hardware encoding instead of falling back to CPU.
 
 Run `handumi record --help` for the normal interface or
-`handumi record --help-advanced` for camera IDs, synchronization and encoder
-diagnostic overrides.
+`handumi record --help-advanced` for synchronization, hardware and encoder
+diagnostic overrides. Physical camera IDs belong only in `configs/rig.yaml`.

@@ -9,9 +9,9 @@ Usage
 -----
 ::
 
-    handumi-calibrate-grippers monitor
-    handumi-calibrate-grippers calibrate
-    handumi-calibrate-grippers calibrate --side right
+    handumi calibrate grippers monitor
+    handumi calibrate grippers calibrate
+    handumi calibrate grippers calibrate --side right
 """
 
 from __future__ import annotations
@@ -60,8 +60,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Monitor and calibrate HandUMI Feetech gripper encoders.")
     parser.add_argument(
         "--rig-config",
-        "--config",
-        dest="rig_config",
         type=Path,
         default=DEFAULT_RIG_CONFIG,
         help="Rig file containing Feetech servo_id/port values.",

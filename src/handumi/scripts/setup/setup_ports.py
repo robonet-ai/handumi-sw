@@ -9,8 +9,8 @@ Usage
 -----
 ::
 
-    handumi-setup-ports
-    handumi-setup-ports --once
+    handumi setup ports
+    handumi setup ports --once
 """
 
 from __future__ import annotations

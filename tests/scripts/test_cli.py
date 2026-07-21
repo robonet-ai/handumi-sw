@@ -24,6 +24,25 @@ def test_dispatch_forwards_remaining_arguments():
     target_main.assert_called_once_with()
 
 
+def test_nested_command_routes_to_specialized_module():
+    target_main = mock.Mock()
+    module = SimpleNamespace(main=target_main)
+    with mock.patch.object(cli.importlib, "import_module", return_value=module) as load:
+        cli.main(["calibrate", "spatial", "verify"])
+
+    load.assert_called_once_with("handumi.scripts.setup.calibrate_spatial")
+    target_main.assert_called_once_with()
+
+
+def test_command_group_help_lists_only_its_subcommands(capsys):
+    cli.main(["teleop", "--help"])
+
+    output = capsys.readouterr().out
+    assert "handumi teleop sim" in output
+    assert "handumi teleop real" in output
+    assert "handumi calibrate spatial" not in output
+
+
 def test_unknown_command_fails_cleanly():
     with pytest.raises(SystemExit, match="Unknown HandUMI command"):
         cli.main(["unknown"])
