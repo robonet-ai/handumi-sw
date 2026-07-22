@@ -1,5 +1,9 @@
+import json
+
 import numpy as np
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from handumi.dataset.raw import (
     HANDUMI_CAPTURE_SCHEMA,
@@ -10,9 +14,65 @@ from handumi.dataset.raw import (
 from handumi.dataset.reader import (
     _compose_pose7,
     _decode_episode_images,
+    load_raw_episode,
     normalize_raw_signals,
     validate_raw_state_metadata,
 )
+
+
+def test_local_no_video_reader_skips_embedded_images_and_sorts_frames(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "dataset"
+    (root / "meta").mkdir(parents=True)
+    data_dir = root / "data/chunk-000"
+    data_dir.mkdir(parents=True)
+    info = {
+        "fps": 10,
+        "features": {"observation.images.workspace": {"dtype": "image"}},
+        "handumi": {
+            "tracking_schema": HANDUMI_TRACKING_SCHEMA,
+            "capture_schema": HANDUMI_CAPTURE_SCHEMA,
+            "state_semantics": HANDUMI_STATE_SEMANTICS,
+            "sources": {
+                "tracking": {"enabled": True},
+                "feetech": {"enabled": False},
+                "cameras": {"workspace": {"enabled": True}},
+            },
+        },
+    }
+    (root / "meta/info.json").write_text(json.dumps(info))
+    states = np.zeros((3, 16), dtype=np.float32)
+    states[:, 0] = [1.0, 99.0, 0.0]
+    table = pa.table(
+        {
+            "episode_index": [0, 1, 0],
+            "frame_index": [1, 0, 0],
+            "observation.state": states.tolist(),
+            "observation.valid": np.ones(
+                (3, len(TRACKING_VALIDITY_NAMES)), dtype=np.int64
+            ).tolist(),
+            "observation.images.workspace": [
+                {"bytes": b"not decoded", "path": None},
+                {"bytes": b"not decoded", "path": None},
+                {"bytes": b"not decoded", "path": None},
+            ],
+        }
+    )
+    pq.write_table(table, data_dir / "file-000.parquet")
+
+    def fail_if_opened(*args, **kwargs):
+        raise AssertionError("LeRobot reader should not open local no-video data")
+
+    monkeypatch.setattr("handumi.dataset.reader.open_dataset", fail_if_opened)
+    episode = load_raw_episode(
+        repo_id="local/fast", root=root, episode=0, download_videos=False
+    )
+
+    assert episode.fps == 10
+    assert episode.images == {}
+    assert episode.body is None
+    np.testing.assert_array_equal(episode.states[:, 0], [0.0, 1.0])
 
 
 def _states(frame_count: int = 2) -> np.ndarray:

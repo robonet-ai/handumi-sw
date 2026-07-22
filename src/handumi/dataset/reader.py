@@ -140,6 +140,18 @@ def load_raw_episode(
     download_videos: bool = False,
 ) -> RawEpisode:
     """Load one validated episode, optionally decoding its recorded cameras."""
+    if not download_videos:
+        local_episode = _load_local_parquet_episode(
+            ref,
+            repo_id=repo_id,
+            root=root,
+            episode=episode,
+            source=source,
+            revision=revision,
+        )
+        if local_episode is not None:
+            return local_episode
+
     dataset = open_dataset(
         ref,
         repo_id=repo_id,
@@ -206,6 +218,111 @@ def load_raw_episode(
         tracking_sidecars=sidecars,
         images=images,
         metadata=dict(info) if isinstance(info, dict) else {},
+    )
+
+
+def _load_local_parquet_episode(
+    ref: DatasetRef | None,
+    *,
+    repo_id: str | None,
+    root: str | Path | None,
+    episode: int,
+    source: str,
+    revision: str | None,
+) -> RawEpisode | None:
+    """Read required local columns without decoding embedded image payloads."""
+    resolved = _resolve_ref(ref, repo_id=repo_id, root=root, revision=revision)
+    metadata_path = info_path(resolved.root)
+    parquet_paths = sorted(resolved.root.glob("data/**/*.parquet"))
+    if not metadata_path.is_file() or not parquet_paths:
+        return None
+
+    try:
+        import pyarrow.dataset as arrow_dataset
+    except ImportError:
+        return None
+
+    info = load_info(resolved.root)
+    validate_raw_state_metadata(info)
+    dataset = arrow_dataset.dataset(parquet_paths, format="parquet")
+    available = set(dataset.schema.names)
+    if source not in available:
+        raise ValueError(f"Dataset has no {source!r} feature.")
+    if "episode_index" not in available:
+        return None
+
+    prefixes = (
+        "observation.tracking.",
+        "observation.feetech.",
+        "observation.camera.",
+        "observation.sync.",
+    )
+    selected = [
+        name
+        for name in dataset.schema.names
+        if name == source
+        or name in {"episode_index", "frame_index", "observation.valid"}
+        or name.startswith(prefixes)
+        or name.startswith("observation.body.")
+    ]
+    episode_field = getattr(arrow_dataset, "field")("episode_index")
+    table = dataset.to_table(
+        columns=selected,
+        filter=episode_field == episode,
+    )
+    if table.num_rows == 0:
+        raise ValueError(f"Episode {episode} is empty.")
+    if "frame_index" in table.column_names:
+        table = table.sort_by([("frame_index", "ascending")])
+
+    states = _arrow_column_to_numpy(table[source]).astype(np.float32, copy=False)
+    if states.ndim != 2 or states.shape[1] != 16:
+        width = states.shape[1] if states.ndim == 2 else states.shape
+        raise ValueError(
+            f"Expected raw HandUMI state width 16 in {source!r}, got {width}."
+        )
+
+    metadata = handumi_metadata(info)
+    signals: dict[str, np.ndarray] = {}
+    for key in table.column_names:
+        if key != "observation.valid" and not key.startswith(prefixes):
+            continue
+        values = _arrow_column_to_numpy(table[key])
+        if values.ndim == 2 and values.shape[1] == 1:
+            values = values[:, 0]
+        signals[key] = values
+    signals = normalize_raw_signals(states, signals, metadata=metadata)
+
+    body_signals = {
+        key: _arrow_column_to_numpy(table[key])
+        for key in table.column_names
+        if key.startswith("observation.body.")
+    }
+    body = CanonicalBodyEpisode(body_signals) if body_signals else None
+    return RawEpisode(
+        states=states,
+        fps=float(info.get("fps", 30) or 30),
+        signals=signals,
+        body=body,
+        tracking_sidecars=discover_tracking_sidecars(
+            resolved.root, episode_index=episode
+        ),
+        images={},
+        metadata=info,
+    )
+
+
+def _arrow_column_to_numpy(column: Any) -> np.ndarray:
+    """Convert one Arrow column while preserving nested fixed-size arrays."""
+    values = column.combine_chunks().to_pylist()
+    array = np.asarray(values)
+    if array.dtype != object:
+        return array
+    return np.stack(
+        [
+            np.asarray(value.tolist() if hasattr(value, "tolist") else value)
+            for value in values
+        ]
     )
 
 
