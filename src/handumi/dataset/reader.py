@@ -140,17 +140,17 @@ def load_raw_episode(
     download_videos: bool = False,
 ) -> RawEpisode:
     """Load one validated episode, optionally decoding its recorded cameras."""
-    if not download_videos:
-        local_episode = _load_local_parquet_episode(
-            ref,
-            repo_id=repo_id,
-            root=root,
-            episode=episode,
-            source=source,
-            revision=revision,
-        )
-        if local_episode is not None:
-            return local_episode
+    local_episode = _load_local_parquet_episode(
+        ref,
+        repo_id=repo_id,
+        root=root,
+        episode=episode,
+        source=source,
+        revision=revision,
+        include_images=download_videos,
+    )
+    if local_episode is not None:
+        return local_episode
 
     dataset = open_dataset(
         ref,
@@ -229,6 +229,7 @@ def _load_local_parquet_episode(
     episode: int,
     source: str,
     revision: str | None,
+    include_images: bool,
 ) -> RawEpisode | None:
     """Read required local columns without decoding embedded image payloads."""
     resolved = _resolve_ref(ref, repo_id=repo_id, root=root, revision=revision)
@@ -251,6 +252,23 @@ def _load_local_parquet_episode(
     if "episode_index" not in available:
         return None
 
+    image_keys = [
+        name for name in dataset.schema.names if name.startswith("observation.images.")
+    ]
+    if include_images:
+        features = info.get("features")
+        feature_map = features if isinstance(features, dict) else {}
+        if any(
+            isinstance(feature_map.get(key), dict)
+            and feature_map[key].get("dtype") == "video"
+            for key in image_keys
+        ):
+            return None
+        from importlib.util import find_spec
+
+        if find_spec("PIL") is None:
+            return None
+
     prefixes = (
         "observation.tracking.",
         "observation.feetech.",
@@ -264,6 +282,7 @@ def _load_local_parquet_episode(
         or name in {"episode_index", "frame_index", "observation.valid"}
         or name.startswith(prefixes)
         or name.startswith("observation.body.")
+        or (include_images and name in image_keys)
     ]
     episode_field = getattr(arrow_dataset, "field")("episode_index")
     table = dataset.to_table(
@@ -299,6 +318,13 @@ def _load_local_parquet_episode(
         if key.startswith("observation.body.")
     }
     body = CanonicalBodyEpisode(body_signals) if body_signals else None
+    images: dict[str, np.ndarray] = {}
+    if include_images:
+        for key in image_keys:
+            decoded = _decode_arrow_image_column(table[key])
+            if decoded is None:
+                return None
+            images[key] = decoded
     return RawEpisode(
         states=states,
         fps=float(info.get("fps", 30) or 30),
@@ -307,7 +333,7 @@ def _load_local_parquet_episode(
         tracking_sidecars=discover_tracking_sidecars(
             resolved.root, episode_index=episode
         ),
-        images={},
+        images=images,
         metadata=info,
     )
 
@@ -324,6 +350,21 @@ def _arrow_column_to_numpy(column: Any) -> np.ndarray:
             for value in values
         ]
     )
+
+
+def _decode_arrow_image_column(column: Any) -> np.ndarray | None:
+    """Decode embedded Hugging Face image structs without row-wise dataset reads."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    frames: list[np.ndarray] = []
+    for encoded in column.combine_chunks().to_pylist():
+        if not isinstance(encoded, dict) or not isinstance(encoded.get("bytes"), bytes):
+            return None
+        with Image.open(BytesIO(encoded["bytes"])) as image:
+            frames.append(np.asarray(image.convert("RGB"), dtype=np.uint8).copy())
+    return np.stack(frames)
 
 
 def _decode_episode_images(dataset: Any, frame_count: int) -> dict[str, np.ndarray]:
