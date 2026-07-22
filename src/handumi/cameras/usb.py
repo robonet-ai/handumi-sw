@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
@@ -19,6 +20,10 @@ CameraSpec = dict[str, Any]
 
 class CameraSampleSource(Protocol):
     def sample_at(self, target_time_ns: int) -> CameraSample: ...
+
+
+class CameraStartupError(RuntimeError):
+    """Selected cameras cannot sustain simultaneous fresh frame production."""
 
 
 def build_camera_specs(
@@ -82,29 +87,98 @@ def connect_cameras(
     height: int,
     zero_non_laptop: bool,
     backend: str = "opencv",
+    fourcc: str | None = "MJPG",
 ) -> list[CameraDevice | None]:
     cameras: list[CameraDevice | None] = []
-    for spec in camera_specs:
-        cam_id = spec["id"]
-        name = spec["name"]
-        should_zero = zero_non_laptop and not spec["is_laptop"]
-        if should_zero:
-            cameras.append(None)
-            log.info("Camera '%s' will be zero-filled.", name)
-            continue
+    try:
+        for spec in camera_specs:
+            cam_id = spec["id"]
+            name = spec["name"]
+            should_zero = zero_non_laptop and not spec["is_laptop"]
+            if should_zero:
+                cameras.append(None)
+                log.info("Camera '%s' will be zero-filled.", name)
+                continue
 
-        cam = _make_camera(
-            backend,
-            index_or_path=cam_id,
-            fps=fps,
-            width=width,
-            height=height,
-        )
-        cam.connect()
-        cameras.append(cam)
-        label = " laptop overlay" if spec["is_laptop"] else ""
-        log.info("Camera '%s' (index %s) connected.%s", name, cam_id, label)
+            cam = _make_camera(
+                backend,
+                index_or_path=cam_id,
+                fps=fps,
+                width=width,
+                height=height,
+                fourcc=fourcc,
+            )
+            # Append before connecting so rollback also owns a camera whose
+            # backend partially initialized before raising.
+            cameras.append(cam)
+            cam.connect()
+            label = " laptop overlay" if spec["is_laptop"] else ""
+            log.info("Camera '%s' (index %s) connected.%s", name, cam_id, label)
+    except BaseException:
+        disconnect_cameras(cameras)
+        raise
     return cameras
+
+
+def validate_camera_streams(
+    cameras: Sequence[CameraSampleSource | None],
+    camera_names: Sequence[str],
+    *,
+    duration_s: float,
+    stale_timeout_s: float,
+    minimum_distinct_frames: int = 3,
+    poll_s: float = 0.02,
+) -> None:
+    """Require every enabled camera to progress and remain fresh together."""
+    if len(cameras) != len(camera_names):
+        raise ValueError("camera names and devices must have matching lengths")
+    if duration_s <= 0 or stale_timeout_s <= 0 or poll_s <= 0:
+        raise ValueError("camera startup timing values must be positive")
+    if minimum_distinct_frames < 2:
+        raise ValueError("minimum_distinct_frames must be at least two")
+
+    sequences: dict[str, set[int]] = {
+        name: set()
+        for camera, name in zip(cameras, camera_names, strict=True)
+        if camera is not None
+    }
+    last_samples: dict[str, CameraSample] = {}
+    failures: dict[str, str] = {}
+    deadline = time.monotonic() + duration_s
+    while time.monotonic() < deadline:
+        for camera, name in zip(cameras, camera_names, strict=True):
+            if camera is None:
+                continue
+            try:
+                sample = camera.sample_at(time.monotonic_ns())
+            except Exception as exc:
+                failures[name] = type(exc).__name__
+                continue
+            sequences[name].add(int(sample.sequence))
+            last_samples[name] = sample
+        time.sleep(poll_s)
+
+    now_ns = time.monotonic_ns()
+    problems: list[str] = []
+    stale_timeout_ns = int(stale_timeout_s * 1e9)
+    for name in sequences:
+        sample = last_samples.get(name)
+        if sample is None:
+            detail = failures.get(name, "no_frame")
+            problems.append(f"{name}:no_frame:{detail}")
+            continue
+        distinct = len(sequences[name])
+        if distinct < minimum_distinct_frames:
+            problems.append(f"{name}:only_{distinct}_distinct_frames")
+        age_ns = max(0, now_ns - int(sample.capture_time_ns))
+        if age_ns > stale_timeout_ns:
+            problems.append(f"{name}:stale_{age_ns / 1e6:.1f}ms")
+    if problems:
+        raise CameraStartupError(
+            "simultaneous camera startup check failed ("
+            + ", ".join(problems)
+            + "); check USB power/bandwidth, cabling, and stable by-path mappings"
+        )
 
 
 def read_camera_frames(
@@ -206,6 +280,7 @@ def _make_camera(
     fps: int,
     width: int,
     height: int,
+    fourcc: str | None = "MJPG",
 ) -> CameraDevice:
     normalized = backend.lower().replace("_", "-")
     if normalized in {"opencv", "cv2"}:
@@ -214,6 +289,7 @@ def _make_camera(
             fps=fps,
             width=width,
             height=height,
+            fourcc=fourcc,
         )
     raise ValueError(f"Unsupported camera backend {backend!r}.")
 

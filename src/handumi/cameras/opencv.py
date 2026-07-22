@@ -21,6 +21,7 @@ class OpenCVCameraDevice(CameraDevice):
     fps: int
     width: int
     height: int
+    fourcc: str | None = "MJPG"
 
     def __post_init__(self) -> None:
         self._camera = None
@@ -46,9 +47,20 @@ class OpenCVCameraDevice(CameraDevice):
             fps=self.fps,
             width=self.width,
             height=self.height,
+            fourcc=self.fourcc,
         )
         self._camera = OpenCVCamera(cfg)
-        self._camera.connect()
+        try:
+            self._camera.connect()
+        except BaseException:
+            camera = self._camera
+            self._camera = None
+            try:
+                if camera.is_connected:
+                    camera.disconnect()
+            except Exception:
+                pass
+            raise
         self._perf_to_monotonic_ns = time.monotonic_ns() - time.perf_counter_ns()
         self._monitor_stop.clear()
         self._monitor_thread = threading.Thread(
@@ -86,15 +98,18 @@ class OpenCVCameraDevice(CameraDevice):
     def disconnect(self) -> None:
         if self._camera is None:
             return
+        camera = self._camera
+        self._camera = None
         self._monitor_stop.set()
         monitor = self._monitor_thread
         if monitor is not None:
             monitor.join(timeout=1.0)
         self._monitor_thread = None
-        self._camera.disconnect()
-        self._camera = None
-        with self._samples_lock:
-            self._samples.clear()
+        try:
+            camera.disconnect()
+        finally:
+            with self._samples_lock:
+                self._samples.clear()
 
     def _monitor_frames(self) -> None:
         """Mirror LeRobot's native capture buffer without resampling it."""

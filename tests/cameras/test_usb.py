@@ -1,15 +1,21 @@
 import unittest
 import tempfile
+import time
 from pathlib import Path
+from unittest import mock
 
 import yaml
 import numpy as np
 
 from handumi.cameras.base import CameraSample
+from handumi.cameras.opencv import OpenCVCameraDevice
 from handumi.cameras.usb import (
+    CameraStartupError,
     build_camera_specs,
+    connect_cameras,
     read_camera_samples,
     resolve_camera_ids,
+    validate_camera_streams,
 )
 
 
@@ -21,7 +27,84 @@ class _SampledCamera:
         return CameraSample(np.ones((2, 3, 3), dtype=np.uint8), self.sample_time_ns, 4)
 
 
+class _ConnectCamera:
+    def __init__(self, *, fail: bool = False):
+        self.fail = fail
+        self.disconnect_calls = 0
+
+    def connect(self):
+        if self.fail:
+            raise ConnectionError("injected camera failure")
+
+    def disconnect(self):
+        self.disconnect_calls += 1
+
+
+class _ProgressingCamera:
+    def __init__(self, *, frozen: bool = False):
+        self.sequence = 0
+        self.frozen = frozen
+        self.capture_time_ns = time.monotonic_ns()
+
+    def sample_at(self, target_time_ns: int):
+        if not self.frozen:
+            self.sequence += 1
+            self.capture_time_ns = time.monotonic_ns()
+        return CameraSample(
+            np.ones((2, 3, 3), dtype=np.uint8),
+            self.capture_time_ns,
+            self.sequence,
+        )
+
+
 class UsbCameraConfigTest(unittest.TestCase):
+    def test_partial_connect_failure_disconnects_every_created_camera(self):
+        first = _ConnectCamera()
+        failing = _ConnectCamera(fail=True)
+        specs = [
+            {"id": 1, "name": "left_wrist", "is_laptop": False},
+            {"id": 2, "name": "right_wrist", "is_laptop": False},
+        ]
+        with mock.patch(
+            "handumi.cameras.usb._make_camera",
+            side_effect=[first, failing],
+        ):
+            with self.assertRaisesRegex(ConnectionError, "injected"):
+                connect_cameras(
+                    specs,
+                    fps=30,
+                    width=640,
+                    height=480,
+                    zero_non_laptop=False,
+                )
+        self.assertEqual(first.disconnect_calls, 1)
+        self.assertEqual(failing.disconnect_calls, 1)
+
+    def test_camera_backend_defaults_to_mjpeg(self):
+        camera = OpenCVCameraDevice(0, fps=30, width=640, height=480)
+        self.assertEqual(camera.fourcc, "MJPG")
+
+    def test_simultaneous_startup_gate_accepts_progressing_streams(self):
+        validate_camera_streams(
+            [_ProgressingCamera(), _ProgressingCamera()],
+            ["left_wrist", "right_wrist"],
+            duration_s=0.03,
+            stale_timeout_s=0.02,
+            minimum_distinct_frames=2,
+            poll_s=0.002,
+        )
+
+    def test_simultaneous_startup_gate_rejects_frozen_stream(self):
+        with self.assertRaisesRegex(CameraStartupError, "right_wrist"):
+            validate_camera_streams(
+                [_ProgressingCamera(), _ProgressingCamera(frozen=True)],
+                ["left_wrist", "right_wrist"],
+                duration_s=0.03,
+                stale_timeout_s=0.005,
+                minimum_distinct_frames=2,
+                poll_s=0.002,
+            )
+
     def test_build_camera_specs_without_laptop_camera(self):
         specs, laptop_name = build_camera_specs(
             [0, 2],

@@ -66,6 +66,7 @@ from handumi.cameras import (
     disconnect_cameras,
     read_camera_samples,
     resolve_camera_ids,
+    validate_camera_streams,
 )
 from handumi.config import DEFAULT_RIG_CONFIG
 from handumi.dataset.raw import (
@@ -1062,6 +1063,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cam-height", type=int, default=480)
     p.add_argument("--cam-fps", type=int, default=30)
     p.add_argument(
+        "--camera-startup-check-s",
+        type=float,
+        default=3.0,
+        help=(
+            "Require all selected cameras to produce fresh simultaneous frames "
+            "for this long before dataset setup (default: 3.0s)."
+        ),
+    )
+    p.add_argument(
         "--minimum-free-gb",
         type=float,
         default=2.0,
@@ -1258,6 +1268,8 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         if getattr(args, name) <= 0:
             raise SystemExit(f"--{name.replace('_', '-')} must be greater than zero.")
+    if getattr(args, "camera_startup_check_s", 3.0) <= 0:
+        raise SystemExit("--camera-startup-check-s must be greater than zero.")
     if not 0 <= getattr(args, "viser_port", 8003) <= 65535:
         raise SystemExit("--viser-port must be between 0 and 65535.")
     if getattr(args, "viser_queue_size", 2) <= 0:
@@ -1390,6 +1402,18 @@ def main() -> None:
             width=args.cam_width,
             height=args.cam_height,
             zero_non_laptop=False,
+        )
+        with profiler.measure("camera_startup_validation", items=len(cam_names)):
+            validate_camera_streams(
+                cameras,
+                cam_names,
+                duration_s=args.camera_startup_check_s,
+                stale_timeout_s=args.camera_stale_timeout_s,
+            )
+        log.info(
+            "All %d cameras sustained fresh simultaneous frames for %.1fs.",
+            len(cam_names),
+            args.camera_startup_check_s,
         )
 
         log.info("--- Feetech setup ---")
