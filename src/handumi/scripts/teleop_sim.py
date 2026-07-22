@@ -49,7 +49,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -73,8 +72,10 @@ from handumi.robots.registry import EMBODIMENT_NAMES, load_embodiment, resolve_h
 from handumi.robots.utils import IDENTITY_POSE7
 from handumi.scripts.record import _camera_list_arg, build_tracker, connect_feetech
 from handumi.teleop.common import (
+    DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
     KeyboardSpaceListener,
+    TeleopLoopTimer,
     enabled_sides as _enabled_sides,
     latest_widths,
     sample_state as _sample_state,
@@ -123,7 +124,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--port", type=int, default=8003, help=advanced("Viser port."))
-    p.add_argument("--fps", type=int, default=30, help=advanced("Control frequency."))
+    p.add_argument(
+        "--fps",
+        type=int,
+        default=DEFAULT_TELEOP_FPS,
+        help=advanced("Control frequency."),
+    )
     p.add_argument(
         "--duration-s", type=float, default=0.0, help=advanced("0 runs until Ctrl+C.")
     )
@@ -466,6 +472,8 @@ def _log_rerun(
 
 def main() -> None:
     args = parse_args()
+    if args.fps <= 0:
+        raise SystemExit("--fps must be > 0.")
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
 
@@ -632,7 +640,7 @@ def main() -> None:
     )
     episode_start: float | None = None
     frame = 0
-    interval = 1.0 / args.fps
+    loop_timer = TeleopLoopTimer(args.fps)
     if args.auto_start:
         manual_hint = " Space remains available." if args.space_start else ""
         log.info(
@@ -650,7 +658,7 @@ def main() -> None:
         log.info("Arms idle at home. Double clap a gripper to start enabled arms.")
     try:
         while True:
-            loop_start = time.perf_counter()
+            loop_start, _ = loop_timer.tick()
             if episode_start is not None:
                 if (
                     args.duration_s > 0.0
@@ -796,9 +804,7 @@ def main() -> None:
                             rr, side, tcp, raw, trails[side], raw_trails[side], color
                         )
 
-            dt = time.perf_counter() - loop_start
-            if (sleep := interval - dt) > 0:
-                time.sleep(sleep)
+            loop_timer.sleep(loop_start)
             if episode_start is not None:
                 frame += 1
     except KeyboardInterrupt:

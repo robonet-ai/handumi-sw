@@ -44,7 +44,14 @@ class TeleopRobotBackend(Protocol):
         q: np.ndarray,
         gripper_openings: dict[str, float],
     ) -> None:
-        """Command a full robot configuration and normalized gripper openings."""
+        """Publish the newest full target without waiting for motion to finish.
+
+        Backends must treat this as latest-target delivery, not a FIFO of
+        trajectories: their own fixed-rate command streamer interpolates and
+        retransmits the newest target.  This keeps tracking/IK cadence
+        independent from each robot SDK/CAN cadence and prevents stale hand
+        poses from accumulating as lag.
+        """
 
     def hold(self, base_q: np.ndarray) -> np.ndarray:
         """Cancel pending motion and hold the current robot-side command."""

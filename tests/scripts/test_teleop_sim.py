@@ -19,6 +19,7 @@ from handumi.scripts.teleop_sim import (
     _tracking_world_map,
     _validate_unique_camera_ids,
 )
+from handumi.teleop import DEFAULT_TELEOP_FPS
 from handumi.tracking.base import ControllerPairSample
 
 
@@ -48,6 +49,9 @@ class SampleStateTest(unittest.TestCase):
 class TeleopSimCameraSelectionTest(unittest.TestCase):
     def test_no_viser_flag_is_parsed(self):
         self.assertTrue(parse_args(["--device", "meta", "--no-viser"]).no_viser)
+
+    def test_control_fps_defaults_to_shared_live_teleop_rate(self):
+        self.assertEqual(parse_args(["--device", "meta"]).fps, DEFAULT_TELEOP_FPS)
 
     def test_cameras_are_parsed_in_requested_order(self):
         self.assertEqual(

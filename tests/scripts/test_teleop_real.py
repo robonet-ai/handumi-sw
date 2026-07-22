@@ -14,6 +14,7 @@ from handumi.scripts.teleop_real import (
     parse_args,
 )
 from handumi.scripts.teleop_sim import _start_sides
+from handumi.teleop import DEFAULT_JOINT_SMOOTHING_ALPHA, DEFAULT_TELEOP_FPS
 
 
 class TeleopRealArgsTest(unittest.TestCase):
@@ -21,6 +22,8 @@ class TeleopRealArgsTest(unittest.TestCase):
         args = parse_args(["--device", "pico"])
 
         self.assertEqual(args.robot, "piper")
+        self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
+        self.assertEqual(args.joint_smoothing_alpha, DEFAULT_JOINT_SMOOTHING_ALPHA)
         self.assertFalse(args.space_start)
         _validate_args(args)
 
@@ -29,6 +32,12 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertTrue(args.space_start)
         _validate_args(args)
+
+    def test_joint_smoothing_alpha_must_be_in_open_closed_unit_interval(self):
+        for alpha in ("0", "1.1"):
+            args = parse_args(["--device", "pico", "--joint-smoothing-alpha", alpha])
+            with self.assertRaises(SystemExit):
+                _validate_args(args)
 
     def test_default_calibration_comes_from_piper_robot_tool_setup(self):
         args = parse_args(["--device", "meta"])
@@ -54,16 +63,6 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         args = parse_args(["--device", "pico", "--skip-feetech", "--space-start"])
         _validate_args(args)
-
-    def test_joint_smoothing_tuning_must_be_non_negative(self):
-        args = parse_args(["--device", "pico", "--joint-smoothing-cutoff-hz", "-1"])
-
-        with self.assertRaises(SystemExit):
-            _validate_args(args)
-
-        args = parse_args(["--device", "pico", "--joint-max-velocity-rad-s", "-1"])
-        with self.assertRaises(SystemExit):
-            _validate_args(args)
 
     def test_space_starts_only_idle_arms(self):
         anchors = {"left": {"source": object()}, "right": None}

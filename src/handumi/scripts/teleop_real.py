@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +34,12 @@ from handumi.real.registry import REAL_BACKEND_NAMES, make_real_backend
 from handumi.retargeting.handumi_to_robot import raw_state_pose7_pair
 from handumi.robots.registry import load_embodiment, resolve_home_q
 from handumi.teleop.common import (
+    DEFAULT_JOINT_SMOOTHING_ALPHA,
+    DEFAULT_TELEOP_FPS,
     SIDE_CHOICES,
+    JointActionSmoother,
     KeyboardSpaceListener,
+    TeleopLoopTimer,
     enabled_sides as _enabled_sides,
     enabled_tracking_ok as _enabled_tracking_ok,
     latest_widths as _latest_widths,
@@ -49,7 +52,6 @@ from handumi.teleop.hardware import (
     validate_feetech_ports_exist,
     validate_feetech_ready as _validate_feetech_ready,
 )
-from handumi.teleop.smoothing import JointCommandSmoother, JointSmoothingConfig
 from handumi.teleop.tracking import TrackingRecoveryPolicy
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
@@ -78,7 +80,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override a legacy named home pose. Omit to use the robot home_q.",
     )
     parser.add_argument("--side", choices=SIDE_CHOICES, default="both")
-    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--fps", type=int, default=DEFAULT_TELEOP_FPS)
+    parser.add_argument(
+        "--joint-smoothing-alpha",
+        type=float,
+        default=DEFAULT_JOINT_SMOOTHING_ALPHA,
+        help="Post-IK exponential smoothing alpha; 1 disables filtering.",
+    )
     parser.add_argument(
         "--duration-s", type=float, default=0.0, help="0 means run until Ctrl+C."
     )
@@ -87,18 +95,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Scale HandUMI translation deltas before applying them to the robot TCP.",
-    )
-    parser.add_argument(
-        "--joint-smoothing-cutoff-hz",
-        type=float,
-        default=JointSmoothingConfig.cutoff_hz,
-        help="Post-IK low-pass cutoff for real joint commands; 0 disables filtering.",
-    )
-    parser.add_argument(
-        "--joint-max-velocity-rad-s",
-        type=float,
-        default=JointSmoothingConfig.max_velocity_rad_s,
-        help="Post-IK per-joint velocity limit for real commands; 0 disables limiting.",
     )
     parser.add_argument(
         "--space-start",
@@ -165,10 +161,8 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--fps must be > 0.")
     if args.duration_s < 0.0:
         raise SystemExit("--duration-s must be >= 0.")
-    if args.joint_smoothing_cutoff_hz < 0.0:
-        raise SystemExit("--joint-smoothing-cutoff-hz must be >= 0.")
-    if args.joint_max_velocity_rad_s < 0.0:
-        raise SystemExit("--joint-max-velocity-rad-s must be >= 0.")
+    if not 0.0 < args.joint_smoothing_alpha <= 1.0:
+        raise SystemExit("--joint-smoothing-alpha must be in (0, 1].")
     if args.skip_feetech and not args.space_start:
         raise SystemExit(
             "--skip-feetech disables double-clap; add --space-start so teleop can begin."
@@ -224,16 +218,11 @@ def main() -> None:
 
     clap = DoubleClapDetector()
     play_sounds = not args.no_sounds
-    interval = 1.0 / args.fps
+    loop_timer = TeleopLoopTimer(args.fps)
+    command_smoother = JointActionSmoother(args.joint_smoothing_alpha)
     episode_start: float | None = None
     frame = 0
     tracking_recovery = TrackingRecoveryPolicy()
-    command_smoother = JointCommandSmoother(
-        JointSmoothingConfig(
-            cutoff_hz=args.joint_smoothing_cutoff_hz,
-            max_velocity_rad_s=args.joint_max_velocity_rad_s,
-        )
-    )
 
     try:
         log.info("Starting tracking before moving real arms.")
@@ -260,7 +249,7 @@ def main() -> None:
             )
 
         while True:
-            loop_start = time.perf_counter()
+            loop_start, _ = loop_timer.tick()
             if episode_start is not None and args.duration_s > 0.0:
                 if loop_start - episode_start >= args.duration_s:
                     break
@@ -275,9 +264,7 @@ def main() -> None:
                 if args.space_start:
                     space_listener.consume_space()
                 clap.update(widths.left_mm, widths.right_mm, loop_start)
-                dt = time.perf_counter() - loop_start
-                if (sleep := interval - dt) > 0:
-                    time.sleep(sleep)
+                loop_timer.sleep(loop_start)
                 continue
 
             if not tracking_ok:
@@ -298,9 +285,7 @@ def main() -> None:
                             "Tracking recovered; double clap or Space to re-anchor."
                         )
                         log_say("tracking recovered", play_sounds=play_sounds)
-                dt = time.perf_counter() - loop_start
-                if (sleep := interval - dt) > 0:
-                    time.sleep(sleep)
+                loop_timer.sleep(loop_start)
                 continue
             if tracking_recovery.lost:
                 log.info("Tracking stream is valid again; waiting for a fresh anchor.")
@@ -349,13 +334,11 @@ def main() -> None:
                 "right": widths.right_normalized,
             }
             raw_q = controller.step(source_poses, side_tracked, openings).q
-            q = command_smoother.smooth(raw_q, dt=interval)
+            q = command_smoother.smooth(raw_q)
             real_env.write(q, openings)
             real_env.check_health()
 
-            dt = time.perf_counter() - loop_start
-            if (sleep := interval - dt) > 0:
-                time.sleep(sleep)
+            loop_timer.sleep(loop_start)
             if episode_start is not None:
                 frame += 1
     except KeyboardInterrupt:

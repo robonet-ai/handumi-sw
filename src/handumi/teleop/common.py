@@ -6,6 +6,7 @@ import select
 import sys
 import termios
 import threading
+import time
 import tty
 from typing import Any
 
@@ -17,6 +18,62 @@ from handumi.retargeting.handumi_to_robot import VR_TO_ROBOT
 from handumi.tracking.transforms import Pose
 
 SIDE_CHOICES = ("left", "right", "both")
+# PICO's live tracking stream is 30 Hz.  Driving the control/CAN loop faster
+# only retransmits the same pose and can build command backlog on real arms.
+DEFAULT_TELEOP_FPS = 90
+DEFAULT_GRIPPER_SAMPLE_HZ = 200.0
+DEFAULT_JOINT_SMOOTHING_ALPHA = 0.3
+
+
+class JointActionSmoother:
+    """Exponential moving average for post-IK joint commands.
+
+    ``alpha=1`` passes commands through unchanged. The filtered physical
+    command stays separate from the IK seed, so IK always follows the newest
+    controller pose.
+    """
+
+    def __init__(self, alpha: float = DEFAULT_JOINT_SMOOTHING_ALPHA) -> None:
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("alpha must be in (0, 1].")
+        self.alpha = float(alpha)
+        self._previous: np.ndarray | None = None
+
+    def reset(self, q: np.ndarray | None = None) -> None:
+        self._previous = None if q is None else np.asarray(q, dtype=np.float32).copy()
+
+    def smooth(self, q: np.ndarray) -> np.ndarray:
+        current = np.asarray(q, dtype=np.float32)
+        if self._previous is None or self.alpha >= 1.0:
+            self._previous = current.copy()
+        else:
+            self._previous = self._previous + self.alpha * (current - self._previous)
+        return self._previous.copy()
+
+
+class TeleopLoopTimer:
+    """Fixed-rate teleop loop timer with real elapsed command dt."""
+
+    def __init__(self, fps: float) -> None:
+        if fps <= 0:
+            raise ValueError("fps must be greater than zero.")
+        self.interval = 1.0 / float(fps)
+        self._last_start: float | None = None
+
+    def tick(self) -> tuple[float, float]:
+        now = time.perf_counter()
+        if self._last_start is None:
+            dt = self.interval
+        else:
+            dt = max(now - self._last_start, 1e-6)
+        self._last_start = now
+        return now, min(dt, 2.0 * self.interval)
+
+    def sleep(self, loop_start: float) -> float:
+        elapsed = time.perf_counter() - loop_start
+        if (delay := self.interval - elapsed) > 0:
+            time.sleep(delay)
+        return elapsed
 
 
 class KeyboardSpaceListener:

@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from handumi.dataset.capture import FEETECH_SAMPLE_HZ, SYNC_LAG_S
+from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.record_teleop import (
     PICO_TRACKING_MODE,
@@ -11,6 +11,7 @@ from handumi.scripts.record_teleop import (
     joint_state_feature,
     parse_args,
 )
+from handumi.teleop import DEFAULT_GRIPPER_SAMPLE_HZ, DEFAULT_TELEOP_FPS
 
 
 def _widths() -> GripperWidths:
@@ -35,8 +36,9 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertFalse(args.pico_wifi)
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
+        self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
         self.assertEqual(args.sync_lag_s, SYNC_LAG_S)
-        self.assertEqual(args.feetech_sample_hz, FEETECH_SAMPLE_HZ)
+        self.assertEqual(args.feetech_sample_hz, DEFAULT_GRIPPER_SAMPLE_HZ)
 
         with self.assertRaises(SystemExit):
             parse_args(["--device", "pico", "--skip-feetech"])
