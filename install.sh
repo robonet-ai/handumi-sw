@@ -7,10 +7,12 @@ cd "$ROOT"
 SKIP_XRT=0
 ROBOT=""
 WITH_SIM=0
+WITH_CUDA=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-xrt) SKIP_XRT=1 ;;
     --sim) WITH_SIM=1 ;;
+    --cuda) WITH_CUDA=1 ;;
     --robot)
       shift
       if [[ $# -eq 0 || ( "$1" != "piper" && "$1" != "openarmv1" ) ]]; then
@@ -21,7 +23,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "error: unknown argument: $1" >&2
-      echo "       usage: $0 [--skip-xrt] [--sim] [--robot piper|openarmv1]" >&2
+      echo "       usage: $0 [--skip-xrt] [--sim] [--cuda] [--robot piper|openarmv1]" >&2
       exit 1
       ;;
   esac
@@ -162,6 +164,7 @@ ensure_project_deps() {
   echo "==> Syncing project dependencies (update only if needed)"
   local extras=()
   [[ "$WITH_SIM" -eq 1 ]] && extras+=(--extra sim)
+  [[ "$WITH_CUDA" -eq 1 ]] && extras+=(--extra cuda)
   [[ -n "$ROBOT" ]] && extras+=(--extra "${ROBOT/openarmv1/openarm}")
   UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}" uv sync "${extras[@]}"
 }
