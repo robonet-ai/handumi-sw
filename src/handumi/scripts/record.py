@@ -25,10 +25,11 @@ import termios
 import threading
 import time
 import tty
+from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import numpy as np
 import yaml
@@ -281,12 +282,12 @@ def _recommended_encoder_threads(camera_count: int) -> int:
 
 
 def _available_hardware_vcodecs() -> list[str]:
-    import av
+    from av.codec import Codec
 
     available: list[str] = []
     for vcodec in _HARDWARE_VIDEO_CODECS:
         try:
-            av.codec.Codec(vcodec, "w")
+            Codec(vcodec, "w")
         except Exception:
             continue
         available.append(vcodec)
@@ -326,16 +327,20 @@ def _probe_video_encoder(
 ) -> tuple[bool, str | None]:
     """Encode real frames through the same PyAV/FFmpeg backend as LeRobot."""
     import av
+    from av.video.stream import VideoStream
 
     container = None
     try:
         with tempfile.TemporaryDirectory(prefix="handumi-encoder-probe-") as tmp:
             path = Path(tmp) / "probe.mp4"
             container = av.open(str(path), "w")
-            stream = container.add_stream(
-                vcodec,
-                fps,
-                options=_probe_codec_options(vcodec, encoder_threads),
+            stream = cast(
+                VideoStream,
+                container.add_stream(
+                    vcodec,
+                    fps,
+                    options=_probe_codec_options(vcodec, encoder_threads),
+                ),
             )
             stream.pix_fmt = "yuv420p"
             stream.width = width
@@ -1144,8 +1149,9 @@ def _resolve_recording_args(args: argparse.Namespace) -> argparse.Namespace:
         args._resume_info = info
         args._resume_handumi = handumi
         resume_values = _recording_values_from_dataset(info, handumi)
-        if resume_values.get("cam_ids") is not None:
-            args.cam_ids = list(resume_values["cam_ids"])
+        resume_cam_ids = resume_values.get("cam_ids")
+        if isinstance(resume_cam_ids, list):
+            args.cam_ids = list(resume_cam_ids)
 
     rig = load_optional_rig_section(args.rig_config, "recording")
     aliases = {
@@ -1691,7 +1697,7 @@ def main() -> None:
                 dataset.push_to_hub(
                     license=args.dataset_license,
                     tags=["HandUMI"],
-                    **card_kwargs,
+                    **cast(dict[str, Any], card_kwargs),
                 )
         except BaseException as exc:
             finalization_error = exc
@@ -1792,7 +1798,7 @@ def _selected_camera_names(args: argparse.Namespace) -> list[str]:
 
 def _capture_sources_metadata(
     camera_specs: list[dict[str, object]],
-    cameras: list[object | None],
+    cameras: Sequence[object | None],
     grippers: object | None,
 ) -> dict[str, object]:
     """Store source enablement once instead of repeating it on every row."""
@@ -1932,7 +1938,7 @@ def _resume_handumi_metadata(
     is_legacy_resume = bool(getattr(args, "resume", False)) and isinstance(embedded, dict)
 
     def stable_value(key: str, current: object) -> object:
-        if is_legacy_resume and key not in embedded:
+        if is_legacy_resume and isinstance(embedded, dict) and key not in embedded:
             return None
         return current
 
