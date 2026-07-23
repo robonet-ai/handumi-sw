@@ -28,6 +28,8 @@ DEFAULT_JOINT_SMOOTHING_ALPHA = 0.5
 # newest IK command without a causal filter continuing to catch up after the
 # operator stops. The optional smoother remains available for explicit tuning.
 DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S = 0.0
+DEFAULT_POSITION_DEADBAND_M = 0.0
+DEFAULT_ORIENTATION_DEADBAND_RAD = 0.0
 
 
 class JointActionSmoother:
@@ -94,11 +96,21 @@ class TeleopMotionSmoother:
     """
 
     def __init__(
-        self, time_constant_s: float = DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S
+        self,
+        time_constant_s: float = DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
+        *,
+        position_deadband_m: float = DEFAULT_POSITION_DEADBAND_M,
+        orientation_deadband_rad: float = DEFAULT_ORIENTATION_DEADBAND_RAD,
     ) -> None:
         if time_constant_s < 0.0:
             raise ValueError("time_constant_s must be >= 0.")
+        if position_deadband_m < 0.0:
+            raise ValueError("position_deadband_m must be >= 0.")
+        if orientation_deadband_rad < 0.0:
+            raise ValueError("orientation_deadband_rad must be >= 0.")
         self.time_constant_s = float(time_constant_s)
+        self.position_deadband_m = float(position_deadband_m)
+        self.orientation_deadband_rad = float(orientation_deadband_rad)
         self._source_poses: dict[str, np.ndarray] = {}
         self._last_source_time_ns: int | None = None
         self._joint_q: np.ndarray | None = None
@@ -140,12 +152,37 @@ class TeleopMotionSmoother:
                     continue
                 current = np.asarray(current_value, dtype=np.float32)
                 previous = self._source_poses.get(side)
-                if previous is None or alpha >= 1.0:
+                if previous is None:
                     filtered = current.copy()
                 else:
-                    filtered = previous.copy()
-                    filtered[:3] += alpha * (current[:3] - filtered[:3])
-                    filtered[3:7] = _slerp_xyzw(previous[3:7], current[3:7], alpha)
+                    position = current[:3]
+                    if (
+                        np.linalg.norm(position - previous[:3])
+                        <= self.position_deadband_m
+                    ):
+                        position = previous[:3]
+                    orientation = current[3:7]
+                    dot = abs(
+                        float(
+                            np.dot(
+                                _normalized_quaternion_xyzw(previous[3:7]),
+                                _normalized_quaternion_xyzw(orientation),
+                            )
+                        )
+                    )
+                    angle = 2.0 * float(np.arccos(np.clip(dot, -1.0, 1.0)))
+                    if angle <= self.orientation_deadband_rad:
+                        orientation = previous[3:7]
+                    if alpha >= 1.0:
+                        filtered = current.copy()
+                        filtered[:3] = position
+                        filtered[3:7] = orientation
+                    else:
+                        filtered = previous.copy()
+                        filtered[:3] += alpha * (position - filtered[:3])
+                        filtered[3:7] = _slerp_xyzw(
+                            previous[3:7], orientation, alpha
+                        )
                 self._source_poses[side] = filtered
             self._last_source_time_ns = timestamp
 

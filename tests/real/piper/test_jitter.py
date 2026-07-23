@@ -19,7 +19,7 @@ Examples::
 
     # Same commands on the real robot.  This homes both arms first and returns
     # them home on exit, so the explicit confirmation is required.
-    .venv/bin/python tests/real/piper/test_jitter.py --mode real \\
+    .venv/bin/python tests/real/piper/test_jitter.py --mode real \
         --confirm "RUN PIPER JITTER TEST"
 
     # Save target, streamed-command, and feedback samples for later plotting.

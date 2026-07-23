@@ -7,6 +7,11 @@ import numpy as np
 
 from handumi.feetech.calibration import FeetechConfig, GripperCalibration
 from handumi.scripts.teleop_real import (
+    DEFAULT_REAL_COMMAND_RATE_HZ,
+    DEFAULT_REAL_ORIENTATION_DEADBAND_DEG,
+    DEFAULT_REAL_POSITION_DEADBAND_MM,
+    DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S,
+    DEFAULT_REAL_TRAJECTORY_DELAY_MS,
     _enabled_tracking_ok,
     _load_required_calibration,
     _validate_feetech_ports_exist,
@@ -22,6 +27,21 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertEqual(args.robot, "piper")
         self.assertEqual(args.fps, 30)
+        self.assertEqual(args.command_rate_hz, DEFAULT_REAL_COMMAND_RATE_HZ)
+        self.assertEqual(
+            args.trajectory_delay_ms, DEFAULT_REAL_TRAJECTORY_DELAY_MS
+        )
+        self.assertEqual(
+            args.motion_smoothing_time_constant_s,
+            DEFAULT_REAL_SMOOTHING_TIME_CONSTANT_S,
+        )
+        self.assertEqual(
+            args.motion_position_deadband_mm, DEFAULT_REAL_POSITION_DEADBAND_MM
+        )
+        self.assertEqual(
+            args.motion_orientation_deadband_deg,
+            DEFAULT_REAL_ORIENTATION_DEADBAND_DEG,
+        )
         self.assertFalse(args.space_start)
         _validate_args(args)
 
@@ -30,6 +50,25 @@ class TeleopRealArgsTest(unittest.TestCase):
 
         self.assertTrue(args.space_start)
         _validate_args(args)
+
+    def test_smoothing_configuration_cannot_be_negative(self):
+        for option in (
+            "--motion-smoothing-time-constant-s",
+            "--motion-position-deadband-mm",
+            "--motion-orientation-deadband-deg",
+        ):
+            args = parse_args(["--device", "pico", option, "-0.01"])
+            with self.assertRaises(SystemExit):
+                _validate_args(args)
+
+    def test_trajectory_configuration_is_validated(self):
+        args = parse_args(["--device", "pico", "--command-rate-hz", "0"])
+        with self.assertRaises(SystemExit):
+            _validate_args(args)
+
+        args = parse_args(["--device", "pico", "--trajectory-delay-ms", "-1"])
+        with self.assertRaises(SystemExit):
+            _validate_args(args)
 
     def test_default_calibration_comes_from_piper_robot_tool_setup(self):
         args = parse_args(["--device", "meta"])

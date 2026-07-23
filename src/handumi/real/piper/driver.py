@@ -19,6 +19,7 @@ import numpy as np
 import yaml
 
 from handumi.config import DEFAULT_RIG_CONFIG, EXAMPLE_RIG_CONFIG
+from handumi.real.streamer import AccelerationLimitedJointTrajectory
 from handumi.robots.registry import RobotRealConfig
 
 log = logging.getLogger("handumi.real.piper")
@@ -39,6 +40,7 @@ class PiperCanSettings:
     restart_ms: int = 100
     command_rate_hz: float = 100.0
     max_joint_speed_deg_s: float = 180.0
+    max_joint_acceleration_deg_s2: float = 720.0
     home_max_joint_speed_deg_s: float = 20.0
     home_timeout_s: float = 30.0
     home_tolerance_deg: float = 3.0
@@ -79,6 +81,7 @@ def load_piper_can_settings(
         restart_ms=int(can.get("restart_ms", 100)),
         command_rate_hz=defaults.command_rate_hz,
         max_joint_speed_deg_s=defaults.max_joint_speed_deg_s,
+        max_joint_acceleration_deg_s2=defaults.max_joint_acceleration_deg_s2,
         home_max_joint_speed_deg_s=defaults.home_max_joint_speed_deg_s,
         home_timeout_s=defaults.home_timeout_s,
         home_tolerance_deg=defaults.home_tolerance_deg,
@@ -247,6 +250,7 @@ class PiperJointStreamer:
         *,
         command_rate_hz: float,
         max_joint_speed_deg_s: float,
+        max_joint_acceleration_deg_s2: float | None = None,
         gripper_effort: int,
     ) -> None:
         if max_joint_speed_deg_s <= 0.0:
@@ -266,6 +270,23 @@ class PiperJointStreamer:
             side: arm.read_mdeg().astype(np.int64) for side, arm in self.arms.items()
         }
         self._targets = {side: cmd.copy() for side, cmd in self._commanded.items()}
+        acceleration = (
+            max_joint_speed_deg_s * command_rate_hz
+            if max_joint_acceleration_deg_s2 is None
+            else max_joint_acceleration_deg_s2
+        )
+        if acceleration <= 0.0:
+            raise ValueError("max_joint_acceleration_deg_s2 must be > 0")
+        self.max_acceleration_mdeg_s2 = acceleration * 1000.0
+        self._trajectories = {
+            side: AccelerationLimitedJointTrajectory(
+                cmd,
+                sample_rate_hz=command_rate_hz,
+                max_velocity=max_joint_speed_deg_s * 1000.0,
+                max_acceleration=self.max_acceleration_mdeg_s2,
+            )
+            for side, cmd in self._commanded.items()
+        }
         self._gripper_targets: dict[str, int | None] = {
             side: None for side in self.arms
         }
@@ -277,9 +298,11 @@ class PiperJointStreamer:
 
     def start(self) -> None:
         log.info(
-            "Piper stream: %.1f Hz, %.3f deg/tick",
+            "Piper stream: %.1f Hz, velocity <= %.1f deg/s, "
+            "acceleration <= %.1f deg/s^2",
             self.command_rate_hz,
-            self.max_step_mdeg / 1000.0,
+            self.max_step_mdeg * self.command_rate_hz / 1000.0,
+            self.max_acceleration_mdeg_s2 / 1000.0,
         )
         self._thread.start()
 
@@ -291,6 +314,8 @@ class PiperJointStreamer:
                 1.0,
                 max_joint_speed_deg_s * 1000.0 / self.command_rate_hz,
             )
+            for trajectory in self._trajectories.values():
+                trajectory.set_limits(max_velocity=max_joint_speed_deg_s * 1000.0)
         log.info("Piper stream max step: %.3f deg/tick", self.max_step_mdeg / 1000.0)
 
     def set_targets(self, targets: dict[str, np.ndarray]) -> None:
@@ -321,6 +346,8 @@ class PiperJointStreamer:
         with self._lock:
             held = {side: cmd.copy() for side, cmd in self._commanded.items()}
             self._targets = {side: cmd.copy() for side, cmd in held.items()}
+            for side, cmd in held.items():
+                self._trajectories[side].reset(cmd)
         return held
 
     def feedback_mdeg(self) -> dict[str, np.ndarray]:
@@ -394,11 +421,9 @@ class PiperJointStreamer:
                 with self._lock:
                     gripper_targets = self._gripper_targets.copy()
                     next_commands = {
-                        side: step_mdeg_toward(
-                            self._commanded[side],
-                            self._targets[side],
-                            self.max_step_mdeg,
-                        )
+                        side: np.rint(
+                            self._trajectories[side].step(self._targets[side])
+                        ).astype(np.int64)
                         for side in self.arms
                     }
                     # Publish the scheduled command before sending. A concurrent
@@ -460,6 +485,7 @@ class PiperCanEnvironment:
             self.arms,
             command_rate_hz=self.settings.command_rate_hz,
             max_joint_speed_deg_s=self.settings.home_max_joint_speed_deg_s,
+            max_joint_acceleration_deg_s2=self.settings.max_joint_acceleration_deg_s2,
             gripper_effort=self.settings.gripper_effort,
         )
         self.streamer.start()
@@ -474,6 +500,10 @@ class PiperCanEnvironment:
             format_mdeg(home_targets_mdeg["left"]),
             format_mdeg(home_targets_mdeg["right"]),
         )
+        # A return-home request is a safety transition rather than another
+        # live waypoint. Cancel any residual teleop velocity before starting
+        # the deliberately slow home profile.
+        self.streamer.hold_current_commands()
         self.streamer.set_max_joint_speed_deg_s(
             self.settings.home_max_joint_speed_deg_s
         )

@@ -77,6 +77,7 @@ class RobotRealConfig:
     backend: str | None = None
     command_rate_hz: float = 100.0
     max_joint_speed_deg_s: float = 180.0
+    max_joint_acceleration_deg_s2: float = 720.0
     home_max_joint_speed_deg_s: float = 20.0
     home_timeout_s: float = 30.0
     home_tolerance_deg: float = 3.0
@@ -364,6 +365,9 @@ def load_robot_config(name: str) -> RobotConfig:
             backend=(None if real.get("backend") is None else str(real["backend"])),
             command_rate_hz=float(real.get("command_rate_hz", 100.0)),
             max_joint_speed_deg_s=float(real.get("max_joint_speed_deg_s", 180.0)),
+            max_joint_acceleration_deg_s2=float(
+                real.get("max_joint_acceleration_deg_s2", 720.0)
+            ),
             home_max_joint_speed_deg_s=float(
                 real.get("home_max_joint_speed_deg_s", 20.0)
             ),

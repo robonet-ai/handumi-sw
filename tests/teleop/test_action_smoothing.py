@@ -45,7 +45,34 @@ def test_motion_smoother_keeps_anchor_pose_exact_and_uses_short_quaternion_arc()
     np.testing.assert_allclose(actual["left"], anchored)
 
 
-@pytest.mark.parametrize("time_constant_s", (-0.1, -1.0))
-def test_motion_smoother_rejects_negative_time_constant(time_constant_s):
-    with pytest.raises(ValueError):
-        TeleopMotionSmoother(time_constant_s=time_constant_s)
+def test_motion_smoother_deadband_holds_small_translation_and_rotation_jitter():
+    smoother = TeleopMotionSmoother(
+        time_constant_s=0.0,
+        position_deadband_m=0.001,
+        orientation_deadband_rad=np.deg2rad(1.0),
+    )
+    initial = _pose(0.0)
+    half_angle = np.deg2rad(0.25)
+    jitter = _pose(0.0005, (0.0, 0.0, np.sin(half_angle), np.cos(half_angle)))
+
+    smoother.smooth_source_poses(
+        {"left": initial}, {"left": True}, 1_000_000_000
+    )
+    actual = smoother.smooth_source_poses(
+        {"left": jitter}, {"left": True}, 1_100_000_000
+    )
+
+    np.testing.assert_allclose(actual["left"], initial)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    (
+        ({"time_constant_s": -0.1}, "time_constant_s"),
+        ({"position_deadband_m": -0.1}, "position_deadband_m"),
+        ({"orientation_deadband_rad": -0.1}, "orientation_deadband_rad"),
+    ),
+)
+def test_motion_smoother_rejects_negative_configuration(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        TeleopMotionSmoother(**kwargs)

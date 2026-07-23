@@ -96,6 +96,7 @@ from handumi.teleop.common import (
 )
 from handumi.teleop.core import TeleopController
 from handumi.teleop.session import TeleopSession
+from handumi.teleop.trajectory import DelayedJointCommandPlayer
 from handumi.teleop.hardware import (
     load_required_controller_tcp_calibration as _load_required_calibration,
     validate_feetech_ready as _validate_feetech_ready,
@@ -127,6 +128,8 @@ META_SYNC_PORT_OVERRIDE = None
 PICO_TRACKING_MODE = "mandos"
 PICO_USE_WIFI = False
 SKIP_ADB_CHECK = False
+DEFAULT_RECORD_COMMAND_RATE_HZ = 100.0
+DEFAULT_RECORD_TRAJECTORY_DELAY_MS = 80.0
 
 
 def build_features(
@@ -201,6 +204,18 @@ def _parse_record_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--side", choices=SIDE_CHOICES, default="both")
     p.add_argument("--fps", type=int, default=DEFAULT_TELEOP_FPS)
     p.add_argument(
+        "--command-rate-hz",
+        type=float,
+        default=DEFAULT_RECORD_COMMAND_RATE_HZ,
+        help="Fixed-rate playback frequency for interpolated joint commands.",
+    )
+    p.add_argument(
+        "--trajectory-delay-ms",
+        type=float,
+        default=DEFAULT_RECORD_TRAJECTORY_DELAY_MS,
+        help="Playback delay used to bracket and interpolate IK results.",
+    )
+    p.add_argument(
         "--motion-smoothing-time-constant-s",
         type=float,
         default=MOTION_SMOOTHING_TIME_CONSTANT_S,
@@ -255,6 +270,10 @@ def _validate_record_args(args: argparse.Namespace) -> None:
         raise SystemExit("--episode-time-s must be > 0.")
     if args.num_episodes < 0:
         raise SystemExit("--num-episodes must be >= 0.")
+    if args.command_rate_hz <= 0.0:
+        raise SystemExit("--command-rate-hz must be > 0.")
+    if args.trajectory_delay_ms < 0.0:
+        raise SystemExit("--trajectory-delay-ms must be >= 0.")
     if args.motion_smoothing_time_constant_s < 0.0:
         raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
     for name in (
@@ -292,6 +311,7 @@ def record_episode(
     gripper_stale_timeout_s: float,
     sensor_loss_timeout_s: float,
     tracking_loss_timeout_s: float,
+    command_player: DelayedJointCommandPlayer,
     motion_smoother: TeleopMotionSmoother | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int, str, np.ndarray]:
     loop_timer = TeleopLoopTimer(fps)
@@ -311,6 +331,7 @@ def record_episode(
     teleop_session = TeleopSession(controller, motion_smoother)
     observations: list[np.ndarray] = []
     commands: list[np.ndarray] = []
+    command_player.stop()
 
     while True:
         loop_start, _ = loop_timer.tick()
@@ -344,6 +365,7 @@ def record_episode(
 
         if not tracking_ok:
             if tracking_recovery.note_missing(loop_start):
+                command_player.stop()
                 held = real_env.hold(q)
                 controller.tracking_lost(held)
                 motion_smoother.reset(held)
@@ -401,9 +423,35 @@ def record_episode(
             log_say("recording episode", play_sounds=play_sounds)
 
         action_q = teleop_frame.q
-        real_env.write(action_q, teleop_frame.inputs.openings)
+        if anchored:
+            command_player.stop()
+            command_player.start(
+                action_q,
+                teleop_frame.inputs.openings,
+                time_s=loop_start,
+            )
+        elif controller.active:
+            if not command_player.running:
+                command_player.start(
+                    action_q,
+                    teleop_frame.inputs.openings,
+                    time_s=loop_start,
+                )
+            else:
+                command_player.push(
+                    action_q,
+                    teleop_frame.inputs.openings,
+                    time_s=loop_start,
+                )
         real_env.check_health()
         q = action_q
+
+        played_command = command_player.latest()
+        if played_command is None:
+            played_action_q = action_q
+            played_openings = teleop_frame.inputs.openings
+        else:
+            played_action_q, played_openings = played_command
 
         if start_t is None:
             loop_timer.sleep(loop_start)
@@ -449,17 +497,15 @@ def record_episode(
         )
         commands.append(
             canonicalize_command(
-                action_q,
+                played_action_q,
                 runtime=runtime,
-                openings={
-                    "left": gripper_frame.widths.left_normalized,
-                    "right": gripper_frame.widths.right_normalized,
-                },
+                openings=played_openings,
             )
         )
         n_frames += 1
         loop_timer.sleep(loop_start)
 
+    command_player.stop()
     if len(observations) < 2:
         return (
             np.empty((0, canonical_joint_layout(runtime).size), dtype=np.float32),
@@ -513,6 +559,11 @@ def _run_record() -> None:
     tracker_started = False
     space_listener = KeyboardSpaceListener(enabled=args.space_start)
     motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
+    command_player = DelayedJointCommandPlayer(
+        real_env.write,
+        command_rate_hz=args.command_rate_hz,
+        delay_s=args.trajectory_delay_ms / 1000.0,
+    )
 
     def _on_signal(signum, frame):
         del signum, frame
@@ -539,6 +590,11 @@ def _run_record() -> None:
         real_env.connect()
         record_log.info("Selected home pose: %s", home_pose_name)
         real_env.home(home_q)
+        record_log.info(
+            "Joint trajectory playback: %.1f Hz with %.0f ms delay.",
+            args.command_rate_hz,
+            args.trajectory_delay_ms,
+        )
         space_listener.start()
 
         from handumi.dataset import EpisodeResult, write_dataset
@@ -602,6 +658,7 @@ def _run_record() -> None:
                 gripper_stale_timeout_s=args.gripper_stale_timeout_s,
                 sensor_loss_timeout_s=args.sensor_loss_timeout_s,
                 tracking_loss_timeout_s=args.tracking_loss_timeout_s,
+                command_player=command_player,
                 motion_smoother=motion_smoother,
             )
             if status == "repeat":
@@ -655,6 +712,8 @@ def _run_record() -> None:
                     "state_layout": "yaml_arm_joints_plus_logical_gripper_width_m",
                     "state_semantics": "real_robot_joint_feedback",
                     "action_semantics": "next_step_teleop_joint_command",
+                    "trajectory_command_rate_hz": args.command_rate_hz,
+                    "trajectory_delay_ms": args.trajectory_delay_ms,
                     "observation_action_alignment": (
                         "observation.state[t] is canonical backend feedback; "
                         "action[t] is the next recorded teleop command."
@@ -675,15 +734,18 @@ def _run_record() -> None:
         escape_listener.stop()
         space_listener.close()
         try:
-            real_env.disconnect()
+            command_player.stop()
         finally:
-            if grippers is not None:
-                grippers.stop()
-            if gripper_pair is not None:
-                gripper_pair.close()
-            if tracker_started:
-                tracker.stop()
-            log_say("Exiting", play_sounds=play_sounds, blocking=True)
+            try:
+                real_env.disconnect()
+            finally:
+                if grippers is not None:
+                    grippers.stop()
+                if gripper_pair is not None:
+                    gripper_pair.close()
+                if tracker_started:
+                    tracker.stop()
+                log_say("Exiting", play_sounds=play_sounds, blocking=True)
 
 
 def _existing_episode_count(root: Path) -> int:

@@ -5,7 +5,10 @@ import numpy as np
 from handumi.dataset.capture import SYNC_LAG_S
 from handumi.feetech import GripperWidths
 from handumi.scripts.teleop_record import (
+    DEFAULT_RECORD_COMMAND_RATE_HZ,
+    DEFAULT_RECORD_TRAJECTORY_DELAY_MS,
     PICO_TRACKING_MODE,
+    _validate_record_args,
     build_features,
     build_joint_frame,
     joint_state_feature,
@@ -41,6 +44,10 @@ class TeleopRecordSchemaTest(unittest.TestCase):
         self.assertFalse(args.skip_feetech)
         self.assertFalse(args.space_start)
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
+        self.assertEqual(args.command_rate_hz, DEFAULT_RECORD_COMMAND_RATE_HZ)
+        self.assertEqual(
+            args.trajectory_delay_ms, DEFAULT_RECORD_TRAJECTORY_DELAY_MS
+        )
         self.assertEqual(
             args.motion_smoothing_time_constant_s,
             DEFAULT_MOTION_SMOOTHING_TIME_CONSTANT_S,
@@ -54,6 +61,15 @@ class TeleopRecordSchemaTest(unittest.TestCase):
             parse_args(["--device", "pico", "--skip-feetech"])
         with self.assertRaises(SystemExit):
             parse_args(["--device", "pico", "--pico-wifi"])
+
+    def test_trajectory_configuration_is_validated(self):
+        args = parse_args(["--device", "pico", "--command-rate-hz", "0"])
+        with self.assertRaises(SystemExit):
+            _validate_record_args(args)
+
+        args = parse_args(["--device", "pico", "--trajectory-delay-ms", "-1"])
+        with self.assertRaises(SystemExit):
+            _validate_record_args(args)
 
     def test_joint_state_feature_uses_robot_joint_names(self):
         self.assertEqual(

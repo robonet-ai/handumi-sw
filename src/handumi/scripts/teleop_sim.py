@@ -86,6 +86,7 @@ from handumi.teleop.common import (
 )
 from handumi.teleop.core import TeleopController
 from handumi.teleop.session import TeleopSession
+from handumi.teleop.trajectory import DelayedJointCommandPlayer
 from handumi.tracking.gestures import DoubleClapDetector
 from handumi.utils.speech import log_say
 from handumi.utils.trajectory import TrajectoryTrail
@@ -100,6 +101,8 @@ sim_log = logging.getLogger("handumi.teleop_sim")
 
 _TRAIL_SECONDS = 10.0
 _CHART_WINDOW_S = 20.0  # rolling window for the gripper-width chart
+DEFAULT_SIM_COMMAND_RATE_HZ = 100.0
+DEFAULT_SIM_TRAJECTORY_DELAY_MS = 80.0
 
 
 def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -130,6 +133,18 @@ def _parse_sim_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_TELEOP_FPS,
         help=advanced("Control frequency."),
+    )
+    p.add_argument(
+        "--command-rate-hz",
+        type=float,
+        default=DEFAULT_SIM_COMMAND_RATE_HZ,
+        help=advanced("Fixed-rate playback frequency for interpolated joints."),
+    )
+    p.add_argument(
+        "--trajectory-delay-ms",
+        type=float,
+        default=DEFAULT_SIM_TRAJECTORY_DELAY_MS,
+        help=advanced("Playback delay used to bracket and interpolate IK results."),
     )
     p.add_argument(
         "--duration-s", type=float, default=0.0, help=advanced("0 runs until Ctrl+C.")
@@ -489,6 +504,10 @@ def _run_sim() -> None:
         raise SystemExit("--fps must be > 0.")
     if args.auto_start_delay_s <= 0.0:
         raise SystemExit("--auto-start-delay-s must be greater than zero.")
+    if args.command_rate_hz <= 0.0:
+        raise SystemExit("--command-rate-hz must be > 0.")
+    if args.trajectory_delay_ms < 0.0:
+        raise SystemExit("--trajectory-delay-ms must be >= 0.")
     if args.motion_smoothing_time_constant_s < 0.0:
         raise SystemExit("--motion-smoothing-time-constant-s must be >= 0.")
 
@@ -658,6 +677,33 @@ def _run_sim() -> None:
     loop_timer = TeleopLoopTimer(args.fps)
     motion_smoother = TeleopMotionSmoother(args.motion_smoothing_time_constant_s)
     teleop_session = TeleopSession(controller, motion_smoother)
+    joint_names = list(runtime.robot.joints.actuated_names)
+
+    def write_sim_command(
+        command_q: np.ndarray,
+        openings: dict[str, float],
+    ) -> None:
+        del openings
+        if physics is not None:
+            physics.set_ctrl(
+                {
+                    runtime.mjcf_actuator_name(name): float(command_q[i])
+                    for i, name in enumerate(joint_names)
+                }
+            )
+        elif robot_view is not None:
+            robot_view.update_cfg(command_q)
+
+    command_player = DelayedJointCommandPlayer(
+        write_sim_command,
+        command_rate_hz=args.command_rate_hz,
+        delay_s=args.trajectory_delay_ms / 1000.0,
+    )
+    sim_log.info(
+        "Joint trajectory playback: %.1f Hz with %.0f ms delay.",
+        args.command_rate_hz,
+        args.trajectory_delay_ms,
+    )
     if args.auto_start:
         manual_hint = " Space remains available." if args.space_start else ""
         sim_log.info(
@@ -723,6 +769,7 @@ def _run_sim() -> None:
                 start_sides = auto_start_sides
             if clap.update(widths.left_mm, widths.right_mm, loop_start):
                 if controller.active:
+                    command_player.stop()
                     q = controller.reset()
                     motion_smoother.reset(home_q)
                     episode_start = None
@@ -752,6 +799,8 @@ def _run_sim() -> None:
                 # (cube, box, ...) back at its initial pose.
                 physics.reset()
                 sim_log.info("Scene reset to its initial state.")
+            if reset_this_frame:
+                write_sim_command(home_q, inputs.openings)
             if episode_start is None and anchored_this_frame:
                 episode_start = loop_start
                 frame = 0
@@ -763,22 +812,34 @@ def _run_sim() -> None:
             # home_q every tick (no IK target — chasing the home pose through
             # IK left the arm in a jittery tug-of-war of costs).
             q = teleop_frame.q
+            if anchored_this_frame:
+                command_player.stop()
+                command_player.start(
+                    q,
+                    inputs.openings,
+                    time_s=loop_start,
+                )
+            elif controller.active:
+                if not command_player.running:
+                    command_player.start(
+                        q,
+                        inputs.openings,
+                        time_s=loop_start,
+                    )
+                else:
+                    command_player.push(
+                        q,
+                        inputs.openings,
+                        time_s=loop_start,
+                    )
             for side, pose7 in teleop_frame.step.target_pose7.items():
                 if target_markers:
                     target_markers[side].position = tuple(pose7[:3])
 
             if physics is not None:
-                # IK joints become actuator setpoints; MuJoCo steps contact
-                # physics toward them on its own thread. Viser then renders
-                # what physics actually settled on (grasps included), not
-                # the raw IK solution.
-                joint_names = list(runtime.robot.joints.actuated_names)
-                physics.set_ctrl(
-                    {
-                        runtime.mjcf_actuator_name(name): float(q[i])
-                        for i, name in enumerate(joint_names)
-                    }
-                )
+                # The 100 Hz delayed trajectory feeds MuJoCo on its own
+                # callback thread. Viser renders what physics actually
+                # settled on (grasps included), not the raw 30 Hz IK result.
                 settled = physics.joint_positions()
                 q_render = q.copy()
                 for i, name in enumerate(joint_names):
@@ -791,10 +852,6 @@ def _run_sim() -> None:
                         position, quat_wxyz = pose
                         scene_frame.position = tuple(position.tolist())
                         scene_frame.wxyz = tuple(quat_wxyz.tolist())
-            else:
-                if robot_view is not None:
-                    robot_view.update_cfg(q)
-
             if rr is not None:
                 for side, tcp, raw, color in (
                     (
@@ -822,6 +879,7 @@ def _run_sim() -> None:
         sim_log.info("Stopping.")
     finally:
         space_listener.close()
+        command_player.stop()
         if physics is not None:
             physics.close()
         disconnect_cameras(cameras)

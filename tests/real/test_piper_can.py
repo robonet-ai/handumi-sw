@@ -13,6 +13,7 @@ from handumi.real.piper import (
     q_to_piper_mdeg,
 )
 from handumi.real.piper.driver import step_mdeg_toward
+from handumi.real.streamer import AccelerationLimitedJointTrajectory
 from handumi.robots.registry import RobotRealConfig, load_robot_config
 from handumi.teleop import DEFAULT_TELEOP_FPS
 
@@ -87,6 +88,7 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(settings.restart_ms, 100)
         self.assertEqual(settings.command_rate_hz, 123)
         self.assertEqual(settings.max_joint_speed_deg_s, 45)
+        self.assertEqual(settings.max_joint_acceleration_deg_s2, 720)
         self.assertEqual(settings.gripper_effort, 1000)
 
     def test_piper_yaml_real_defaults(self):
@@ -95,6 +97,7 @@ class PiperCanConfigTest(unittest.TestCase):
         self.assertEqual(config.real.backend, "piper_can")
         self.assertEqual(config.real.command_rate_hz, 100.0)
         self.assertEqual(config.real.max_joint_speed_deg_s, 180.0)
+        self.assertEqual(config.real.max_joint_acceleration_deg_s2, 720.0)
         self.assertEqual(config.real.home_max_joint_speed_deg_s, 20.0)
         self.assertEqual(config.real.home_timeout_s, 30.0)
         self.assertEqual(config.real.home_tolerance_deg, 3.0)
@@ -143,6 +146,44 @@ class PiperUnitsTest(unittest.TestCase):
         limited = step_mdeg_toward(current, target, max_step_mdeg=1000)
 
         np.testing.assert_array_equal(limited, [1000, 4500, -6000])
+
+
+class AccelerationLimitedJointTrajectoryTest(unittest.TestCase):
+    def test_intermediate_samples_obey_velocity_and_acceleration_limits(self):
+        trajectory = AccelerationLimitedJointTrajectory(
+            np.zeros(2),
+            sample_rate_hz=100.0,
+            max_velocity=2.0,
+            max_acceleration=10.0,
+        )
+
+        samples = np.array(
+            [trajectory.step(np.array([10.0, -10.0])) for _ in range(50)]
+        )
+        velocities = np.diff(np.vstack((np.zeros(2), samples)), axis=0) * 100.0
+        accelerations = np.diff(
+            np.vstack((np.zeros(2), velocities)), axis=0
+        ) * 100.0
+
+        self.assertLessEqual(float(np.max(np.abs(velocities))), 2.0 + 1e-9)
+        self.assertLessEqual(float(np.max(np.abs(accelerations))), 10.0 + 1e-9)
+        self.assertTrue(np.all(np.diff(samples[:, 0]) >= 0.0))
+        self.assertTrue(np.all(np.diff(samples[:, 1]) <= 0.0))
+
+    def test_new_target_replaces_old_target_without_a_waypoint_queue(self):
+        trajectory = AccelerationLimitedJointTrajectory(
+            np.zeros(1),
+            sample_rate_hz=100.0,
+            max_velocity=10.0,
+            max_acceleration=100.0,
+        )
+        for _ in range(10):
+            trajectory.step(np.array([1.0]))
+        velocity_before = float(trajectory.velocity[0])
+
+        trajectory.step(np.array([-1.0]))
+
+        self.assertLess(float(trajectory.velocity[0]), velocity_before)
 
 
 class PiperJointStreamerTest(unittest.TestCase):
@@ -255,6 +296,7 @@ class PiperCanEnvironmentTest(unittest.TestCase):
             environment.streamer.set_max_joint_speed_deg_s.call_args_list,
             [mock.call(20.0), mock.call(180.0)],
         )
+        environment.streamer.hold_current_commands.assert_called_once_with()
         environment.streamer.set_targets.assert_called_once_with(targets)
         environment.streamer.wait_until_targets.assert_called_once_with(
             timeout_s=12.0,

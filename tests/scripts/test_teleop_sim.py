@@ -10,6 +10,8 @@ from handumi.robots.kinematics import limit_joint_delta
 from handumi.robots.registry import load_robot_config
 from handumi.scripts.teleop_sim import (
     AutoStartCountdown,
+    DEFAULT_SIM_COMMAND_RATE_HZ,
+    DEFAULT_SIM_TRAJECTORY_DELAY_MS,
     _load_calibration,
     parse_args,
     _resolve_camera_usage,
@@ -68,6 +70,8 @@ class TeleopSimCameraSelectionTest(unittest.TestCase):
         args = parse_args(["--device", "meta"])
 
         self.assertEqual(args.fps, DEFAULT_TELEOP_FPS)
+        self.assertEqual(args.command_rate_hz, DEFAULT_SIM_COMMAND_RATE_HZ)
+        self.assertEqual(args.trajectory_delay_ms, DEFAULT_SIM_TRAJECTORY_DELAY_MS)
         self.assertEqual(DEFAULT_TELEOP_FPS, 30)
         self.assertEqual(
             args.motion_smoothing_time_constant_s,

@@ -7,6 +7,87 @@ import threading
 import numpy as np
 
 
+class AccelerationLimitedJointTrajectory:
+    """Online latest-target trajectory with velocity and acceleration limits.
+
+    The generator is deliberately not a waypoint queue. A new target replaces
+    the previous one and the next sample continues from the current position
+    and velocity, which is the desired behaviour for live teleoperation.
+    """
+
+    def __init__(
+        self,
+        position: np.ndarray,
+        *,
+        sample_rate_hz: float,
+        max_velocity: float,
+        max_acceleration: float,
+    ) -> None:
+        if sample_rate_hz <= 0.0:
+            raise ValueError("sample_rate_hz must be > 0")
+        if max_velocity <= 0.0:
+            raise ValueError("max_velocity must be > 0")
+        if max_acceleration <= 0.0:
+            raise ValueError("max_acceleration must be > 0")
+        self.dt = 1.0 / float(sample_rate_hz)
+        self.max_velocity = float(max_velocity)
+        self.max_acceleration = float(max_acceleration)
+        self.position = np.asarray(position, dtype=np.float64).copy()
+        self.velocity = np.zeros_like(self.position)
+
+    def set_limits(
+        self,
+        *,
+        max_velocity: float | None = None,
+        max_acceleration: float | None = None,
+    ) -> None:
+        if max_velocity is not None:
+            if max_velocity <= 0.0:
+                raise ValueError("max_velocity must be > 0")
+            self.max_velocity = float(max_velocity)
+        if max_acceleration is not None:
+            if max_acceleration <= 0.0:
+                raise ValueError("max_acceleration must be > 0")
+            self.max_acceleration = float(max_acceleration)
+
+    def reset(self, position: np.ndarray) -> None:
+        self.position = np.asarray(position, dtype=np.float64).copy()
+        self.velocity = np.zeros_like(self.position)
+
+    def step(self, target: np.ndarray) -> np.ndarray:
+        """Return the next fixed-rate sample toward the latest target."""
+        target_f = np.asarray(target, dtype=np.float64)
+        if target_f.shape != self.position.shape:
+            raise ValueError(
+                f"target shape {target_f.shape} does not match {self.position.shape}"
+            )
+
+        distance = target_f - self.position
+        # The stopping-speed envelope starts braking early enough to arrive
+        # without deliberately overshooting the latest target.
+        stopping_speed = np.sqrt(2.0 * self.max_acceleration * np.abs(distance))
+        desired_velocity = np.sign(distance) * np.minimum(
+            self.max_velocity, stopping_speed
+        )
+        velocity_delta = np.clip(
+            desired_velocity - self.velocity,
+            -self.max_acceleration * self.dt,
+            self.max_acceleration * self.dt,
+        )
+        next_velocity = np.clip(
+            self.velocity + velocity_delta,
+            -self.max_velocity,
+            self.max_velocity,
+        )
+        displacement = 0.5 * (self.velocity + next_velocity) * self.dt
+        arrived = (np.abs(displacement) >= np.abs(distance)) | (
+            np.abs(distance) < 1e-12
+        )
+        self.position = np.where(arrived, target_f, self.position + displacement)
+        self.velocity = np.where(arrived, 0.0, next_velocity)
+        return self.position.copy()
+
+
 def step_toward(
     current: np.ndarray,
     target: np.ndarray,
@@ -75,4 +156,4 @@ class JointStreamer:
         raise NotImplementedError
 
 
-__all__ = ["JointStreamer", "step_toward"]
+__all__ = ["AccelerationLimitedJointTrajectory", "JointStreamer", "step_toward"]
